@@ -14,5 +14,15 @@ categories.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Register fluxion's analytic VJPs as Burn custom backward ops. Pulls in Burn (pre-1.0) + the
+# NdArray CPU backend for testing; the default build stays pure-Rust and offline.
+burn = ["dep:burn", "dep:fluxion-ops"]
+
 [dependencies]
-# Added when implemented: burn, burn-autodiff (rents the reverse-mode graph over the owned VJPs).
+fluxion-ops = { path = "../fluxion-ops", optional = true }
+burn = { version = "0.21", default-features = false, features = [
+    "std",
+    "autodiff",
+    "ndarray",
+], optional = true }

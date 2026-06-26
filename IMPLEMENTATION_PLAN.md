@@ -100,7 +100,7 @@ parallelizable around it.
 | E3 | VJP for delay line. | P1 | M | D6 | ✓ |
 | E4 | VJP for gain/normalize/sum/mask. | P1 | S | D7 | ✓ |
 | E5 | VJP for reverb/echo. | P2 | M | D8, D9, E3 | ✓ |
-| E6 | Burn `Autodiff` integration: register ops’ owned backward so `loss.backward()` flows. | P1 | M | C4, E1, E4 | — |
+| E6 | Burn `Autodiff` integration: register ops’ owned backward so `loss.backward()` flows. **DONE (2026-06-26):** `fluxion-autodiff` `burn` feature wraps a biquad as a Burn custom op whose backward is the analytic LTI adjoint — gradcheck passes through Burn's tape, backend-agnostic (`Autodiff<NdArray>` tested; `Autodiff<Cuda>` proven in the spike). Default build pure-Rust/offline. Next: coeff gradients + GPU-kernel forward/backward (wire `fluxion-backend::cuda` into the op). | P1 | M | C4, E1, E4 | — |
 | E7 | Finite-difference gradcheck tests (per op). | P1 | M | E1–E4 | ✓ |
 | E8 | Stability guard: verify designed/optimized SOS poles inside the unit circle before freeze. | P1 | S | D1, E1 | ✓ |
 | E9 | End-to-end “fit a filter to a target” training example + docs. | P1 | M | E6 | — |
