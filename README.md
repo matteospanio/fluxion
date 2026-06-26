@@ -4,7 +4,8 @@
 > a modern SoX-replacement CLI, and a hard-real-time engine — written in Rust, bound to anything.
 
 **Status: scaffold.** This repository currently contains the Cargo workspace backbone and a working
-graph-algebra core. See [`PROJECT.md`](PROJECT.md) for the full design, rationale, and roadmap.
+graph-algebra core. See [`PROJECT.md`](PROJECT.md) for the full design and rationale, and
+[`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) for the epic/task plan to v1.0.0.
 
 ## Workspace layout
 
