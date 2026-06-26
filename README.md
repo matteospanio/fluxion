@@ -46,4 +46,4 @@ assert_eq!(chain.leaf_count(), 2);
 
 ## License
 
-`MIT OR Apache-2.0` (license texts to be added before first release).
+[MIT](LICENSE).
