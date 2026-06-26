@@ -27,7 +27,10 @@ use fluxion_ops::{Biquad, sos_filter, sos_input_grad, sos_vjp};
 
 /// Run `f` over a 1-D float primitive via a host roundtrip (correctness-first; the GPU-kernel path
 /// replaces this later). The output length may differ from the input (e.g. a coefficient gradient).
-fn map_1d<B: Backend>(prim: FloatTensor<B>, f: impl FnOnce(Vec<f32>) -> Vec<f32>) -> FloatTensor<B> {
+fn map_1d<B: Backend>(
+    prim: FloatTensor<B>,
+    f: impl FnOnce(Vec<f32>) -> Vec<f32>,
+) -> FloatTensor<B> {
     let t = Tensor::<B, 1>::from_primitive(TensorPrimitive::Float(prim));
     let device = t.device();
     let v = t.into_data().to_vec::<f32>().unwrap();
@@ -49,7 +52,13 @@ fn read<B: Backend>(prim: FloatTensor<B>) -> Vec<f32> {
 /// Interpret a flat `[n_sections·5]` coefficient vector as an SOS cascade.
 fn to_sos(cv: &[f32]) -> Vec<Biquad> {
     cv.chunks_exact(5)
-        .map(|c| Biquad { b0: c[0], b1: c[1], b2: c[2], a1: c[3], a2: c[4] })
+        .map(|c| Biquad {
+            b0: c[0],
+            b1: c[1],
+            b2: c[2],
+            a1: c[3],
+            a2: c[4],
+        })
         .collect()
 }
 
@@ -82,8 +91,12 @@ pub fn sos<B: Backend, K: CheckpointStrategy>(
         .compute_bound()
         .stateful()
     {
-        OpsKind::Tracked(prep) => prep.finish((), map_1d::<B>(ad.primitive, |v| sos_filter(&v, &sos))),
-        OpsKind::UnTracked(prep) => prep.finish(map_1d::<B>(ad.primitive, |v| sos_filter(&v, &sos))),
+        OpsKind::Tracked(prep) => {
+            prep.finish((), map_1d::<B>(ad.primitive, |v| sos_filter(&v, &sos)))
+        }
+        OpsKind::UnTracked(prep) => {
+            prep.finish(map_1d::<B>(ad.primitive, |v| sos_filter(&v, &sos)))
+        }
     };
     Tensor::from_primitive(TensorPrimitive::Float(out))
 }
@@ -135,18 +148,22 @@ pub fn sos_trainable<B: Backend, K: CheckpointStrategy>(
     let cascade = to_sos(&read::<B>(c_ad.primitive.clone()));
     let input = read::<B>(x_ad.primitive.clone());
 
-    let backward = SosTrainBackward { sos: cascade.clone(), input };
+    let backward = SosTrainBackward {
+        sos: cascade.clone(),
+        input,
+    };
     let out = match backward
         .prepare::<K>([x_ad.node.clone(), c_ad.node.clone()])
         .compute_bound()
         .stateful()
     {
-        OpsKind::Tracked(prep) => {
-            prep.finish((), map_1d::<B>(x_ad.primitive, move |v| sos_filter(&v, &cascade)))
-        }
-        OpsKind::UnTracked(prep) => {
-            prep.finish(map_1d::<B>(x_ad.primitive, move |v| sos_filter(&v, &cascade)))
-        }
+        OpsKind::Tracked(prep) => prep.finish(
+            (),
+            map_1d::<B>(x_ad.primitive, move |v| sos_filter(&v, &cascade)),
+        ),
+        OpsKind::UnTracked(prep) => prep.finish(map_1d::<B>(x_ad.primitive, move |v| {
+            sos_filter(&v, &cascade)
+        })),
     };
     Tensor::from_primitive(TensorPrimitive::Float(out))
 }
@@ -168,23 +185,45 @@ mod tests {
         let seed: Vec<f32> = (0..24).map(|i| (0.17 * i as f32 + 1.0).cos()).collect();
 
         let x = Tensor::<B, 1>::from_floats(xs.as_slice(), &device).require_grad();
-        let loss =
-            (sos(x.clone(), &cascade) * Tensor::<B, 1>::from_floats(seed.as_slice(), &device)).sum();
-        let gx = x.grad(&loss.backward()).unwrap().into_data().to_vec::<f32>().unwrap();
+        let loss = (sos(x.clone(), &cascade)
+            * Tensor::<B, 1>::from_floats(seed.as_slice(), &device))
+        .sum();
+        let gx = x
+            .grad(&loss.backward())
+            .unwrap()
+            .into_data()
+            .to_vec::<f32>()
+            .unwrap();
 
         let eps = 1e-3;
-        let dot = |v: &[f32]| sos_filter(v, &cascade).iter().zip(&seed).map(|(a, b)| a * b).sum::<f32>();
+        let dot = |v: &[f32]| {
+            sos_filter(v, &cascade)
+                .iter()
+                .zip(&seed)
+                .map(|(a, b)| a * b)
+                .sum::<f32>()
+        };
         for i in 0..xs.len() {
             let (mut hi, mut lo) = (xs.clone(), xs.clone());
             hi[i] += eps;
             lo[i] -= eps;
             let fd = (dot(&hi) - dot(&lo)) / (2.0 * eps);
-            assert!((gx[i] - fd).abs() < 1e-2, "grad[{i}] = {} vs fd {fd}", gx[i]);
+            assert!(
+                (gx[i] - fd).abs() < 1e-2,
+                "grad[{i}] = {} vs fd {fd}",
+                gx[i]
+            );
         }
     }
 
     fn bq_of(c: &[f32]) -> Biquad {
-        Biquad { b0: c[0], b1: c[1], b2: c[2], a1: c[3], a2: c[4] }
+        Biquad {
+            b0: c[0],
+            b1: c[1],
+            b2: c[2],
+            a1: c[3],
+            a2: c[4],
+        }
     }
 
     #[test]
@@ -204,13 +243,23 @@ mod tests {
         let gc = c.grad(&grads).unwrap().into_data().to_vec::<f32>().unwrap();
 
         let eps = 1e-3;
-        let dot = |c: &[f32]| sos_filter(&xs, &[bq_of(c)]).iter().zip(&seed).map(|(a, b)| a * b).sum::<f32>();
+        let dot = |c: &[f32]| {
+            sos_filter(&xs, &[bq_of(c)])
+                .iter()
+                .zip(&seed)
+                .map(|(a, b)| a * b)
+                .sum::<f32>()
+        };
         for j in 0..5 {
             let (mut hi, mut lo) = (cv.clone(), cv.clone());
             hi[j] += eps;
             lo[j] -= eps;
             let fd = (dot(&hi) - dot(&lo)) / (2.0 * eps);
-            assert!((gc[j] - fd).abs() < 1e-2 * (1.0 + gc[j].abs()), "gc[{j}] = {} vs fd {fd}", gc[j]);
+            assert!(
+                (gc[j] - fd).abs() < 1e-2 * (1.0 + gc[j].abs()),
+                "gc[{j}] = {} vs fd {fd}",
+                gc[j]
+            );
         }
     }
 
@@ -227,12 +276,27 @@ mod tests {
                 (s >> 9) as f32 / (1u32 << 22) as f32 - 1.0
             })
             .collect();
-        let target = Biquad { b0: 0.5, b1: 0.3, b2: -0.2, a1: denom.a1, a2: denom.a2 };
+        let target = Biquad {
+            b0: 0.5,
+            b1: 0.3,
+            b2: -0.2,
+            a1: denom.a1,
+            a2: denom.a2,
+        };
         let target_y = sos_filter(&xs, &[target]);
 
         let xt = Tensor::<B, 1>::from_floats(xs.as_slice(), &device);
         let tt = Tensor::<B, 1>::from_floats(target_y.as_slice(), &device);
-        let w = sos_filter(&xs, &[Biquad { b0: 1.0, b1: 0.0, b2: 0.0, a1: denom.a1, a2: denom.a2 }]);
+        let w = sos_filter(
+            &xs,
+            &[Biquad {
+                b0: 1.0,
+                b1: 0.0,
+                b2: 0.0,
+                a1: denom.a1,
+                a2: denom.a2,
+            }],
+        );
         let lr = 1.0 / (3.0 * w.iter().map(|v| v * v).sum::<f32>());
 
         let mut coeffs = vec![0.0f32, 0.0, 0.0, denom.a1, denom.a2];
@@ -248,12 +312,21 @@ mod tests {
             let ct = Tensor::<B, 1>::from_floats(coeffs.as_slice(), &device).require_grad();
             let pred = sos_trainable(xt.clone(), ct.clone());
             let loss = (pred - tt.clone()).powf_scalar(2.0).sum();
-            let gc = ct.grad(&loss.backward()).unwrap().into_data().to_vec::<f32>().unwrap();
+            let gc = ct
+                .grad(&loss.backward())
+                .unwrap()
+                .into_data()
+                .to_vec::<f32>()
+                .unwrap();
             for i in 0..3 {
                 coeffs[i] -= lr * gc[i]; // train only the numerator (denominator fixed)
             }
         }
-        assert!(mse(&coeffs) < initial * 1e-3, "did not converge: {initial} -> {}", mse(&coeffs));
+        assert!(
+            mse(&coeffs) < initial * 1e-3,
+            "did not converge: {initial} -> {}",
+            mse(&coeffs)
+        );
         for (got, want) in [(coeffs[0], 0.5), (coeffs[1], 0.3), (coeffs[2], -0.2)] {
             assert!((got - want).abs() < 1e-2, "coeff {got} vs {want}");
         }

@@ -94,8 +94,9 @@ mod tests {
     #[test]
     fn gpu_batch_matches_cpu_per_row() {
         let (rows, frames) = (64usize, 512usize);
-        let input: Vec<f32> =
-            (0..rows * frames).map(|i| ((i % 71) as f32 / 71.0) - 0.5).collect();
+        let input: Vec<f32> = (0..rows * frames)
+            .map(|i| ((i % 71) as f32 / 71.0) - 0.5)
+            .collect();
         let sos = butterworth_lowpass(6, 4_000.0, 48_000); // 3-section cascade
 
         let gpu = sos_filter_batch(&input, frames, &sos);
@@ -106,7 +107,10 @@ mod tests {
             cpu[r * frames..(r + 1) * frames].copy_from_slice(&out);
         }
 
-        let maxdiff = gpu.iter().zip(&cpu).fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
+        let maxdiff = gpu
+            .iter()
+            .zip(&cpu)
+            .fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
         assert!(maxdiff < 1e-4, "GPU/CPU max diff {maxdiff}");
     }
 }

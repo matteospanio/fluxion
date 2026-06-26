@@ -14,7 +14,7 @@ pub mod cuda;
 
 use fluxion_core::{Graph, Op, OpKind, Signal};
 use fluxion_ops::{
-    Sos, allpass, bandpass, butterworth_highpass, butterworth_lowpass, certify_sos,
+    Biquad, Sos, allpass, bandpass, butterworth_highpass, butterworth_lowpass, certify_sos,
     chebyshev1_highpass, chebyshev1_lowpass, delay, echo, gain, high_shelf, low_shelf,
     normalize_peak, notch, peaking, small_gain_certify, sos_filter,
 };
@@ -139,9 +139,81 @@ fn certify_op(op: &Op, fs: u32) -> Certificate {
     }
 }
 
+/// Flatten a pure-filter **series** graph into a single SOS cascade at sample rate `fs`.
+///
+/// Returns `None` if the graph contains a non-filter op (gain/normalize/delay/echo) or a parallel
+/// branch — i.e. anything that is not one concatenated biquad cascade. (Cascade associativity:
+/// applying the concatenated sections equals applying the ops in series.)
+pub fn graph_to_sos(graph: &Graph, fs: u32) -> Option<Sos> {
+    match graph {
+        Graph::Id => Some(Vec::new()),
+        Graph::Op(op) => op_sos(op, fs),
+        Graph::Series(a, b) => {
+            let mut s = graph_to_sos(a, fs)?;
+            s.extend(graph_to_sos(b, fs)?);
+            Some(s)
+        }
+        Graph::Parallel(..) => None,
+    }
+}
+
+/// Filter a flat batch of `rows.len() / frames` equal-length rows through an SOS cascade.
+///
+/// Uses the GPU (CubeCL, `cuda::sos_filter_batch`) under the `cuda` feature for large batches, and
+/// the CPU otherwise — output is identical either way.
+pub fn sos_filter_batch(rows: &[f32], frames: usize, sos: &[Biquad]) -> Vec<f32> {
+    // GPU is a win only once the batch amortizes launch + transfer; small batches stay on the CPU.
+    #[cfg(feature = "cuda")]
+    if rows.len() >= 1 << 16 {
+        return cuda::sos_filter_batch(rows, frames, sos);
+    }
+    let mut out = vec![0.0f32; rows.len()];
+    for r in 0..rows.len() / frames {
+        let y = sos_filter(&rows[r * frames..(r + 1) * frames], sos);
+        out[r * frames..(r + 1) * frames].copy_from_slice(&y);
+    }
+    out
+}
+
+/// Process a batch of signals. A pure-filter chain over equal-length **mono** signals is routed to
+/// the batched (GPU-when-`cuda`) path; anything else falls back to processing each signal on its own.
+pub fn process_batch(graph: &Graph, batch: &[Signal]) -> Vec<Signal> {
+    if let Some(out) = try_batched_filter(graph, batch) {
+        return out;
+    }
+    batch.iter().map(|s| process(graph, s)).collect()
+}
+
+fn try_batched_filter(graph: &Graph, batch: &[Signal]) -> Option<Vec<Signal>> {
+    let first = batch.first()?;
+    let (fs, frames) = (first.fs, first.frames());
+    if frames == 0
+        || !batch
+            .iter()
+            .all(|s| s.channel_count() == 1 && s.frames() == frames && s.fs == fs)
+    {
+        return None;
+    }
+    let sos = graph_to_sos(graph, fs)?;
+    if sos.is_empty() {
+        return None; // identity / no filtering — nothing to accelerate
+    }
+
+    let mut rows = Vec::with_capacity(batch.len() * frames);
+    for s in batch {
+        rows.extend_from_slice(&s.channels[0]);
+    }
+    let out = sos_filter_batch(&rows, frames, &sos);
+    Some(
+        (0..batch.len())
+            .map(|i| Signal::new(fs, vec![out[i * frames..(i + 1) * frames].to_vec()]))
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{certify_graph, process};
+    use super::{certify_graph, graph_to_sos, process, process_batch};
     use fluxion_core::{Graph, OpKind, Signal};
 
     fn sig(samples: Vec<f32>) -> Signal {
@@ -182,5 +254,48 @@ mod tests {
             | Graph::op(OpKind::Echo, [0.1, 0.5, 0.4])
             | Graph::op(OpKind::Peaking, [3_000.0, 6.0, 1.0]);
         assert!(certify_graph(&g, 48_000).verdict.is_shippable());
+    }
+
+    #[test]
+    fn graph_to_sos_flattens_filters_only() {
+        // order-4 Butterworth (2 sections) | order-2 high-pass (1 section) = 3 sections.
+        let g =
+            Graph::op(OpKind::Lowpass, [2_000.0, 4.0]) | Graph::op(OpKind::Highpass, [100.0, 2.0]);
+        assert_eq!(graph_to_sos(&g, 48_000).unwrap().len(), 3);
+        // A non-filter op or a parallel branch is not one flat cascade.
+        assert!(graph_to_sos(&Graph::op(OpKind::Gain, [0.5]), 48_000).is_none());
+        let par = Graph::op(OpKind::Lowpass, [1_000.0, 2.0])
+            + Graph::op(OpKind::Highpass, [2_000.0, 2.0]);
+        assert!(graph_to_sos(&par, 48_000).is_none());
+    }
+
+    #[test]
+    fn process_batch_matches_per_signal() {
+        let g = Graph::op(OpKind::Lowpass, [2_000.0, 4.0])
+            | Graph::op(OpKind::Peaking, [1_000.0, 6.0, 1.0]);
+        let batch: Vec<Signal> = (0..8)
+            .map(|k| {
+                Signal::new(
+                    48_000,
+                    vec![(0..256).map(|i| ((i + k) as f32 * 0.1).sin()).collect()],
+                )
+            })
+            .collect();
+        let batched = process_batch(&g, &batch);
+        assert_eq!(batched.len(), batch.len());
+        for (b, s) in batched.iter().zip(&batch) {
+            let single = process(&g, s);
+            for (x, y) in b.channels[0].iter().zip(&single.channels[0]) {
+                assert!((x - y).abs() < 1e-5, "{x} vs {y}");
+            }
+        }
+    }
+
+    #[test]
+    fn process_batch_falls_back_for_nonfilter() {
+        // A gain chain isn't a pure SOS cascade -> per-signal fallback, still correct.
+        let batch = vec![Signal::new(48_000, vec![vec![2.0, -4.0]])];
+        let out = process_batch(&Graph::op(OpKind::Gain, [0.5]), &batch);
+        assert_eq!(out[0].channels[0], vec![1.0, -2.0]);
     }
 }
