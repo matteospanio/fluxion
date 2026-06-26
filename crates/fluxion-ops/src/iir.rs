@@ -318,7 +318,11 @@ mod tests {
         let sos = butterworth_lowpass(8, 4_000.0, 48_000); // 4 sections
         let (channels, frames) = (5usize, 200usize);
         let rows: Vec<Vec<f32>> = (0..channels)
-            .map(|c| (0..frames).map(|t| (0.05 * (t + c * 7) as f32).sin()).collect())
+            .map(|c| {
+                (0..frames)
+                    .map(|t| (0.05 * (t + c * 7) as f32).sin())
+                    .collect()
+            })
             .collect();
 
         // Interleave (frame-major), filter, then compare each channel to sos_filter.

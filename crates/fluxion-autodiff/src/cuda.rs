@@ -36,7 +36,13 @@ pub type Gpu = CubeBackend<CudaRuntime, f32, i32, u8>;
 type Ct = CubeTensor<CudaRuntime>;
 
 #[cube(launch)]
-fn sos_fwd<F: Float>(input: &Array<F>, output: &mut Array<F>, coeffs: &Array<F>, #[comptime] nf: usize, #[comptime] ns: usize) {
+fn sos_fwd<F: Float>(
+    input: &Array<F>,
+    output: &mut Array<F>,
+    coeffs: &Array<F>,
+    #[comptime] nf: usize,
+    #[comptime] ns: usize,
+) {
     let nr = input.len() / nf;
     if ABSOLUTE_POS < nr {
         let base = ABSOLUTE_POS * nf;
@@ -46,7 +52,13 @@ fn sos_fwd<F: Float>(input: &Array<F>, output: &mut Array<F>, coeffs: &Array<F>,
         #[unroll]
         for s in 0..ns {
             let c = s * 5;
-            let (b0, b1, b2, a1, a2) = (coeffs[c], coeffs[c + 1], coeffs[c + 2], coeffs[c + 3], coeffs[c + 4]);
+            let (b0, b1, b2, a1, a2) = (
+                coeffs[c],
+                coeffs[c + 1],
+                coeffs[c + 2],
+                coeffs[c + 3],
+                coeffs[c + 4],
+            );
             let mut s1 = F::new(0.0);
             let mut s2 = F::new(0.0);
             for t in 0..nf {
@@ -62,7 +74,13 @@ fn sos_fwd<F: Float>(input: &Array<F>, output: &mut Array<F>, coeffs: &Array<F>,
 
 /// Cascade adjoint (input gradient): same recurrence backward in time, sections reversed.
 #[cube(launch)]
-fn sos_adj<F: Float>(grad: &Array<F>, output: &mut Array<F>, coeffs: &Array<F>, #[comptime] nf: usize, #[comptime] ns: usize) {
+fn sos_adj<F: Float>(
+    grad: &Array<F>,
+    output: &mut Array<F>,
+    coeffs: &Array<F>,
+    #[comptime] nf: usize,
+    #[comptime] ns: usize,
+) {
     let nr = grad.len() / nf;
     if ABSOLUTE_POS < nr {
         let base = ABSOLUTE_POS * nf;
@@ -73,7 +91,13 @@ fn sos_adj<F: Float>(grad: &Array<F>, output: &mut Array<F>, coeffs: &Array<F>, 
         for s in 0..ns {
             let ss = ns - 1 - s;
             let c = ss * 5;
-            let (b0, b1, b2, a1, a2) = (coeffs[c], coeffs[c + 1], coeffs[c + 2], coeffs[c + 3], coeffs[c + 4]);
+            let (b0, b1, b2, a1, a2) = (
+                coeffs[c],
+                coeffs[c + 1],
+                coeffs[c + 2],
+                coeffs[c + 3],
+                coeffs[c + 4],
+            );
             let mut s1 = F::new(0.0);
             let mut s2 = F::new(0.0);
             for t in 0..nf {
@@ -90,7 +114,13 @@ fn sos_adj<F: Float>(grad: &Array<F>, output: &mut Array<F>, coeffs: &Array<F>, 
 
 /// Single-biquad coefficient gradient: per-row `[b0,b1,b2,a1,a2]` partials (host reduces over rows).
 #[cube(launch)]
-fn biquad_cgrad<F: Float>(input: &Array<F>, grad: &Array<F>, coeffs: &Array<F>, out: &mut Array<F>, #[comptime] nf: usize) {
+fn biquad_cgrad<F: Float>(
+    input: &Array<F>,
+    grad: &Array<F>,
+    coeffs: &Array<F>,
+    out: &mut Array<F>,
+    #[comptime] nf: usize,
+) {
     let nr = input.len() / nf;
     if ABSOLUTE_POS < nr {
         let base = ABSOLUTE_POS * nf;
@@ -134,7 +164,9 @@ fn biquad_cgrad<F: Float>(input: &Array<F>, grad: &Array<F>, coeffs: &Array<F>, 
 }
 
 fn flat(sos: &[Biquad]) -> Vec<f32> {
-    sos.iter().flat_map(|b| [b.b0, b.b1, b.b2, b.a1, b.a2]).collect()
+    sos.iter()
+        .flat_map(|b| [b.b0, b.b1, b.b2, b.a1, b.a2])
+        .collect()
 }
 
 /// Run the forward (`adjoint=false`) or adjoint (`true`) SOS kernel on a resident tensor.
@@ -154,7 +186,13 @@ fn run(x: &Ct, coeffs: &[f32], nf: usize, ns: usize, adjoint: bool) -> Ct {
     } else {
         sos_fwd::launch::<f32, CudaRuntime>(client, count, dim, inp, outp, cop, nf, ns);
     }
-    CubeTensor::new_contiguous(client.clone(), x.device.clone(), x.meta.shape().clone(), out_h, x.dtype)
+    CubeTensor::new_contiguous(
+        client.clone(),
+        x.device.clone(),
+        x.meta.shape().clone(),
+        out_h,
+        x.dtype,
+    )
 }
 
 /// Coefficient gradient for a single biquad, reduced over all rows to `[5]`.
@@ -197,7 +235,9 @@ impl Backward<Gpu, 1> for SosGpuBackward {
     type State = ();
     fn backward(self, ops: Ops<(), 1>, grads: &mut Gradients, _cp: &mut Checkpointer) {
         let (cf, ns, frames) = (self.coeffs, self.ns, self.frames);
-        unary::<Gpu, _>(ops.parents, ops.node, grads, move |g: FloatTensor<Gpu>| run(&g, &cf, frames, ns, true));
+        unary::<Gpu, _>(ops.parents, ops.node, grads, move |g: FloatTensor<Gpu>| {
+            run(&g, &cf, frames, ns, true)
+        });
     }
 }
 
@@ -208,7 +248,11 @@ pub fn sos_gpu(x: Tensor<Autodiff<Gpu>, 1>, sos: &[Biquad]) -> Tensor<Autodiff<G
     let ns = sos.len();
     let x_ad = x.into_primitive().tensor();
     let frames = x_ad.primitive.meta.shape().num_elements();
-    let bw = SosGpuBackward { coeffs: cf.clone(), ns, frames };
+    let bw = SosGpuBackward {
+        coeffs: cf.clone(),
+        ns,
+        frames,
+    };
     let out = match bw
         .prepare::<NoCheckpointing>([x_ad.node.clone()])
         .compute_bound()
@@ -243,7 +287,9 @@ impl Backward<Gpu, 2> for BiquadTrainBackward {
             move |g: FloatTensor<Gpu>| run(&g, &cf_x, frames, 1, true),
             move |g: FloatTensor<Gpu>| {
                 let acc = cgrad(&input, &g, &cf, frames);
-                Tensor::<Gpu, 1>::from_floats(acc.as_slice(), &device).into_primitive().tensor()
+                Tensor::<Gpu, 1>::from_floats(acc.as_slice(), &device)
+                    .into_primitive()
+                    .tensor()
             },
         );
     }
@@ -252,17 +298,25 @@ impl Backward<Gpu, 2> for BiquadTrainBackward {
 /// Apply a single trainable biquad (`coeffs = [b0, b1, b2, a1, a2]`) to a resident 1-D tensor;
 /// differentiable in both the input and the coefficients. The GPU analogue of
 /// [`crate::burn_backend::sos_trainable`] for one section.
-pub fn biquad_train_gpu(x: Tensor<Autodiff<Gpu>, 1>, coeffs: Tensor<Autodiff<Gpu>, 1>) -> Tensor<Autodiff<Gpu>, 1> {
+pub fn biquad_train_gpu(
+    x: Tensor<Autodiff<Gpu>, 1>,
+    coeffs: Tensor<Autodiff<Gpu>, 1>,
+) -> Tensor<Autodiff<Gpu>, 1> {
     let x_ad = x.into_primitive().tensor();
     let c_ad = coeffs.into_primitive().tensor();
-    let cf: Vec<f32> = Tensor::<Gpu, 1>::from_primitive(TensorPrimitive::Float(c_ad.primitive.clone()))
-        .into_data()
-        .to_vec()
-        .unwrap();
+    let cf: Vec<f32> =
+        Tensor::<Gpu, 1>::from_primitive(TensorPrimitive::Float(c_ad.primitive.clone()))
+            .into_data()
+            .to_vec()
+            .unwrap();
     let mut c5 = [0.0f32; 5];
     c5.copy_from_slice(&cf[..5]);
     let frames = x_ad.primitive.meta.shape().num_elements();
-    let backward = BiquadTrainBackward { input: x_ad.primitive.clone(), coeffs: c5, frames };
+    let backward = BiquadTrainBackward {
+        input: x_ad.primitive.clone(),
+        coeffs: c5,
+        frames,
+    };
     let out = match backward
         .prepare::<NoCheckpointing>([x_ad.node.clone(), c_ad.node.clone()])
         .compute_bound()
@@ -292,17 +346,34 @@ mod tests {
         let seed: Vec<f32> = (0..24).map(|i| (0.17 * i as f32 + 1.0).cos()).collect();
 
         let x = Tensor::<B, 1>::from_floats(xs.as_slice(), &device).require_grad();
-        let loss = (sos_gpu(x.clone(), &cascade) * Tensor::<B, 1>::from_floats(seed.as_slice(), &device)).sum();
-        let gx = x.grad(&loss.backward()).unwrap().into_data().to_vec::<f32>().unwrap();
+        let loss = (sos_gpu(x.clone(), &cascade)
+            * Tensor::<B, 1>::from_floats(seed.as_slice(), &device))
+        .sum();
+        let gx = x
+            .grad(&loss.backward())
+            .unwrap()
+            .into_data()
+            .to_vec::<f32>()
+            .unwrap();
 
         let eps = 1e-3;
-        let dot = |v: &[f32]| sos_filter(v, &cascade).iter().zip(&seed).map(|(a, b)| a * b).sum::<f32>();
+        let dot = |v: &[f32]| {
+            sos_filter(v, &cascade)
+                .iter()
+                .zip(&seed)
+                .map(|(a, b)| a * b)
+                .sum::<f32>()
+        };
         for i in 0..xs.len() {
             let (mut hi, mut lo) = (xs.clone(), xs.clone());
             hi[i] += eps;
             lo[i] -= eps;
             let fd = (dot(&hi) - dot(&lo)) / (2.0 * eps);
-            assert!((gx[i] - fd).abs() < 1e-2, "grad[{i}] = {} vs fd {fd}", gx[i]);
+            assert!(
+                (gx[i] - fd).abs() < 1e-2,
+                "grad[{i}] = {} vs fd {fd}",
+                gx[i]
+            );
         }
     }
 
@@ -316,19 +387,37 @@ mod tests {
 
         let x = Tensor::<B, 1>::from_floats(xs.as_slice(), &device).require_grad();
         let c = Tensor::<B, 1>::from_floats(cv.as_slice(), &device).require_grad();
-        let loss = (biquad_train_gpu(x.clone(), c.clone()) * Tensor::<B, 1>::from_floats(seed.as_slice(), &device)).sum();
+        let loss = (biquad_train_gpu(x.clone(), c.clone())
+            * Tensor::<B, 1>::from_floats(seed.as_slice(), &device))
+        .sum();
         let grads = loss.backward();
         let gc = c.grad(&grads).unwrap().into_data().to_vec::<f32>().unwrap();
 
         let eps = 1e-3;
-        let bq_of = |c: &[f32]| Biquad { b0: c[0], b1: c[1], b2: c[2], a1: c[3], a2: c[4] };
-        let dot = |c: &[f32]| sos_filter(&xs, &[bq_of(c)]).iter().zip(&seed).map(|(a, b)| a * b).sum::<f32>();
+        let bq_of = |c: &[f32]| Biquad {
+            b0: c[0],
+            b1: c[1],
+            b2: c[2],
+            a1: c[3],
+            a2: c[4],
+        };
+        let dot = |c: &[f32]| {
+            sos_filter(&xs, &[bq_of(c)])
+                .iter()
+                .zip(&seed)
+                .map(|(a, b)| a * b)
+                .sum::<f32>()
+        };
         for j in 0..5 {
             let (mut hi, mut lo) = (cv.clone(), cv.clone());
             hi[j] += eps;
             lo[j] -= eps;
             let fd = (dot(&hi) - dot(&lo)) / (2.0 * eps);
-            assert!((gc[j] - fd).abs() < 1e-2 * (1.0 + gc[j].abs()), "gc[{j}] = {} vs fd {fd}", gc[j]);
+            assert!(
+                (gc[j] - fd).abs() < 1e-2 * (1.0 + gc[j].abs()),
+                "gc[{j}] = {} vs fd {fd}",
+                gc[j]
+            );
         }
     }
 }

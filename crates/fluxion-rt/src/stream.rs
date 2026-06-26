@@ -28,7 +28,13 @@ impl SosStream {
     pub fn from_sections(sections: &[[f32; 5]]) -> Self {
         let sos = sections
             .iter()
-            .map(|c| Biquad { b0: c[0], b1: c[1], b2: c[2], a1: c[3], a2: c[4] })
+            .map(|c| Biquad {
+                b0: c[0],
+                b1: c[1],
+                b2: c[2],
+                a1: c[3],
+                a2: c[4],
+            })
             .collect();
         Self::new(sos)
     }
@@ -65,7 +71,9 @@ mod tests {
     #[test]
     fn streaming_in_chunks_matches_whole_signal() {
         let sos = butterworth_lowpass(6, 4_000.0, 48_000); // 3-section cascade
-        let signal: Vec<f32> = (0..5_000).map(|i| (0.05 * i as f32).sin() + 0.3 * (0.31 * i as f32).sin()).collect();
+        let signal: Vec<f32> = (0..5_000)
+            .map(|i| (0.05 * i as f32).sin() + 0.3 * (0.31 * i as f32).sin())
+            .collect();
         let whole = sos_filter(&signal, &sos);
 
         // Odd block size that doesn't divide the length, to exercise the carried state.

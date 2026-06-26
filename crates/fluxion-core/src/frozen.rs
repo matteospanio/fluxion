@@ -54,7 +54,10 @@ mod tests {
 
     #[test]
     fn json_round_trip() {
-        let plan = FrozenSos::new(48_000, vec![[1.0, 0.5, 0.25, -0.3, 0.1], [0.8, 0.0, 0.0, -0.2, 0.0]]);
+        let plan = FrozenSos::new(
+            48_000,
+            vec![[1.0, 0.5, 0.25, -0.3, 0.1], [0.8, 0.0, 0.0, -0.2, 0.0]],
+        );
         let back = FrozenSos::from_json(&plan.to_json()).unwrap();
         assert_eq!(plan, back);
     }

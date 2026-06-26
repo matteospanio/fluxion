@@ -67,7 +67,9 @@ impl<T: Copy> Producer<T> {
         }
         // Sole writer of this slot; the consumer can't reach it until `head` is published below.
         unsafe { *self.ring.buf[head & self.ring.mask].get() = item };
-        self.ring.head.store(head.wrapping_add(1), Ordering::Release);
+        self.ring
+            .head
+            .store(head.wrapping_add(1), Ordering::Release);
         Ok(())
     }
 }
@@ -81,7 +83,9 @@ impl<T: Copy> Consumer<T> {
             return None; // empty
         }
         let item = unsafe { *self.ring.buf[tail & self.ring.mask].get() };
-        self.ring.tail.store(tail.wrapping_add(1), Ordering::Release);
+        self.ring
+            .tail
+            .store(tail.wrapping_add(1), Ordering::Release);
         Some(item)
     }
 

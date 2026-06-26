@@ -20,7 +20,12 @@ pub struct SmoothedValue {
 impl SmoothedValue {
     /// A value parked at `value` (not ramping).
     pub fn new(value: f32) -> Self {
-        Self { current: value, target: value, step: 0.0, remaining: 0 }
+        Self {
+            current: value,
+            target: value,
+            step: 0.0,
+            remaining: 0,
+        }
     }
 
     /// Ramp to `target` over `ramp_samples` samples. `0` jumps immediately. Resets any ramp in

@@ -6,7 +6,9 @@
 yanked = "deny"
 
 [licenses]
-# Fluxion is MIT; only permit permissive licenses in the dependency tree.
+# Fluxion is MIT. Permissive licenses only, plus MPL-2.0: it's weak, file-level copyleft that only
+# obliges sharing changes to the MPL files themselves — using such a crate unmodified as a dependency
+# imposes nothing on fluxion. Required by the `symphonia` audio decoders (flac/mp3/ogg/aac).
 allow = [
     "MIT",
     "Apache-2.0",
@@ -17,6 +19,7 @@ allow = [
     "Zlib",
     "Unicode-3.0",
     "Unicode-DFS-2016",
+    "MPL-2.0",
 ]
 confidence-threshold = 0.9
 
