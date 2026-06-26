@@ -17,4 +17,5 @@ workspace = true
 [dependencies]
 fluxion-core = { path = "../fluxion-core" }
 hound = "3.5"
-# Added later: symphonia (flac/mp3/ogg/aac decode), arrow + parquet (batch IO).
+symphonia = { version = "0.5", features = ["all-codecs", "all-formats"] }
+# Added later: arrow + parquet (batch IO).

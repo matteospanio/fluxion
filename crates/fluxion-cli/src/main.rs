@@ -14,7 +14,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use fluxion::{Graph, Op, OpKind, fxg, process};
-use fluxion_io::{probe_wav, read_wav, write_wav};
+use fluxion_io::{decode, probe_wav, read_wav, write_wav};
 
 #[derive(Parser)]
 #[command(name = "fluxion", version, about = "Modern, SoX-style audio DSP CLI")]
@@ -55,7 +55,7 @@ fn cmd_process(args: &[String], fs: Option<u32>) -> Result<(), String> {
     let output = args.last().unwrap();
     let effects = &args[1..args.len() - 1];
 
-    let mut signal = read_wav(input).map_err(|e| format!("reading '{input}': {e}"))?;
+    let mut signal = load_input(input)?;
     if let Some(fs) = fs {
         signal.fs = fs;
     }
@@ -63,6 +63,19 @@ fn cmd_process(args: &[String], fs: Option<u32>) -> Result<(), String> {
     let out = process(&graph, &signal);
     write_wav(output, &out).map_err(|e| format!("writing '{output}': {e}"))?;
     Ok(())
+}
+
+/// Load an input file: WAV via hound, anything else (FLAC/MP3/OGG/…) via Symphonia.
+fn load_input(path: &str) -> Result<fluxion::Signal, String> {
+    let is_wav = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("wav"));
+    if is_wav {
+        read_wav(path).map_err(|e| format!("reading '{path}': {e}"))
+    } else {
+        decode(path).map_err(|e| format!("decoding '{path}': {e}"))
+    }
 }
 
 /// `fluxion info <file.wav>` — print header metadata.
