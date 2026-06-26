@@ -80,4 +80,14 @@ pub mod prelude {
     pub fn allpass(frequency: f32, q: f32) -> Graph {
         Graph::op(OpKind::Allpass, [frequency, q])
     }
+
+    /// Single delayed tap: `time` seconds, crossfaded by `mix` (0 = dry, 1 = fully delayed).
+    pub fn delay(time: f32, mix: f32) -> Graph {
+        Graph::op(OpKind::Delay, [time, mix])
+    }
+
+    /// Feedback echo: `time` seconds between repeats, `feedback` decay, `wet` echo level.
+    pub fn echo(time: f32, feedback: f32, wet: f32) -> Graph {
+        Graph::op(OpKind::Echo, [time, feedback, wet])
+    }
 }

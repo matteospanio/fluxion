@@ -34,6 +34,10 @@ pub enum OpKind {
     Bandpass,
     /// RBJ all-pass at `frequency` with bandwidth `q`.
     Allpass,
+    /// Single delayed tap crossfaded with the dry signal (`time` s, `mix`).
+    Delay,
+    /// Feedback echo: `wet` repeating echoes spaced `time` s apart with `feedback`.
+    Echo,
 }
 
 // Static parameter tables — one per kind.
@@ -70,6 +74,15 @@ static FQ_PARAMS: [ParamSpec; 2] = [
     ParamSpec::new("frequency", Unit::Hz, 1000.0, 0.0, f32::INFINITY),
     ParamSpec::new("q", Unit::Q, 0.707, 1e-3, 1000.0),
 ];
+static DELAY_PARAMS: [ParamSpec; 2] = [
+    ParamSpec::new("time", Unit::Seconds, 0.25, 0.0, 60.0),
+    ParamSpec::new("mix", Unit::Linear, 0.5, 0.0, 1.0),
+];
+static ECHO_PARAMS: [ParamSpec; 3] = [
+    ParamSpec::new("time", Unit::Seconds, 0.25, 0.0, 60.0),
+    ParamSpec::new("feedback", Unit::Linear, 0.3, 0.0, 0.99),
+    ParamSpec::new("wet", Unit::Linear, 0.5, 0.0, 1.0),
+];
 
 impl OpKind {
     /// Stable identifier used in the DSL / CLI / `.fxg`, e.g. `"lowpass"`.
@@ -85,6 +98,8 @@ impl OpKind {
             OpKind::Notch => "notch",
             OpKind::Bandpass => "bandpass",
             OpKind::Allpass => "allpass",
+            OpKind::Delay => "delay",
+            OpKind::Echo => "echo",
         }
     }
 
@@ -97,6 +112,8 @@ impl OpKind {
             OpKind::Normalize => &NORMALIZE_PARAMS,
             OpKind::Peaking | OpKind::LowShelf | OpKind::HighShelf => &PEQ_PARAMS,
             OpKind::Notch | OpKind::Bandpass | OpKind::Allpass => &FQ_PARAMS,
+            OpKind::Delay => &DELAY_PARAMS,
+            OpKind::Echo => &ECHO_PARAMS,
         }
     }
 
@@ -118,6 +135,8 @@ impl OpKind {
             OpKind::Notch,
             OpKind::Bandpass,
             OpKind::Allpass,
+            OpKind::Delay,
+            OpKind::Echo,
         ]
     }
 

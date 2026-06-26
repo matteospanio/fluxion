@@ -14,10 +14,12 @@
 //! Kernels operate on plain `&[f32]` / `&mut [f32]` channels; the graph executor in
 //! `fluxion-backend` applies them across a multichannel signal.
 
+pub mod delay;
 pub mod effect;
 pub mod iir;
 pub mod rbj;
 
+pub use delay::{delay, echo};
 pub use effect::{gain, gain_vjp, normalize_peak};
 pub use iir::{
     Biquad, BiquadGrad, Sos, biquad_forward, biquad_vjp, butterworth_highpass, butterworth_lowpass,

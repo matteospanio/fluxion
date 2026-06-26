@@ -10,8 +10,8 @@
 
 use fluxion_core::{Graph, Op, OpKind, Signal};
 use fluxion_ops::{
-    Biquad, allpass, bandpass, biquad_forward, butterworth_highpass, butterworth_lowpass, gain,
-    high_shelf, low_shelf, normalize_peak, notch, peaking, sos_filter,
+    Biquad, allpass, bandpass, biquad_forward, butterworth_highpass, butterworth_lowpass, delay,
+    echo, gain, high_shelf, low_shelf, normalize_peak, notch, peaking, sos_filter,
 };
 
 /// Run a graph over an input signal on the CPU, returning a new signal.
@@ -60,6 +60,18 @@ fn apply_op(op: &Op, input: &Signal) -> Signal {
         OpKind::Notch => apply_biquad(&mut out, notch(p[0], p[1], fs)),
         OpKind::Bandpass => apply_biquad(&mut out, bandpass(p[0], p[1], fs)),
         OpKind::Allpass => apply_biquad(&mut out, allpass(p[0], p[1], fs)),
+        OpKind::Delay => {
+            let d = (p[0] * fs as f32).round() as usize;
+            for ch in &mut out.channels {
+                *ch = delay(ch, d, p[1]);
+            }
+        }
+        OpKind::Echo => {
+            let d = (p[0] * fs as f32).round() as usize;
+            for ch in &mut out.channels {
+                *ch = echo(ch, d, p[1], p[2]);
+            }
+        }
         // `OpKind` is `#[non_exhaustive]`; future ops must be added above before use.
         kind => panic!("fluxion-backend: op '{}' is not implemented", kind.name()),
     }
