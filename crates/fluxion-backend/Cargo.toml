@@ -14,7 +14,12 @@ categories.workspace = true
 [lints]
 workspace = true
 
+[features]
+# GPU execution via CubeCL on CUDA. Requires an NVIDIA GPU + CUDA toolkit to build/run; the default
+# (feature off) build stays pure-Rust and offline.
+cuda = ["dep:cubecl"]
+
 [dependencies]
 fluxion-core = { path = "../fluxion-core" }
 fluxion-ops = { path = "../fluxion-ops" }
-# CubeCL (single-source GPU kernels) + SIMD multiversioning are added in later milestones.
+cubecl = { version = "0.10", features = ["cuda"], optional = true }

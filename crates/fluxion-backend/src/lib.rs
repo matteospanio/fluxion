@@ -9,6 +9,9 @@
 //! with one impl; it gets extracted at M2/M3 when the Burn backend is the real second
 //! implementation. Until then, ops are called directly here.
 
+#[cfg(feature = "cuda")]
+pub mod cuda;
+
 use fluxion_core::{Graph, Op, OpKind, Signal};
 use fluxion_ops::{
     Sos, allpass, bandpass, butterworth_highpass, butterworth_lowpass, certify_sos,
