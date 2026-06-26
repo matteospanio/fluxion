@@ -19,6 +19,7 @@ pub mod delay;
 pub mod effect;
 pub mod iir;
 pub mod rbj;
+pub mod stability;
 
 pub use chebyshev::{chebyshev1_highpass, chebyshev1_lowpass};
 pub use delay::{delay, echo};
@@ -28,3 +29,4 @@ pub use iir::{
     sos_filter, sos_is_stable, sos_magnitude, sos_vjp,
 };
 pub use rbj::{allpass, bandpass, high_shelf, low_shelf, notch, peaking};
+pub use stability::{Certificate, Verdict, certify_biquad, certify_sos, small_gain_certify};

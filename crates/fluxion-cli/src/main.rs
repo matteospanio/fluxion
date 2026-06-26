@@ -23,6 +23,10 @@ struct Cli {
     #[arg(long)]
     fs: Option<u32>,
 
+    /// `compile`: write the graph even if its stability certificate is not shippable.
+    #[arg(long)]
+    force: bool,
+
     /// `info <file>` | `compile <effect...> <out.fxg>` | `<in.wav> [effect...] <out.wav>`
     #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0..)]
     args: Vec<String>,
@@ -41,7 +45,7 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> Result<(), String> {
     match cli.args.first().map(String::as_str) {
         Some("info") => cmd_info(&cli.args[1..]),
-        Some("compile") => cmd_compile(&cli.args[1..]),
+        Some("compile") => cmd_compile(&cli.args[1..], cli.fs, cli.force),
         _ => cmd_process(&cli.args, cli.fs),
     }
 }
@@ -93,12 +97,25 @@ fn cmd_info(args: &[String]) -> Result<(), String> {
 }
 
 /// `fluxion compile <effect...> <out.fxg>` — serialize an effect chain to a `.fxg` graph.
-fn cmd_compile(args: &[String]) -> Result<(), String> {
+///
+/// Runs a stability certificate (at `--fs`, default 48 kHz) on the frozen coefficients and refuses
+/// to write a graph that is not shippable unless `--force` is given.
+fn cmd_compile(args: &[String], fs: Option<u32>, force: bool) -> Result<(), String> {
     if args.len() < 2 {
         return Err("usage: fluxion compile <effect [--flag value]...> <out.fxg>".into());
     }
     let (effects, out) = args.split_at(args.len() - 1);
     let graph = parse_chain(effects)?;
+
+    let cert = fluxion::certify_graph(&graph, fs.unwrap_or(48_000));
+    eprintln!("stability: {cert}");
+    if !cert.verdict.is_shippable() && !force {
+        return Err(format!(
+            "refusing to write a {} graph; pass --force to override",
+            cert.verdict
+        ));
+    }
+
     fxg::save(&graph, &out[0]).map_err(|e| format!("writing '{}': {e}", out[0]))?;
     eprintln!("wrote {}: {graph}", out[0]);
     Ok(())

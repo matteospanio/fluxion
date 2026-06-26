@@ -41,9 +41,24 @@ impl Biquad {
     /// True if both poles are strictly inside the unit circle (BIBO stable).
     ///
     /// For `A(z) = 1 + a1 z⁻¹ + a2 z⁻²` the Jury condition is `|a2| < 1` and `|a1| < 1 + a2`.
-    /// First-order sections (`a2 == 0`) reduce to `|a1| < 1`.
+    /// First-order sections (`a2 == 0`) reduce to `|a1| < 1`. For a graded verdict (with a margin,
+    /// and tolerance for the f32-cast boundary), use [`crate::stability::certify_biquad`].
     pub fn is_stable(&self) -> bool {
         self.a2.abs() < 1.0 && self.a1.abs() < 1.0 + self.a2
+    }
+
+    /// Spectral radius — the largest pole magnitude of the denominator `1 + a1 z⁻¹ + a2 z⁻²`.
+    /// The section is BIBO-stable iff this is `< 1`. Computed on the section's stored `f32`
+    /// coefficients (the frozen values that actually ship).
+    pub fn spectral_radius(&self) -> f32 {
+        let disc = self.a1 * self.a1 - 4.0 * self.a2;
+        if disc < 0.0 {
+            // Complex-conjugate poles: |z|² = product of roots = a2.
+            self.a2.abs().sqrt()
+        } else {
+            let r = disc.sqrt();
+            (((-self.a1 + r) / 2.0).abs()).max(((-self.a1 - r) / 2.0).abs())
+        }
     }
 }
 

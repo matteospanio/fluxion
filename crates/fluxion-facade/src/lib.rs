@@ -13,7 +13,7 @@
 //! assert_eq!(eq.leaf_count(), 2);
 //! ```
 
-pub use fluxion_backend::process;
+pub use fluxion_backend::{Certificate, Verdict, certify_graph, process};
 pub use fluxion_core::{Graph, Op, OpError, OpKind, ParamSpec, Signal, Unit, fxg};
 
 /// Ergonomic node constructors plus the core types.
