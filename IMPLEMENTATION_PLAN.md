@@ -111,7 +111,7 @@ parallelizable around it.
 |----|------|---|----|------|---|
 | F0 | **SPIKE — ✅ GO (NVIDIA, 2026-06-26):** Burn 0.21 + CubeCL + CUDA forward **and** on-device autodiff confirmed on an RTX 3070 (see `spikes/f0-burn-cuda`). Apple Metal / AMD ROCm validation still pending. | P0\* | M | D4 | — |
 | F1 | CubeCL backend: `Backend` impl (elementwise + conv). | P1 | L | F0, C1 | — |
-| F2 | Fused SOS cascade GPU kernel (single dispatch). | P1 | M | F0, B3 | ✓ |
+| F2 | Fused SOS cascade GPU kernel (single dispatch). **Batched single-biquad CubeCL kernel proven (2026-06-26): bit-accurate vs CPU, ~59× on 67 Msamples / RTX 3070 — see `spikes/c4-cubecl-biquad`.** Cascade = loop sections; Burn-tensor integration (C4/F1) + analytic backward (E6/F3) next. | P1 | M | F0, B3 | ✓ |
 | F3 | GPU VJP kernels (port the analytic backward to device). | P1 | M | F1, E1 | ✓ |
 | F4 | FFT-conv on GPU. | P2 | M | F1 | ✓ |
 | F5 | Cross-vendor validation matrix on the cluster (NVIDIA, AMD if available, Apple). | P1 | M | F1 | — |
