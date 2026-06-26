@@ -23,6 +23,16 @@ impl SosStream {
         Self { sos, state }
     }
 
+    /// Build a stream from frozen sections `[b0, b1, b2, a1, a2]` (e.g. `FrozenSos::sections` from
+    /// `fluxion-backend::freeze`).
+    pub fn from_sections(sections: &[[f32; 5]]) -> Self {
+        let sos = sections
+            .iter()
+            .map(|c| Biquad { b0: c[0], b1: c[1], b2: c[2], a1: c[3], a2: c[4] })
+            .collect();
+        Self::new(sos)
+    }
+
     /// Reset all section state to zero (e.g. between independent files).
     pub fn reset(&mut self) {
         self.state.iter_mut().for_each(|s| *s = [0.0; 2]);
@@ -72,6 +82,20 @@ mod tests {
         for (a, b) in streamed.iter().zip(&whole) {
             assert!((a - b).abs() < 1e-5, "streamed {a} vs whole {b}");
         }
+    }
+
+    #[test]
+    fn from_sections_equals_from_biquads() {
+        let sos = butterworth_lowpass(4, 5_000.0, 48_000);
+        let sections: Vec<[f32; 5]> = sos.iter().map(|b| [b.b0, b.b1, b.b2, b.a1, b.a2]).collect();
+        let x: Vec<f32> = (0..256).map(|i| (0.1 * i as f32).sin()).collect();
+
+        let mut a = super::SosStream::new(sos);
+        let mut b = super::SosStream::from_sections(&sections);
+        let (mut oa, mut ob) = (vec![0.0; 256], vec![0.0; 256]);
+        a.process_block(&x, &mut oa);
+        b.process_block(&x, &mut ob);
+        assert_eq!(oa, ob);
     }
 
     #[test]

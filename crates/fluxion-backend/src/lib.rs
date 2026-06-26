@@ -12,7 +12,7 @@
 #[cfg(feature = "cuda")]
 pub mod cuda;
 
-use fluxion_core::{Graph, Op, OpKind, Signal};
+use fluxion_core::{FrozenSos, Graph, Op, OpKind, Signal};
 use fluxion_ops::{
     Biquad, Sos, allpass, bandpass, butterworth_highpass, butterworth_lowpass, certify_sos,
     chebyshev1_highpass, chebyshev1_lowpass, delay, echo, gain, high_shelf, low_shelf,
@@ -157,6 +157,16 @@ pub fn graph_to_sos(graph: &Graph, fs: u32) -> Option<Sos> {
     }
 }
 
+/// Freeze a pure-filter series graph to a serializable [`FrozenSos`] plan at sample rate `fs` — the
+/// designed coefficients, ready for the realtime executor (`fluxion-rt::SosStream::from_sections`)
+/// with no design at load time. Returns `None` for graphs that don't reduce to one cascade (same
+/// constraint as [`graph_to_sos`]).
+pub fn freeze(graph: &Graph, fs: u32) -> Option<FrozenSos> {
+    let sos = graph_to_sos(graph, fs)?;
+    let sections = sos.iter().map(|b| [b.b0, b.b1, b.b2, b.a1, b.a2]).collect();
+    Some(FrozenSos::new(fs, sections))
+}
+
 /// Filter a flat batch of `rows.len() / frames` equal-length rows through an SOS cascade (CPU).
 ///
 /// The GPU kernel ([`cuda::sos_filter_batch`], `cuda` feature) is far faster in raw **compute**
@@ -211,7 +221,7 @@ fn try_batched_filter(graph: &Graph, batch: &[Signal]) -> Option<Vec<Signal>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{certify_graph, graph_to_sos, process, process_batch};
+    use super::{FrozenSos, certify_graph, freeze, graph_to_sos, process, process_batch};
     use fluxion_core::{Graph, OpKind, Signal};
 
     fn sig(samples: Vec<f32>) -> Signal {
@@ -265,6 +275,22 @@ mod tests {
         let par = Graph::op(OpKind::Lowpass, [1_000.0, 2.0])
             + Graph::op(OpKind::Highpass, [2_000.0, 2.0]);
         assert!(graph_to_sos(&par, 48_000).is_none());
+    }
+
+    #[test]
+    fn freeze_matches_graph_to_sos() {
+        let g =
+            Graph::op(OpKind::Lowpass, [2_000.0, 4.0]) | Graph::op(OpKind::Highpass, [100.0, 2.0]);
+        let frozen = freeze(&g, 48_000).unwrap();
+        let sos = graph_to_sos(&g, 48_000).unwrap();
+        assert_eq!(frozen.fs, 48_000);
+        assert_eq!(frozen.sections.len(), sos.len());
+        for (sec, bq) in frozen.sections.iter().zip(&sos) {
+            assert_eq!(*sec, [bq.b0, bq.b1, bq.b2, bq.a1, bq.a2]);
+        }
+        // Survives a JSON round-trip, and a non-cascade graph won't freeze.
+        assert_eq!(FrozenSos::from_json(&frozen.to_json()).unwrap(), frozen);
+        assert!(freeze(&Graph::op(OpKind::Gain, [0.5]), 48_000).is_none());
     }
 
     #[test]

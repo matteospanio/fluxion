@@ -15,12 +15,14 @@
 //! assert_eq!(chain.leaf_count(), 2);
 //! ```
 
+pub mod frozen;
 pub mod fxg;
 pub mod graph;
 pub mod op;
 pub mod param;
 pub mod signal;
 
+pub use frozen::FrozenSos;
 pub use graph::Graph;
 pub use op::{Op, OpError, OpKind};
 pub use param::{ParamSpec, Unit};

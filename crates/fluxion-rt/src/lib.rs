@@ -9,12 +9,15 @@
 //! So far:
 //! - [`ring`] — lock-free SPSC ring buffer (G1).
 //! - [`stream`] — allocation-free streaming SOS cascade, streaming == batch (G3 core).
+//! - [`param`] — click-free [`SmoothedValue`] parameter ramping (G4).
 //!
-//! Next: freeze an arbitrary [`Graph`](fluxion_core::Graph) to a cascade plan (G2), parameter
-//! ramping (G4), a CPAL audio backend (G5), and real-time-safety stress tests (G6).
+//! A frozen cascade plan comes from `fluxion-backend::freeze` (G2); build a stream from it with
+//! [`SosStream::from_sections`]. Next: a CPAL audio backend (G5) and real-time-safety stress (G6).
 
+pub mod param;
 pub mod ring;
 pub mod stream;
 
+pub use param::SmoothedValue;
 pub use ring::{Consumer, Producer, channel};
 pub use stream::SosStream;
