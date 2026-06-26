@@ -1,5 +1,6 @@
 //! The DSP graph IR and its composition operators.
 
+use std::fmt;
 use std::ops::{Add, BitOr};
 
 use serde::{Deserialize, Serialize};
@@ -105,6 +106,56 @@ impl Add for Graph {
     }
 }
 
+/// DSL-style rendering: `lowpass(800, 4) | (loshelf(...) + peaking(...))`.
+impl fmt::Display for Graph {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Graph::Id => f.write_str("id"),
+            Graph::Op(op) => {
+                f.write_str(op.kind.name())?;
+                if !op.params.is_empty() {
+                    let ps: Vec<String> = op.params.iter().map(|p| fmt_num(*p)).collect();
+                    write!(f, "({})", ps.join(", "))?;
+                }
+                Ok(())
+            }
+            Graph::Series(a, b) => {
+                write_child(f, a, true)?;
+                f.write_str(" | ")?;
+                write_child(f, b, true)
+            }
+            Graph::Parallel(a, b) => {
+                write_child(f, a, false)?;
+                f.write_str(" + ")?;
+                write_child(f, b, false)
+            }
+        }
+    }
+}
+
+/// Parenthesize a child only when the operator precedence would otherwise be ambiguous
+/// (a parallel inside a series, or a series inside a parallel).
+fn write_child(f: &mut fmt::Formatter<'_>, g: &Graph, in_series: bool) -> fmt::Result {
+    let needs_parens = matches!(
+        (g, in_series),
+        (Graph::Parallel(..), true) | (Graph::Series(..), false)
+    );
+    if needs_parens {
+        write!(f, "({g})")
+    } else {
+        write!(f, "{g}")
+    }
+}
+
+/// Render a parameter, dropping a trailing `.0` for whole numbers (`800.0` → `800`).
+fn fmt_num(x: f32) -> String {
+    if x.is_finite() && x.fract() == 0.0 && x.abs() < 1e7 {
+        format!("{}", x as i64)
+    } else {
+        format!("{x}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::Graph;
@@ -142,5 +193,57 @@ mod tests {
         let g = (gain(2.0) + gain(3.0)) | gain(10.0);
         assert_eq!(g.eval_ref(&[1.0]), vec![50.0]);
         assert_eq!(g.leaf_count(), 3);
+    }
+
+    // --- B6: Display ---
+
+    #[test]
+    fn display_renders_dsl() {
+        let g = (Graph::op(OpKind::LowShelf, [200.0, 6.0, 0.7])
+            + Graph::op(OpKind::Peaking, [1000.0, 6.0, 1.5]))
+            | Graph::op(OpKind::Gain, [0.5]);
+        assert_eq!(
+            g.to_string(),
+            "(lowshelf(200, 6, 0.7) + peaking(1000, 6, 1.5)) | gain(0.5)"
+        );
+        assert_eq!(Graph::Id.to_string(), "id");
+    }
+
+    // --- B7: algebra laws (exact in f32 for the small integers used) ---
+
+    #[test]
+    fn series_is_associative() {
+        let inp = [0.5, -1.0, 2.0];
+        for (a, b, c) in [(2.0, 3.0, 5.0), (1.0, -2.0, 4.0)] {
+            let left = ((gain(a) | gain(b)) | gain(c)).eval_ref(&inp);
+            let right = (gain(a) | (gain(b) | gain(c))).eval_ref(&inp);
+            assert_eq!(left, right);
+        }
+    }
+
+    #[test]
+    fn parallel_is_commutative_and_associative() {
+        let inp = [1.0, 2.0, 3.0];
+        assert_eq!(
+            (gain(2.0) + gain(3.0)).eval_ref(&inp),
+            (gain(3.0) + gain(2.0)).eval_ref(&inp),
+        );
+        assert_eq!(
+            ((gain(1.0) + gain(2.0)) + gain(3.0)).eval_ref(&inp),
+            (gain(1.0) + (gain(2.0) + gain(3.0))).eval_ref(&inp),
+        );
+    }
+
+    #[test]
+    fn id_is_series_identity() {
+        let inp = [1.0, -2.0, 0.5];
+        assert_eq!(
+            (Graph::Id | gain(2.0)).eval_ref(&inp),
+            gain(2.0).eval_ref(&inp)
+        );
+        assert_eq!(
+            (gain(2.0) | Graph::Id).eval_ref(&inp),
+            gain(2.0).eval_ref(&inp)
+        );
     }
 }

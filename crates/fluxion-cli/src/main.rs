@@ -100,7 +100,7 @@ fn cmd_compile(args: &[String]) -> Result<(), String> {
     let (effects, out) = args.split_at(args.len() - 1);
     let graph = parse_chain(effects)?;
     fxg::save(&graph, &out[0]).map_err(|e| format!("writing '{}': {e}", out[0]))?;
-    eprintln!("wrote {} ({} ops)", out[0], graph.leaf_count());
+    eprintln!("wrote {}: {graph}", out[0]);
     Ok(())
 }
 
