@@ -8,13 +8,24 @@
 //! whole SOS cascade over time in a single launch. The output matches the CPU
 //! [`fluxion_ops::sos_filter`] per row to `f32` precision.
 //!
-//! Not yet here: the analytic backward (E6 — register `fluxion_ops::sos_vjp` as a Burn custom
-//! gradient so this is differentiable) and the Burn-tensor / batched-`Signal` integration.
+//! The differentiable analytic backward (E6) lives in `fluxion-autodiff` (host roundtrip) and the
+//! batched API in `process_batch`. Still ahead: wiring this kernel into the differentiable op's
+//! forward/backward (GPU-accelerated training, where the data is resident and the ~59× compute win
+//! actually lands), since one-shot batch filtering here is transfer-bound.
+
+use std::sync::OnceLock;
 
 use cubecl::cuda::CudaRuntime;
 use cubecl::prelude::*;
 
 use fluxion_ops::Biquad;
+
+/// A process-wide CubeCL client, so the JIT-compiled kernel stays cached across calls (a fresh
+/// client per call re-initialises and re-JITs — ~100× slower for repeated batches).
+fn client() -> &'static ComputeClient<CudaRuntime> {
+    static CLIENT: OnceLock<ComputeClient<CudaRuntime>> = OnceLock::new();
+    CLIENT.get_or_init(|| CudaRuntime::client(&Default::default()))
+}
 
 #[cube(launch)]
 fn sos_kernel<F: Float>(
@@ -56,8 +67,11 @@ fn sos_kernel<F: Float>(
 /// Filter a flat batch of `input.len() / frames` rows (each `frames` samples, contiguous) through
 /// the SOS cascade on the GPU. Equivalent to applying [`fluxion_ops::sos_filter`] to each row.
 ///
-/// ponytail: creates a fresh CubeCL client per call. A persistent device/client is the production
-/// path (avoids re-init and keeps the JIT kernel cache warm); fine for now / for correctness tests.
+/// The kernel compute is ~59× a CPU core, but this entry uploads the input and downloads the output
+/// each call, so a one-shot batch is **transfer-bound** (~430 ms for 67 Msamples — slower than the
+/// CPU). It pays off when the data is already resident and reused across many launches; that resident
+/// path (and the differentiable GPU forward/backward) is the next step. The CubeCL client is cached
+/// (see [`client`]) so the JIT'd kernel is reused across calls.
 pub fn sos_filter_batch(input: &[f32], frames: usize, sos: &[Biquad]) -> Vec<f32> {
     assert!(frames > 0 && !sos.is_empty() && !input.is_empty() && input.len() % frames == 0);
     let n = input.len();
@@ -67,13 +81,13 @@ pub fn sos_filter_batch(input: &[f32], frames: usize, sos: &[Biquad]) -> Vec<f32
         .flat_map(|b| [b.b0, b.b1, b.b2, b.a1, b.a2])
         .collect();
 
-    let client = CudaRuntime::client(&Default::default());
+    let client = client();
     let in_h = client.create_from_slice(f32::as_bytes(input));
-    let out_h = client.create_from_slice(f32::as_bytes(&vec![0.0f32; n]));
+    let out_h = client.empty(n * std::mem::size_of::<f32>()); // no 268 MB zero-upload
     let co_h = client.create_from_slice(f32::as_bytes(&flat));
 
     sos_kernel::launch::<f32, CudaRuntime>(
-        &client,
+        client,
         CubeCount::Static(rows.div_ceil(256) as u32, 1, 1),
         CubeDim::new(&client, 256),
         unsafe { ArrayArg::from_raw_parts(in_h.clone(), n) },
@@ -112,5 +126,21 @@ mod tests {
             .zip(&cpu)
             .fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
         assert!(maxdiff < 1e-4, "GPU/CPU max diff {maxdiff}");
+    }
+
+    // Run with: cargo test -p fluxion-backend --features cuda -- --ignored --nocapture
+    #[test]
+    #[ignore = "GPU benchmark"]
+    fn bench_repeated_calls() {
+        let (rows, frames) = (16_384usize, 4_096usize);
+        let input: Vec<f32> = (0..rows * frames)
+            .map(|i| ((i % 97) as f32 / 97.0) - 0.5)
+            .collect();
+        let sos = butterworth_lowpass(6, 4_000.0, 48_000);
+        for k in 0..5 {
+            let t = std::time::Instant::now();
+            let _ = sos_filter_batch(&input, frames, &sos);
+            println!("call {k}: {:.1} ms", t.elapsed().as_secs_f64() * 1000.0);
+        }
     }
 }

@@ -157,16 +157,14 @@ pub fn graph_to_sos(graph: &Graph, fs: u32) -> Option<Sos> {
     }
 }
 
-/// Filter a flat batch of `rows.len() / frames` equal-length rows through an SOS cascade.
+/// Filter a flat batch of `rows.len() / frames` equal-length rows through an SOS cascade (CPU).
 ///
-/// Uses the GPU (CubeCL, `cuda::sos_filter_batch`) under the `cuda` feature for large batches, and
-/// the CPU otherwise — output is identical either way.
+/// The GPU kernel ([`cuda::sos_filter_batch`], `cuda` feature) is far faster in raw **compute**
+/// (~59× on an RTX 3070), but a one-shot batch filter is dominated by host↔device transfer (~430 ms
+/// vs ~300 ms CPU for 67 Msamples), so the CPU is the right default here. The GPU pays off for
+/// **resident / repeated** workloads where the data stays on the device across many operations
+/// (e.g. a differentiable training loop) — call `cuda::sos_filter_batch` explicitly for those.
 pub fn sos_filter_batch(rows: &[f32], frames: usize, sos: &[Biquad]) -> Vec<f32> {
-    // GPU is a win only once the batch amortizes launch + transfer; small batches stay on the CPU.
-    #[cfg(feature = "cuda")]
-    if rows.len() >= 1 << 16 {
-        return cuda::sos_filter_batch(rows, frames, sos);
-    }
     let mut out = vec![0.0f32; rows.len()];
     for r in 0..rows.len() / frames {
         let y = sos_filter(&rows[r * frames..(r + 1) * frames], sos);
