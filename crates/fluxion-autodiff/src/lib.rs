@@ -10,3 +10,9 @@
 
 #[cfg(feature = "burn")]
 pub mod burn_backend;
+
+/// GPU-resident differentiable ops (feature `cuda`): the same analytic VJPs as [`burn_backend`], but
+/// forward and backward launch CubeCL kernels directly on a resident Burn tensor — no host roundtrip,
+/// so a training loop stays on the device. The host-roundtrip ops stay the backend-agnostic fallback.
+#[cfg(feature = "cuda")]
+pub mod cuda;

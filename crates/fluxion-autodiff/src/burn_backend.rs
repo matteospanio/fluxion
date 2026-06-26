@@ -11,8 +11,9 @@
 //!   train** (the DDSP case): input gradient via the adjoint, coefficient gradient via
 //!   [`fluxion_ops::sos_vjp`].
 //!
-//! Next: the GPU-kernel forward/backward (wire `fluxion-backend::cuda` in instead of the host
-//! roundtrip) so the differentiable path is GPU-accelerated end-to-end.
+//! These run the forward/backward on the host (backend-agnostic). For a GPU-resident path — the
+//! kernels launched directly on a resident Burn tensor, no host roundtrip — see [`crate::cuda`]
+//! (feature `cuda`).
 
 use burn::backend::autodiff::Autodiff;
 use burn::backend::autodiff::checkpoint::base::Checkpointer;

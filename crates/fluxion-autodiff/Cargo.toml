@@ -18,6 +18,9 @@ workspace = true
 # Register fluxion's analytic VJPs as Burn custom backward ops. Pulls in Burn (pre-1.0) + the
 # NdArray CPU backend for testing; the default build stays pure-Rust and offline.
 burn = ["dep:burn", "dep:fluxion-ops"]
+# GPU-resident differentiable ops: the analytic VJP kernels run on a resident Burn CubeCL tensor
+# (no host roundtrip). Requires an NVIDIA GPU + CUDA toolkit to build/run; default build is unaffected.
+cuda = ["burn", "burn/cuda", "dep:burn-cubecl", "dep:cubecl"]
 
 [dependencies]
 fluxion-ops = { path = "../fluxion-ops", optional = true }
@@ -26,3 +29,5 @@ burn = { version = "0.21", default-features = false, features = [
     "autodiff",
     "ndarray",
 ], optional = true }
+burn-cubecl = { version = "0.21", optional = true }
+cubecl = { version = "0.10", features = ["cuda"], optional = true }

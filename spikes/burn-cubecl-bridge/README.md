@@ -47,10 +47,12 @@ is uploaded/downloaded per pass.
   forward + backward launch the kernels on resident tensors; `loss.backward()` on a GPU tensor
   gradchecks vs finite-difference (coeff 1.0e-4, input 1.5e-4). Only the `[5]` coeffs and the
   `[batch,5]` reduction cross the host.
-- ◻️ **Workspace port** — move the op into `fluxion-autodiff` behind a `cuda` sub-feature (the host
-  roundtrip stays the backend-agnostic fallback). Mechanical: the wiring is proven here.
-- ◻️ **Cascade coeff-grad** — orchestrate the single-biquad kernel per section with resident forward
-  intermediates + back-propagated cotangents (compose the proven kernels; no new math).
+- ✅ **Workspace port** — `fluxion-autodiff/src/cuda.rs` (feature `cuda`) ships `sos_gpu` (fixed
+  cascade, input grad) + `biquad_train_gpu` (single trainable biquad); GPU gradcheck tests pass
+  (`cargo test -p fluxion-autodiff --features cuda`). The host roundtrip stays the CPU fallback.
+- ◻️ **Batched + cascade + cross-vendor** — a `[batch, frames]` entry (the kernels already handle
+  `n_rows`), cascade coeff-grad orchestration (compose per-section, no new math), and a generic-`R`
+  backend (the kernels are runtime-generic) for ROCm/Metal/WGSL.
 
 ## Running it
 
