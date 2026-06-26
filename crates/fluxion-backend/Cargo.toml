@@ -15,4 +15,6 @@ categories.workspace = true
 workspace = true
 
 [dependencies]
-# Added when implemented: cubecl (single-source GPU kernels), wide/pulp (CPU SIMD).
+fluxion-core = { path = "../fluxion-core" }
+fluxion-ops = { path = "../fluxion-ops" }
+# CubeCL (single-source GPU kernels) + SIMD multiversioning are added in later milestones.

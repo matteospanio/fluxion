@@ -1,7 +1,116 @@
-//! `fluxion-backend` — lowering targets for the DSP graph.
+//! `fluxion-backend` — graph execution.
 //!
-//! One kernel definition, all vendors: lowers the `fluxion-core` IR to CubeCL (CUDA / ROCm-HIP /
-//! Metal / Vulkan / WGSL) and to a CPU-SIMD reference path, fusing SOS cascades into a single
-//! dispatch to stay off the kernel-launch-latency cliff (see `PROJECT.md` §4.2, §5).
+//! Today: a concrete scalar CPU executor ([`process`]) that walks a [`Graph`] and applies the
+//! `fluxion-ops` kernels across a multichannel [`Signal`].
 //!
-//! Empty scaffold for now.
+//! ponytail: the generic `Backend` trait (one kernel set, many devices — plan task C1) is
+//! deliberately *not* introduced yet. With only a CPU implementation it would be an abstraction
+//! with one impl; it gets extracted at M2 when the Burn backend is the real second implementation
+//! and the right primitive set is known. Until then, ops are called directly here.
+
+use fluxion_core::{Graph, Op, OpKind, Signal};
+use fluxion_ops::{butterworth_highpass, butterworth_lowpass, gain, normalize_peak, sos_filter};
+
+/// Run a graph over an input signal on the CPU, returning a new signal.
+///
+/// `|` chains in order; `+` runs both branches on the same input and sums their outputs.
+pub fn process(graph: &Graph, input: &Signal) -> Signal {
+    match graph {
+        Graph::Id => input.clone(),
+        Graph::Op(op) => apply_op(op, input),
+        Graph::Series(a, b) => process(b, &process(a, input)),
+        Graph::Parallel(a, b) => add_signals(&process(a, input), &process(b, input)),
+    }
+}
+
+fn apply_op(op: &Op, input: &Signal) -> Signal {
+    let fs = input.fs;
+    let mut out = input.clone();
+    match op.kind {
+        OpKind::Gain => {
+            let g = op.params[0];
+            for ch in &mut out.channels {
+                gain(ch, g);
+            }
+        }
+        OpKind::Lowpass => {
+            let order = op.params[1].round().max(1.0) as usize;
+            let sos = butterworth_lowpass(order, op.params[0], fs);
+            for ch in &mut out.channels {
+                *ch = sos_filter(ch, &sos);
+            }
+        }
+        OpKind::Highpass => {
+            let order = op.params[1].round().max(1.0) as usize;
+            let sos = butterworth_highpass(order, op.params[0], fs);
+            for ch in &mut out.channels {
+                *ch = sos_filter(ch, &sos);
+            }
+        }
+        OpKind::Normalize => {
+            normalize_peak(&mut out.channels, op.params[0]);
+        }
+        // `OpKind` is `#[non_exhaustive]`; future ops must be added above before use.
+        kind => panic!("fluxion-backend: op '{}' is not implemented", kind.name()),
+    }
+    out
+}
+
+/// Sum two signals channel-by-channel, zero-padding to the longer of each pair.
+fn add_signals(a: &Signal, b: &Signal) -> Signal {
+    let n = a.channels.len().max(b.channels.len());
+    let mut channels = Vec::with_capacity(n);
+    for c in 0..n {
+        match (a.channels.get(c), b.channels.get(c)) {
+            (Some(x), Some(y)) => {
+                let len = x.len().max(y.len());
+                let mut sum = vec![0.0f32; len];
+                for (i, s) in sum.iter_mut().enumerate() {
+                    *s = x.get(i).copied().unwrap_or(0.0) + y.get(i).copied().unwrap_or(0.0);
+                }
+                channels.push(sum);
+            }
+            (Some(x), None) => channels.push(x.clone()),
+            (None, Some(y)) => channels.push(y.clone()),
+            (None, None) => channels.push(Vec::new()),
+        }
+    }
+    Signal::new(a.fs, channels)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::process;
+    use fluxion_core::{Graph, OpKind, Signal};
+
+    fn sig(samples: Vec<f32>) -> Signal {
+        Signal::new(48_000, vec![samples])
+    }
+
+    #[test]
+    fn gain_op_scales() {
+        let out = process(&Graph::op(OpKind::Gain, [0.5]), &sig(vec![2.0, -4.0]));
+        assert_eq!(out.channels[0], vec![1.0, -2.0]);
+    }
+
+    #[test]
+    fn series_applies_in_order() {
+        let g = Graph::op(OpKind::Gain, [2.0]) | Graph::op(OpKind::Gain, [3.0]);
+        let out = process(&g, &sig(vec![1.0]));
+        assert_eq!(out.channels[0], vec![6.0]);
+    }
+
+    #[test]
+    fn parallel_sums_branches() {
+        let g = Graph::op(OpKind::Gain, [2.0]) + Graph::op(OpKind::Gain, [3.0]);
+        let out = process(&g, &sig(vec![1.0, 10.0]));
+        assert_eq!(out.channels[0], vec![5.0, 50.0]);
+    }
+
+    #[test]
+    fn lowpass_preserves_dc() {
+        let g = Graph::op(OpKind::Lowpass, [1_000.0, 4.0]);
+        let out = process(&g, &sig(vec![1.0; 2_000]));
+        assert!((out.channels[0][1_999] - 1.0).abs() < 1e-3);
+    }
+}

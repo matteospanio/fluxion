@@ -16,3 +16,4 @@ workspace = true
 
 [dependencies]
 fluxion-core = { path = "../fluxion-core" }
+fluxion-backend = { path = "../fluxion-backend" }

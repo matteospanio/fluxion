@@ -15,5 +15,6 @@ categories.workspace = true
 workspace = true
 
 [dependencies]
+fluxion-core = { path = "../fluxion-core" }
 hound = "3.5"
 # Added later: symphonia (flac/mp3/ogg/aac decode), arrow + parquet (batch IO).

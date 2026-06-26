@@ -21,4 +21,5 @@ path = "src/main.rs"
 
 [dependencies]
 fluxion = { path = "../fluxion-facade" }
-# Added when the CLI is implemented: clap (parsing), fluxion-io (decode/encode).
+fluxion-io = { path = "../fluxion-io" }
+clap = { version = "4", features = ["derive"] }

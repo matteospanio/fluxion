@@ -14,10 +14,12 @@ use crate::param::{ParamSpec, Unit};
 pub enum OpKind {
     /// Linear gain, `y = x * gain`.
     Gain,
-    /// Low-pass filter (cutoff in Hz). The API layer exposes this as the `Lo`-prefixed variant.
+    /// Butterworth low-pass filter (`cutoff` Hz, integer `order`). Exposed as the `Lo` variant.
     Lowpass,
-    /// High-pass filter (cutoff in Hz). The API layer exposes this as the `Hi`-prefixed variant.
+    /// Butterworth high-pass filter (`cutoff` Hz, integer `order`). Exposed as the `Hi` variant.
     Highpass,
+    /// Peak normalization to a target linear `peak`.
+    Normalize,
 }
 
 // Static parameter tables — one per kind.
@@ -28,17 +30,18 @@ static GAIN_PARAMS: [ParamSpec; 1] = [ParamSpec::new(
     f32::NEG_INFINITY,
     f32::INFINITY,
 )];
-static LOWPASS_PARAMS: [ParamSpec; 1] = [ParamSpec::new(
-    "cutoff",
-    Unit::Hz,
-    1000.0,
-    0.0,
-    f32::INFINITY,
-)];
-static HIGHPASS_PARAMS: [ParamSpec; 1] = [ParamSpec::new(
-    "cutoff",
-    Unit::Hz,
-    1000.0,
+static LOWPASS_PARAMS: [ParamSpec; 2] = [
+    ParamSpec::new("cutoff", Unit::Hz, 1000.0, 0.0, f32::INFINITY),
+    ParamSpec::new("order", Unit::Linear, 2.0, 1.0, 16.0),
+];
+static HIGHPASS_PARAMS: [ParamSpec; 2] = [
+    ParamSpec::new("cutoff", Unit::Hz, 1000.0, 0.0, f32::INFINITY),
+    ParamSpec::new("order", Unit::Linear, 2.0, 1.0, 16.0),
+];
+static NORMALIZE_PARAMS: [ParamSpec; 1] = [ParamSpec::new(
+    "peak",
+    Unit::Linear,
+    1.0,
     0.0,
     f32::INFINITY,
 )];
@@ -50,6 +53,7 @@ impl OpKind {
             OpKind::Gain => "gain",
             OpKind::Lowpass => "lowpass",
             OpKind::Highpass => "highpass",
+            OpKind::Normalize => "normalize",
         }
     }
 
@@ -59,6 +63,7 @@ impl OpKind {
             OpKind::Gain => &GAIN_PARAMS,
             OpKind::Lowpass => &LOWPASS_PARAMS,
             OpKind::Highpass => &HIGHPASS_PARAMS,
+            OpKind::Normalize => &NORMALIZE_PARAMS,
         }
     }
 
@@ -68,8 +73,19 @@ impl OpKind {
             "gain" => Some(OpKind::Gain),
             "lowpass" => Some(OpKind::Lowpass),
             "highpass" => Some(OpKind::Highpass),
+            "normalize" => Some(OpKind::Normalize),
             _ => None,
         }
+    }
+
+    /// Every op kind, for enumeration (CLI help, validation).
+    pub fn all() -> &'static [OpKind] {
+        &[
+            OpKind::Gain,
+            OpKind::Lowpass,
+            OpKind::Highpass,
+            OpKind::Normalize,
+        ]
     }
 
     /// The default parameter vector (one entry per [`ParamSpec`]).
@@ -148,9 +164,9 @@ impl Op {
     ///
     /// ```
     /// use fluxion_core::{Op, OpKind};
-    /// assert!(Op::new(OpKind::Lowpass, [800.0]).is_ok());
-    /// assert!(Op::new(OpKind::Lowpass, [800.0, 1.0]).is_err()); // wrong arity
-    /// assert!(Op::new(OpKind::Lowpass, [-1.0]).is_err());       // out of range
+    /// assert!(Op::new(OpKind::Lowpass, [800.0, 4.0]).is_ok());
+    /// assert!(Op::new(OpKind::Lowpass, [800.0]).is_err());  // wrong arity
+    /// assert!(Op::new(OpKind::Lowpass, [-1.0, 2.0]).is_err()); // cutoff out of range
     /// ```
     pub fn new(kind: OpKind, params: impl Into<Vec<f32>>) -> Result<Op, OpError> {
         let params = params.into();
@@ -183,7 +199,7 @@ mod tests {
 
     #[test]
     fn name_roundtrips() {
-        for k in [OpKind::Gain, OpKind::Lowpass, OpKind::Highpass] {
+        for &k in OpKind::all() {
             assert_eq!(OpKind::from_name(k.name()), Some(k));
         }
         assert_eq!(OpKind::from_name("nope"), None);
@@ -191,14 +207,15 @@ mod tests {
 
     #[test]
     fn defaults_match_arity() {
-        assert_eq!(OpKind::Lowpass.defaults(), vec![1000.0]);
+        assert_eq!(OpKind::Lowpass.defaults(), vec![1000.0, 2.0]);
+        assert_eq!(OpKind::Gain.defaults(), vec![1.0]);
     }
 
     #[test]
     fn validation_rejects_bad_arity_and_range() {
         assert!(Op::new(OpKind::Gain, [1.0]).is_ok());
         assert!(Op::new(OpKind::Gain, []).is_err());
-        assert!(Op::new(OpKind::Lowpass, [-5.0]).is_err());
-        assert!(Op::new(OpKind::Lowpass, [f32::NAN]).is_err());
+        assert!(Op::new(OpKind::Lowpass, [-5.0, 2.0]).is_err());
+        assert!(Op::new(OpKind::Lowpass, [1000.0, f32::NAN]).is_err());
     }
 }

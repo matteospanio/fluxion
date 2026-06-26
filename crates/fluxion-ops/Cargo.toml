@@ -15,4 +15,5 @@ categories.workspace = true
 workspace = true
 
 [dependencies]
-# Added when implemented: fluxion-core (the IR these ops lower from).
+fluxion-core = { path = "../fluxion-core" }
+# Backward (VJP) passes + Burn/CubeCL backends are added in later milestones.

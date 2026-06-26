@@ -1,8 +1,16 @@
-//! `fluxion-ops` — DSP primitives with hand-derived analytic forward **and** backward (VJP).
+//! `fluxion-ops` — DSP primitives: coefficient design and forward kernels.
 //!
-//! Planned primitives, each as a `{ forward, backward }` pair over a backend tensor: SOS/biquad
-//! cascade (with the analytic all-pole backward, not autograd-unrolling), FIR / FFT-conv,
-//! fractional delay line, gain, reverb, echo, normalize, and masking. Owning these backward
-//! passes is the project's durable asset (see `PROJECT.md` §2, §4.3).
+//! Today this crate provides Butterworth SOS design ([`butterworth_lowpass`] /
+//! [`butterworth_highpass`]), the second-order-section cascade filter ([`sos_filter`]), a
+//! frequency-response helper ([`sos_magnitude`]), and simple effects ([`gain`], [`normalize_peak`]).
+//! Hand-derived analytic backward passes (VJPs) and the FIR/FFT-conv, delay, and reverb ops land in
+//! later milestones (see `IMPLEMENTATION_PLAN.md` epics D/E).
 //!
-//! Empty scaffold for now.
+//! Kernels operate on plain `&[f32]` / `&mut [f32]` channels; the graph executor in
+//! `fluxion-backend` applies them across a multichannel signal.
+
+pub mod effect;
+pub mod iir;
+
+pub use effect::{gain, normalize_peak};
+pub use iir::{Biquad, Sos, butterworth_highpass, butterworth_lowpass, sos_filter, sos_magnitude};

@@ -11,8 +11,8 @@ use crate::op::{Op, OpKind};
 ///
 /// ```
 /// use fluxion_core::{Graph, OpKind};
-/// let chain = Graph::op(OpKind::Lowpass, [800.0]) | Graph::op(OpKind::Gain, [0.5]);
-/// let split = Graph::op(OpKind::Lowpass, [200.0]) + Graph::op(OpKind::Highpass, [4000.0]);
+/// let chain = Graph::op(OpKind::Lowpass, [800.0, 2.0]) | Graph::op(OpKind::Gain, [0.5]);
+/// let split = Graph::op(OpKind::Lowpass, [200.0, 2.0]) + Graph::op(OpKind::Highpass, [4000.0, 2.0]);
 /// let nested = split | chain;
 /// assert_eq!(nested.leaf_count(), 4);
 /// ```
