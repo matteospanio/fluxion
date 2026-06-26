@@ -90,4 +90,14 @@ pub mod prelude {
     pub fn echo(time: f32, feedback: f32, wet: f32) -> Graph {
         Graph::op(OpKind::Echo, [time, feedback, wet])
     }
+
+    /// Chebyshev Type I low-pass: `cutoff` Hz, `order`, passband `ripple` dB.
+    pub fn cheby1_lowpass(cutoff_hz: f32, order: u32, ripple_db: f32) -> Graph {
+        Graph::op(OpKind::Cheby1Lowpass, [cutoff_hz, order as f32, ripple_db])
+    }
+
+    /// Chebyshev Type I high-pass: `cutoff` Hz, `order`, passband `ripple` dB.
+    pub fn cheby1_highpass(cutoff_hz: f32, order: u32, ripple_db: f32) -> Graph {
+        Graph::op(OpKind::Cheby1Highpass, [cutoff_hz, order as f32, ripple_db])
+    }
 }

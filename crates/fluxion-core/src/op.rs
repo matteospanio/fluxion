@@ -38,6 +38,10 @@ pub enum OpKind {
     Delay,
     /// Feedback echo: `wet` repeating echoes spaced `time` s apart with `feedback`.
     Echo,
+    /// Chebyshev Type I low-pass (`cutoff` Hz, `order`, passband `ripple` dB).
+    Cheby1Lowpass,
+    /// Chebyshev Type I high-pass (`cutoff` Hz, `order`, passband `ripple` dB).
+    Cheby1Highpass,
 }
 
 // Static parameter tables — one per kind.
@@ -83,6 +87,12 @@ static ECHO_PARAMS: [ParamSpec; 3] = [
     ParamSpec::new("feedback", Unit::Linear, 0.3, 0.0, 0.99),
     ParamSpec::new("wet", Unit::Linear, 0.5, 0.0, 1.0),
 ];
+// cutoff + order + ripple (Chebyshev I low/high-pass share this schema).
+static CHEBY1_PARAMS: [ParamSpec; 3] = [
+    ParamSpec::new("cutoff", Unit::Hz, 1000.0, 0.0, f32::INFINITY),
+    ParamSpec::new("order", Unit::Linear, 4.0, 1.0, 16.0),
+    ParamSpec::new("ripple", Unit::Db, 1.0, 1e-2, 12.0),
+];
 
 impl OpKind {
     /// Stable identifier used in the DSL / CLI / `.fxg`, e.g. `"lowpass"`.
@@ -100,6 +110,8 @@ impl OpKind {
             OpKind::Allpass => "allpass",
             OpKind::Delay => "delay",
             OpKind::Echo => "echo",
+            OpKind::Cheby1Lowpass => "cheby1low",
+            OpKind::Cheby1Highpass => "cheby1high",
         }
     }
 
@@ -114,6 +126,7 @@ impl OpKind {
             OpKind::Notch | OpKind::Bandpass | OpKind::Allpass => &FQ_PARAMS,
             OpKind::Delay => &DELAY_PARAMS,
             OpKind::Echo => &ECHO_PARAMS,
+            OpKind::Cheby1Lowpass | OpKind::Cheby1Highpass => &CHEBY1_PARAMS,
         }
     }
 
@@ -137,6 +150,8 @@ impl OpKind {
             OpKind::Allpass,
             OpKind::Delay,
             OpKind::Echo,
+            OpKind::Cheby1Lowpass,
+            OpKind::Cheby1Highpass,
         ]
     }
 

@@ -111,7 +111,7 @@ fn design(order: usize, cutoff_hz: f32, fs: u32, highpass: bool) -> Sos {
 }
 
 /// Bilinear transform of a 2nd-order analog section. `b`/`a` are `[s², s¹, s⁰]` coefficients.
-fn bilinear2(b: [f64; 3], a: [f64; 3], k: f64) -> Biquad {
+pub(crate) fn bilinear2(b: [f64; 3], a: [f64; 3], k: f64) -> Biquad {
     let k2 = k * k;
     let nb0 = b[0] * k2 + b[1] * k + b[2];
     let nb1 = 2.0 * (b[2] - b[0] * k2);
@@ -129,7 +129,7 @@ fn bilinear2(b: [f64; 3], a: [f64; 3], k: f64) -> Biquad {
 }
 
 /// Bilinear transform of a 1st-order analog section. `b`/`a` are `[s¹, s⁰]` coefficients.
-fn bilinear1(b: [f64; 2], a: [f64; 2], k: f64) -> Biquad {
+pub(crate) fn bilinear1(b: [f64; 2], a: [f64; 2], k: f64) -> Biquad {
     let nb0 = b[0] * k + b[1];
     let nb1 = b[1] - b[0] * k;
     let na0 = a[0] * k + a[1];

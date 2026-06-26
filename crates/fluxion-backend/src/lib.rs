@@ -10,8 +10,9 @@
 
 use fluxion_core::{Graph, Op, OpKind, Signal};
 use fluxion_ops::{
-    Biquad, allpass, bandpass, biquad_forward, butterworth_highpass, butterworth_lowpass, delay,
-    echo, gain, high_shelf, low_shelf, normalize_peak, notch, peaking, sos_filter,
+    Biquad, allpass, bandpass, biquad_forward, butterworth_highpass, butterworth_lowpass,
+    chebyshev1_highpass, chebyshev1_lowpass, delay, echo, gain, high_shelf, low_shelf,
+    normalize_peak, notch, peaking, sos_filter,
 };
 
 /// Run a graph over an input signal on the CPU, returning a new signal.
@@ -70,6 +71,18 @@ fn apply_op(op: &Op, input: &Signal) -> Signal {
             let d = (p[0] * fs as f32).round() as usize;
             for ch in &mut out.channels {
                 *ch = echo(ch, d, p[1], p[2]);
+            }
+        }
+        OpKind::Cheby1Lowpass => {
+            let sos = chebyshev1_lowpass(p[1].round().max(1.0) as usize, p[0], p[2], fs);
+            for ch in &mut out.channels {
+                *ch = sos_filter(ch, &sos);
+            }
+        }
+        OpKind::Cheby1Highpass => {
+            let sos = chebyshev1_highpass(p[1].round().max(1.0) as usize, p[0], p[2], fs);
+            for ch in &mut out.channels {
+                *ch = sos_filter(ch, &sos);
             }
         }
         // `OpKind` is `#[non_exhaustive]`; future ops must be added above before use.
