@@ -1,0 +1,19 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Python bindings build artifacts (added when fluxion-py lands)
+__pycache__/
+*.so
+*.pyd
+.venv/
+dist/
+*.egg-info/
+
+# WASM build artifacts
+/pkg
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,18 @@
+[package]
+name = "fluxion-autodiff"
+description = "Fluxion: Burn Autodiff integration and per-framework (torch/jax) VJP adapters."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Added when implemented: burn, burn-autodiff (rents the reverse-mode graph over the owned VJPs).

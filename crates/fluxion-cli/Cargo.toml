@@ -1,0 +1,24 @@
+[package]
+name = "fluxion-cli"
+description = "Fluxion: a modern, SoX-style command-line interface for audio DSP."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lints]
+workspace = true
+
+# The package is `fluxion-cli`; the installed binary is `fluxion`.
+[[bin]]
+name = "fluxion"
+path = "src/main.rs"
+
+[dependencies]
+fluxion = { path = "../fluxion-facade" }
+# Added when the CLI is implemented: clap (parsing), fluxion-io (decode/encode).

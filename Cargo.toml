@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+# Shared metadata inherited by every member crate via `field.workspace = true`.
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+authors = ["Matteo Spanio"]
+repository = "https://github.com/matteospanio/fluxion"
+homepage = "https://github.com/matteospanio/fluxion"
+keywords = ["audio", "dsp", "differentiable", "gpu", "realtime"]
+categories = ["multimedia::audio", "science", "mathematics"]
+
+[workspace.lints.clippy]
+all = "warn"
+
+# Small, fast release artifacts for the CLI and the cdylibs.
+[profile.release]
+lto = "thin"
+codegen-units = 1

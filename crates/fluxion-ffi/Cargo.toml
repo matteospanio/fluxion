@@ -1,0 +1,23 @@
+[package]
+name = "fluxion-ffi"
+description = "Fluxion: stable C ABI surface (cbindgen header + DLPack tensor interop)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lints]
+workspace = true
+
+# A C-callable dynamic + static library, plus rlib so other Rust crates can link it in tests.
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+fluxion-core = { path = "../fluxion-core" }
+# Added when the surface grows: a DLPack binding crate / generated cbindgen header.

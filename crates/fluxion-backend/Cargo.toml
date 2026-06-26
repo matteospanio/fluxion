@@ -1,0 +1,18 @@
+[package]
+name = "fluxion-backend"
+description = "Fluxion: lowering of the DSP graph to CubeCL (CUDA/HIP/Metal/Vulkan/WGSL) and CPU SIMD."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Added when implemented: cubecl (single-source GPU kernels), wide/pulp (CPU SIMD).

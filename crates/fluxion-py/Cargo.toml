@@ -1,0 +1,19 @@
+[package]
+name = "fluxion-py"
+description = "Fluxion: PyO3 Python bindings with DLPack and torch/jax autograd adapters."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lints]
+workspace = true
+
+# Becomes `crate-type = ["cdylib"]` once PyO3 is wired (built into a wheel via maturin).
+[dependencies]
+# Added when implemented: pyo3, fluxion (facade); torch/jax adapters live on the Python side.
