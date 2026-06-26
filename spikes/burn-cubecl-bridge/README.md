@@ -7,13 +7,15 @@ per-call host↔device transfer.
 ## Result ✅ (RTX 3070, CUDA 12.4, Burn 0.21 / CubeCL 0.10, 2026-06-26)
 
 ```
-resident forward, max |GPU-CPU| = 5.960e-8     # bit-accurate
-resident GPU forward: 20.16 ms/iter            # vs ~430 ms transfer-bound, ~300 ms CPU
+forward  max|GPU-CPU| = 5.960e-8     # bit-accurate
+adjoint  max|GPU-CPU| = 5.960e-8     # input-gradient kernel == sos_input_grad
+resident fwd+bwd: 40.6 ms/iter       # vs ~860 ms if each pass round-tripped the host
 ```
 
-So once `x` is resident, each forward is ~20 ms (output alloc + compute), **~21× the one-shot
-transfer-bound path** and ~15× a CPU core — the speedup the C4/F2 kernel promised, now realized
-because nothing is uploaded per call.
+So once `x` is resident, a forward+backward iteration is ~40 ms (two kernel passes + allocs) —
+~20× the host-roundtrip path. The compute win the C4/F2 kernel promised is realized because nothing
+is uploaded/downloaded per pass. The **adjoint** (cascade input gradient) is the same recurrence run
+backward in time, sections in reverse — bit-identical to `fluxion_ops::sos_input_grad`.
 
 ## How the bridge works
 
@@ -29,10 +31,13 @@ because nothing is uploaded per call.
 ## What's proven vs. next
 
 - ✅ **The bridge + resident forward** — kernel on a resident Burn tensor, correct and fast.
-- ◻️ **F3** — the analytic backward as resident GPU kernels (adjoint + coeff-grad), so a full
-  training loop stays on the device (forward *and* backward). Then wire both into
-  `fluxion-autodiff`'s differentiable op for a `CubeBackend<R>` fast path (host roundtrip stays as
-  the backend-agnostic fallback).
+- ✅ **Input-gradient (adjoint) kernel** — resident, bit-identical to `sos_input_grad`; resident
+  forward+backward ~40 ms/iter.
+- ◻️ **Coefficient-gradient kernel** — `sos_vjp`'s `grad_coeffs` on device (all-pole intermediates +
+  a cross-row reduction). Needed for training the filter's *own* parameters fully on-GPU.
+- ◻️ **Integration** — wire forward + both backwards into a `CubeBackend<R>` specialization of
+  `fluxion-autodiff`'s op (host roundtrip stays the backend-agnostic fallback), so `loss.backward()`
+  on a GPU tensor runs the kernels.
 
 ## Running it
 
