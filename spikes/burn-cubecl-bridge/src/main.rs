@@ -14,11 +14,18 @@
 //! Bridge: raw `CubeBackend<R>` float primitive is `CubeTensor<R>` (public `client`/`handle`); launch
 //! on those, wrap back with `CubeTensor::new_contiguous`. Generic over `R` → cross-vendor.
 //!
-//! Next: cascade coeff-grad (orchestrate per-section with resident intermediates) + a
-//! `CubeBackend<R>` specialization of `fluxion-autodiff`'s op so `loss.backward()` runs the kernels.
+//! Integration: a custom op over `Autodiff<CubeBackend>` (single trainable biquad) whose forward +
+//! backward launch the kernels on resident tensors — `loss.backward()` on a GPU tensor gradchecks vs
+//! finite-difference (coeff 1.0e-4, input 1.5e-4). Next: port the op into `fluxion-autodiff` behind a
+//! `cuda` sub-feature (mechanical), and cascade coeff-grad (orchestrate per-section, no new math).
 
+use burn::backend::Autodiff;
+use burn::backend::autodiff::checkpoint::base::Checkpointer;
+use burn::backend::autodiff::checkpoint::strategy::NoCheckpointing;
+use burn::backend::autodiff::grads::Gradients;
+use burn::backend::autodiff::ops::{Backward, Ops, OpsKind, binary};
+use burn::tensor::ops::FloatTensor;
 use burn::tensor::{Tensor, TensorPrimitive};
-use burn::tensor::backend::Backend;
 use burn_cubecl::CubeBackend;
 use burn_cubecl::tensor::CubeTensor;
 use cubecl::cuda::{CudaDevice, CudaRuntime};
@@ -262,6 +269,63 @@ fn to_vec(ct: Ct) -> Vec<f32> {
     Tensor::<Gpu, 1>::from_primitive(TensorPrimitive::Float(ct)).into_data().to_vec::<f32>().unwrap()
 }
 
+// ---- Burn custom op: a single trainable biquad, forward + backward as resident kernels ----
+// Same shape as fluxion-autodiff's host `SosTrainBackward`, but the bodies launch kernels on
+// resident CubeTensors. Only the tiny coeff slice ([5]) and the [batch,5] grad-coeff reduction
+// cross the host; the signal/grad tensors stay on the GPU.
+type AGpu = Autodiff<Gpu>;
+
+#[derive(Debug)]
+struct BiquadTrainBackward {
+    input: Ct,
+    coeffs: [f32; 5],
+    frames: usize, // ponytail: single-row (batch=1) MVP; batched needs frames threaded through
+}
+
+impl Backward<Gpu, 2> for BiquadTrainBackward {
+    type State = ();
+    fn backward(self, ops: Ops<(), 2>, grads: &mut Gradients, _cp: &mut Checkpointer) {
+        let cf: Vec<f32> = self.coeffs.to_vec();
+        let cf_x = cf.clone();
+        let (input, frames) = (self.input, self.frames);
+        let device: CudaDevice = Default::default();
+        binary::<Gpu, _, _>(
+            ops.parents,
+            ops.node,
+            grads,
+            // d/d(input): the adjoint kernel.
+            move |g: FloatTensor<Gpu>| -> FloatTensor<Gpu> { run(&g, &cf_x, frames, 1, true) },
+            // d/d(coeffs): the coeff-grad kernel, reduced to [5].
+            move |g: FloatTensor<Gpu>| -> FloatTensor<Gpu> {
+                let acc = cgrad(&input, &g, &cf, frames);
+                Tensor::<Gpu, 1>::from_floats(acc.as_slice(), &device).into_primitive().tensor()
+            },
+        );
+    }
+}
+
+fn biquad_train_gpu(x: Tensor<AGpu, 1>, coeffs: Tensor<AGpu, 1>) -> Tensor<AGpu, 1> {
+    let x_ad = x.into_primitive().tensor();
+    let c_ad = coeffs.into_primitive().tensor();
+    let cf: Vec<f32> = Tensor::<Gpu, 1>::from_primitive(TensorPrimitive::Float(c_ad.primitive.clone()))
+        .into_data()
+        .to_vec()
+        .unwrap();
+    let mut c5 = [0.0f32; 5];
+    c5.copy_from_slice(&cf[..5]);
+    let frames = x_ad.primitive.meta.shape().num_elements();
+    let backward = BiquadTrainBackward { input: x_ad.primitive.clone(), coeffs: c5, frames };
+    let out = match backward
+        .prepare::<NoCheckpointing>([x_ad.node.clone(), c_ad.node.clone()])
+        .compute_bound()
+        .stateful()
+    {
+        OpsKind::Tracked(prep) => prep.finish((), run(&x_ad.primitive, &cf, frames, 1, false)),
+        OpsKind::UnTracked(prep) => prep.finish(run(&x_ad.primitive, &cf, frames, 1, false)),
+    };
+    Tensor::from_primitive(TensorPrimitive::Float(out))
+}
+
 fn main() {
     let device: CudaDevice = Default::default();
 
@@ -301,5 +365,37 @@ fn main() {
     let d_fd = (0..5).fold(0.0f32, |m, j| m.max((cpu[j] - fd[j]).abs() / (1.0 + cpu[j].abs())));
     println!("coeff-grad max|GPU-CPU| = {d_gc:.3e}   rel|CPU-finitediff| = {d_fd:.3e}");
     assert!(d_gc < 1e-2 && d_fd < 1e-2);
-    println!(">>> RESIDENT FORWARD + ADJOINT + COEFF-GRAD OK <<<");
+
+    // --- integration: differentiate a trainable biquad through Burn's autograd, fully on GPU ---
+    let xs: Vec<f32> = (0..20).map(|i| (0.3 * i as f32).sin()).collect();
+    let seed: Vec<f32> = (0..20).map(|i| (0.2 * i as f32 + 0.5).cos()).collect();
+    let cvec = [0.5f32, 0.3, -0.2, -0.2, 0.05]; // stable biquad (a1=-0.2, a2=0.05)
+    let x = Tensor::<AGpu, 1>::from_floats(xs.as_slice(), &device).require_grad();
+    let c = Tensor::<AGpu, 1>::from_floats(cvec.as_slice(), &device).require_grad();
+    let loss = (biquad_train_gpu(x.clone(), c.clone()) * Tensor::<AGpu, 1>::from_floats(seed.as_slice(), &device)).sum();
+    let g = loss.backward();
+    let gc = c.grad(&g).unwrap().into_data().to_vec::<f32>().unwrap();
+    let gx = x.grad(&g).unwrap().into_data().to_vec::<f32>().unwrap();
+
+    let dot = |v: &[f32], cc: &[f32; 5]| cpu_fwd(v, 20, std::slice::from_ref(cc)).iter().zip(&seed).map(|(a, b)| a * b).sum::<f32>();
+    let eps = 1e-3;
+    let mut e_c = 0.0f32;
+    for j in 0..5 {
+        let (mut hi, mut lo) = (cvec, cvec);
+        hi[j] += eps;
+        lo[j] -= eps;
+        let fd = (dot(&xs, &hi) - dot(&xs, &lo)) / (2.0 * eps);
+        e_c = e_c.max((gc[j] - fd).abs() / (1.0 + gc[j].abs()));
+    }
+    let mut e_x = 0.0f32;
+    for i in 0..xs.len() {
+        let (mut hi, mut lo) = (xs.clone(), xs.clone());
+        hi[i] += eps;
+        lo[i] -= eps;
+        let fd = (dot(&hi, &cvec) - dot(&lo, &cvec)) / (2.0 * eps);
+        e_x = e_x.max((gx[i] - fd).abs());
+    }
+    println!("Burn autograd on GPU: rel coeff-grad err {e_c:.3e}   input-grad err {e_x:.3e}");
+    assert!(e_c < 1e-2 && e_x < 1e-2);
+    println!(">>> RESIDENT KERNELS + BURN-AUTOGRAD INTEGRATION OK <<<");
 }

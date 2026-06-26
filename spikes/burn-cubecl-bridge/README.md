@@ -11,6 +11,7 @@ forward    max|GPU-CPU| = 5.960e-8   # bit-accurate
 adjoint    max|GPU-CPU| = 5.960e-8   # input-gradient kernel == sos_input_grad
 resident fwd+bwd: 40.5 ms/iter       # vs ~860 ms if each pass round-tripped the host
 coeff-grad max|GPU-CPU| = 1.9e-4     # == sos_vjp grad_coeffs; rel vs finite-diff = 8.9e-3
+Burn autograd on GPU: coeff 1.0e-4, input 1.5e-4   # loss.backward() runs the kernels
 ```
 
 So once `x` is resident, a forward+backward iteration is ~40 ms (two kernel passes + allocs) —
@@ -42,11 +43,14 @@ is uploaded/downloaded per pass.
   forward+backward ~40 ms/iter.
 - ✅ **Coefficient-gradient kernel** (single biquad) — `sos_vjp`'s `grad_coeffs` on device, resident,
   matches CPU + finite-diff.
+- ✅ **Burn-autograd integration** (single biquad) — a custom op over `Autodiff<CubeBackend>` whose
+  forward + backward launch the kernels on resident tensors; `loss.backward()` on a GPU tensor
+  gradchecks vs finite-difference (coeff 1.0e-4, input 1.5e-4). Only the `[5]` coeffs and the
+  `[batch,5]` reduction cross the host.
+- ◻️ **Workspace port** — move the op into `fluxion-autodiff` behind a `cuda` sub-feature (the host
+  roundtrip stays the backend-agnostic fallback). Mechanical: the wiring is proven here.
 - ◻️ **Cascade coeff-grad** — orchestrate the single-biquad kernel per section with resident forward
   intermediates + back-propagated cotangents (compose the proven kernels; no new math).
-- ◻️ **Integration** — wire forward + both backwards into a `CubeBackend<R>` specialization of
-  `fluxion-autodiff`'s op (host roundtrip stays the backend-agnostic fallback), so `loss.backward()`
-  on a GPU tensor runs the kernels.
 
 ## Running it
 
