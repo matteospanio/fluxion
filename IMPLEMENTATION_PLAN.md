@@ -109,7 +109,7 @@ parallelizable around it.
 
 | ID | Task | P | Sz | Deps | ∥ |
 |----|------|---|----|------|---|
-| F0 | **SPIKE:** SOS cascade as a CubeCL kernel; run on NVIDIA **and** Apple Metal; match CPU output. **Go/No-Go on CubeCL+Burn.** | P0\* | M | D4 | — |
+| F0 | **SPIKE — ✅ GO (NVIDIA, 2026-06-26):** Burn 0.21 + CubeCL + CUDA forward **and** on-device autodiff confirmed on an RTX 3070 (see `spikes/f0-burn-cuda`). Apple Metal / AMD ROCm validation still pending. | P0\* | M | D4 | — |
 | F1 | CubeCL backend: `Backend` impl (elementwise + conv). | P1 | L | F0, C1 | — |
 | F2 | Fused SOS cascade GPU kernel (single dispatch). | P1 | M | F0, B3 | ✓ |
 | F3 | GPU VJP kernels (port the analytic backward to device). | P1 | M | F1, E1 | ✓ |

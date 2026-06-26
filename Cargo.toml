@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# GPU spikes are standalone (pull in Burn/CubeCL) and excluded from the default build.
+exclude = ["spikes"]
 
 # Shared metadata inherited by every member crate via `field.workspace = true`.
 [workspace.package]

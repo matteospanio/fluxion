@@ -1,0 +1,13 @@
+# Standalone spike (its own workspace) — NOT part of the main fluxion build.
+# Requires an NVIDIA GPU + CUDA toolkit (libnvrtc). Run on the GPU box:
+#   CUDA_PATH=/usr/local/cuda PATH=/usr/local/cuda/bin:$PATH cargo run
+[package]
+name = "f0-burn-cuda"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+burn = { version = "0.21", features = ["cuda", "autodiff"] }
