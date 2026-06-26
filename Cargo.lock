@@ -2346,6 +2346,9 @@ version = "0.0.0"
 [[package]]
 name = "fluxion-rt"
 version = "0.0.0"
+dependencies = [
+ "fluxion-ops",
+]
 
 [[package]]
 name = "fluxion-wasm"

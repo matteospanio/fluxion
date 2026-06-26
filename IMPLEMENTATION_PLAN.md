@@ -123,9 +123,9 @@ parallelizable around it.
 
 | ID | Task | P | Sz | Deps | ∥ |
 |----|------|---|----|------|---|
-| G1 | Lock-free SPSC ring buffer (acquire/release atomics, pow-2 mask) + tests. | P1 | M | — | ✓ |
+| G1 | Lock-free SPSC ring buffer (acquire/release atomics, pow-2 mask) + tests. **DONE (2026-06-26):** `fluxion-rt::ring` — free-running head/tail counters (full capacity usable), `Producer`/`Consumer` split, `Copy`-only (alloc/drop-free); tests incl. a 1M-item two-thread SPSC roundtrip. | P1 | M | — | ✓ |
 | G2 | Freeze/export: lower graph + designed coeffs to an alloc-free realtime plan (`.fxg`). | P1 | M | B5, D1, D4 | — |
-| G3 | Alloc-free block executor (pre-allocated state, SIMD MAC loop). | P1 | L | G2, C3 | — |
+| G3 | Alloc-free block executor (pre-allocated state, SIMD MAC loop). **Core DONE (2026-06-26):** `fluxion-rt::stream::SosStream` runs a frozen SOS cascade block-by-block with persistent per-section DF2T state, alloc-free; test proves chunked streaming == `sos_filter` whole-signal. Remaining: general-graph (post-G2) + SIMD MAC. | P1 | L | G2, C3 | — |
 | G4 | Parameter command queue + `SmoothedValue` ramping (click-free). | P1 | M | G3 | ✓ |
 | G5 | CPAL audio I/O backend (cross-platform callback). | P1 | M | G1, G3 | — |
 | G6 | Real-time-safety tests (no-alloc-in-callback assertion + xrun stress @128/48k). | P1 | M | G3 | ✓ |

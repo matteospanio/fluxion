@@ -15,4 +15,5 @@ categories.workspace = true
 workspace = true
 
 [dependencies]
-# Added when implemented: cpal (cross-platform realtime audio IO), fluxion-ops (frozen kernels).
+fluxion-ops = { path = "../fluxion-ops" }
+# Added when implemented: cpal (cross-platform realtime audio IO).
