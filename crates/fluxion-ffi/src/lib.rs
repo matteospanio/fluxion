@@ -7,7 +7,7 @@
 
 use std::os::raw::c_int;
 
-use fluxion_core::Graph;
+use fluxion_core::{Graph, OpKind};
 
 /// ABI smoke test: builds a trivial `gain | gain` graph and returns its leaf count (`2`).
 ///
@@ -17,7 +17,7 @@ use fluxion_core::Graph;
 /// None — takes no pointers and has no preconditions.
 #[unsafe(no_mangle)]
 pub extern "C" fn fx_abi_smoke() -> c_int {
-    let g = Graph::op("gain", [1.0]) | Graph::op("gain", [1.0]);
+    let g = Graph::op(OpKind::Gain, [1.0]) | Graph::op(OpKind::Gain, [1.0]);
     g.leaf_count() as c_int
 }
 

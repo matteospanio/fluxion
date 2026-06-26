@@ -15,4 +15,5 @@ categories.workspace = true
 workspace = true
 
 [dependencies]
-# Added when implemented: symphonia (pure-Rust decode), hound (wav), arrow + parquet (batch IO).
+hound = "3.5"
+# Added later: symphonia (flac/mp3/ogg/aac decode), arrow + parquet (batch IO).

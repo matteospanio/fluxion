@@ -10,7 +10,10 @@ fn main() {
     // ponytail: placeholder entrypoint — real parse/dispatch arrives with fluxion-io + clap.
     let demo = lowpass(800.0) | gain(-3.0);
 
-    eprintln!("fluxion {} — audio DSP CLI (scaffold)", env!("CARGO_PKG_VERSION"));
+    eprintln!(
+        "fluxion {} — audio DSP CLI (scaffold)",
+        env!("CARGO_PKG_VERSION")
+    );
     eprintln!();
     eprintln!("planned commands:");
     eprintln!("  fluxion <in> <effects...> <out>   process a file (SoX-style pipeline)");
