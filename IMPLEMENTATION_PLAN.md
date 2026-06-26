@@ -110,7 +110,7 @@ parallelizable around it.
 | ID | Task | P | Sz | Deps | ∥ |
 |----|------|---|----|------|---|
 | F0 | **SPIKE — ✅ GO (NVIDIA, 2026-06-26):** Burn 0.21 + CubeCL + CUDA forward **and** on-device autodiff confirmed on an RTX 3070 (see `spikes/f0-burn-cuda`). Apple Metal / AMD ROCm validation still pending. | P0\* | M | D4 | — |
-| F1 | CubeCL backend: `Backend` impl (elementwise + conv). | P1 | L | F0, C1 | — |
+| F1 | CubeCL backend: `Backend` impl (elementwise + conv). **Burn↔CubeCL bridge proven (2026-06-26):** the SOS kernel runs directly on a *resident* Burn `CubeBackend<R>` tensor (public `CubeTensor.client`/`.handle` + `new_contiguous`) — bit-accurate, ~20 ms/iter vs ~430 ms transfer-bound (the resident speedup lands), generic over the runtime → cross-vendor. See `spikes/burn-cubecl-bridge`. Next: F3 backward kernels + wire into `fluxion-autodiff`'s op. | P1 | L | F0, C1 | — |
 | F2 | Fused SOS cascade GPU kernel (single dispatch). **DONE + integrated (2026-06-26):** the CubeCL batched-cascade kernel is bit-accurate vs CPU and ~59× on 67 Msamples (RTX 3070), and is now wired into `fluxion-backend` behind the `cuda` feature (`cuda::sos_filter_batch`), GPU-tested against `sos_filter` per row. Default build stays pure-Rust/offline. Spike: `spikes/c4-cubecl-biquad`. | P1 | M | F0, B3 | ✓ |
 | F3 | GPU VJP kernels (port the analytic backward to device). | P1 | M | F1, E1 | ✓ |
 | F4 | FFT-conv on GPU. | P2 | M | F1 | ✓ |
