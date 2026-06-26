@@ -1,13 +1,15 @@
 //! Burn integration (feature `burn`): "own the backward, rent the graph".
 //!
-//! Registers fluxion's hand-derived analytic backward as a Burn **custom op**, so a biquad runs
+//! Registers fluxion's hand-derived analytic backward as a Burn **custom op**, so an SOS filter runs
 //! inside Burn's autograd with the analytic LTI adjoint as its gradient — no recursion unrolling.
 //! Backend-agnostic: the same code differentiates on `Autodiff<NdArray>` (CPU) or `Autodiff<Cuda>`
-//! (GPU, validated in `spikes/f0-burn-cuda`). The forward reuses [`fluxion_ops::biquad_forward`].
+//! (GPU, validated in `spikes/f0-burn-cuda`). Forward reuses [`fluxion_ops::sos_filter`], backward
+//! [`fluxion_ops::sos_input_grad`].
 //!
-//! Today this covers the single-biquad input gradient (the composable one). Coefficient gradients
-//! ([`fluxion_ops::biquad_vjp`] already derives them) and the GPU-kernel-accelerated forward/backward
-//! (wiring `fluxion-backend::cuda` into the custom op instead of the host roundtrip) are next.
+//! Today this is the **input gradient** for an arbitrary SOS cascade (the composable one). Next:
+//! coefficient gradients ([`fluxion_ops::sos_vjp`] derives them — a binary custom op over input and
+//! a trainable coeff tensor) and the GPU-kernel forward/backward (wire `fluxion-backend::cuda` into
+//! the op instead of the host roundtrip).
 
 use burn::backend::autodiff::Autodiff;
 use burn::backend::autodiff::checkpoint::base::Checkpointer;
@@ -18,7 +20,7 @@ use burn::tensor::backend::Backend;
 use burn::tensor::ops::FloatTensor;
 use burn::tensor::{Tensor, TensorData, TensorPrimitive};
 
-use fluxion_ops::{Biquad, biquad_forward};
+use fluxion_ops::{Biquad, sos_filter, sos_input_grad};
 
 /// Run `f` over a 1-D float primitive via a host roundtrip (correctness-first; the GPU-kernel path
 /// replaces this later).
@@ -34,72 +36,65 @@ fn map_1d<B: Backend>(prim: FloatTensor<B>, f: impl FnOnce(Vec<f32>) -> Vec<f32>
 }
 
 #[derive(Debug)]
-struct BiquadBackward(Biquad);
+struct SosBackward(Vec<Biquad>);
 
-impl<B: Backend> Backward<B, 1> for BiquadBackward {
+impl<B: Backend> Backward<B, 1> for SosBackward {
     type State = ();
 
     fn backward(self, ops: Ops<(), 1>, grads: &mut Gradients, _cp: &mut Checkpointer) {
-        let bq = self.0;
-        // Adjoint of an LTI filter = flip · filter · flip (the input-gradient VJP, no unrolling).
+        let sos = self.0;
+        // Adjoint of the cascade = the analytic input-gradient VJP (no recursion unrolling).
         unary::<B, _>(ops.parents, ops.node, grads, move |g| {
-            map_1d::<B>(g, |mut v| {
-                v.reverse();
-                let mut y = biquad_forward(&v, &bq);
-                y.reverse();
-                y
-            })
+            map_1d::<B>(g, |v| sos_input_grad(&v, &sos))
         });
     }
 }
 
-/// Apply a biquad to a 1-D Burn tensor as a **differentiable** op: forward via
-/// [`fluxion_ops::biquad_forward`], backward via the analytic adjoint.
-pub fn biquad<B: Backend, K: CheckpointStrategy>(
+/// Apply an SOS cascade to a 1-D Burn tensor as a **differentiable** op: forward via
+/// [`fluxion_ops::sos_filter`], backward via the analytic adjoint [`fluxion_ops::sos_input_grad`].
+pub fn sos<B: Backend, K: CheckpointStrategy>(
     x: Tensor<Autodiff<B, K>, 1>,
-    bq: Biquad,
+    sos: &[Biquad],
 ) -> Tensor<Autodiff<B, K>, 1> {
+    let sos = sos.to_vec();
     let ad = x.into_primitive().tensor();
-    let out = match BiquadBackward(bq)
+    let out = match SosBackward(sos.clone())
         .prepare::<K>([ad.node.clone()])
         .compute_bound()
         .stateful()
     {
-        OpsKind::Tracked(prep) => {
-            prep.finish((), map_1d::<B>(ad.primitive, |v| biquad_forward(&v, &bq)))
-        }
-        OpsKind::UnTracked(prep) => {
-            prep.finish(map_1d::<B>(ad.primitive, |v| biquad_forward(&v, &bq)))
-        }
+        OpsKind::Tracked(prep) => prep.finish((), map_1d::<B>(ad.primitive, |v| sos_filter(&v, &sos))),
+        OpsKind::UnTracked(prep) => prep.finish(map_1d::<B>(ad.primitive, |v| sos_filter(&v, &sos))),
     };
     Tensor::from_primitive(TensorPrimitive::Float(out))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::biquad;
+    use super::sos;
     use burn::backend::{Autodiff, NdArray};
     use burn::tensor::Tensor;
-    use fluxion_ops::{biquad_forward, butterworth_lowpass};
+    use fluxion_ops::{butterworth_lowpass, sos_filter};
 
     #[test]
     fn custom_analytic_backward_gradchecks() {
         type B = Autodiff<NdArray>;
         let device = Default::default();
-        let bq = butterworth_lowpass(2, 6_000.0, 48_000)[0];
-        let xs: Vec<f32> = (0..16).map(|i| (0.3 * i as f32).sin()).collect();
-        let seed: Vec<f32> = (0..16).map(|i| (0.17 * i as f32 + 1.0).cos()).collect();
+        let cascade = butterworth_lowpass(6, 6_000.0, 48_000); // 3 sections
+        let xs: Vec<f32> = (0..24).map(|i| (0.3 * i as f32).sin()).collect();
+        let seed: Vec<f32> = (0..24).map(|i| (0.17 * i as f32 + 1.0).cos()).collect();
 
-        // Gradient of <seed, biquad(x)> w.r.t. x, via Burn autograd + our custom backward.
+        // Gradient of <seed, sos_filter(x)> w.r.t. x, via Burn autograd + our analytic backward.
         let x = Tensor::<B, 1>::from_floats(xs.as_slice(), &device).require_grad();
-        let loss = (biquad(x.clone(), bq) * Tensor::<B, 1>::from_floats(seed.as_slice(), &device))
-            .sum();
+        let loss =
+            (sos(x.clone(), &cascade) * Tensor::<B, 1>::from_floats(seed.as_slice(), &device)).sum();
         let grads = loss.backward();
         let gx = x.grad(&grads).unwrap().into_data().to_vec::<f32>().unwrap();
 
         // Finite-difference reference.
         let eps = 1e-3;
-        let dot = |v: &[f32]| biquad_forward(v, &bq).iter().zip(&seed).map(|(a, b)| a * b).sum::<f32>();
+        let dot =
+            |v: &[f32]| sos_filter(v, &cascade).iter().zip(&seed).map(|(a, b)| a * b).sum::<f32>();
         for i in 0..xs.len() {
             let (mut hi, mut lo) = (xs.clone(), xs.clone());
             hi[i] += eps;

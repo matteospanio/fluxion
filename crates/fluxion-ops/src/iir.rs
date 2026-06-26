@@ -253,6 +253,20 @@ pub fn sos_vjp(input: &[f32], sos: &[Biquad], grad_out: &[f32]) -> (Vec<f32>, Ve
     (g, grads)
 }
 
+/// Input gradient (VJP) of an SOS cascade — the adjoint filter, sections applied in reverse.
+///
+/// Equals `sos_vjp(_, sos, grad_out).0` but needs no forward intermediates and computes no
+/// coefficient gradients: `Jᵀ = J₁ᵀ … J_mᵀ`, and each section's adjoint is `flip · filter · flip`.
+pub fn sos_input_grad(grad_out: &[f32], sos: &[Biquad]) -> Vec<f32> {
+    let mut g = grad_out.to_vec();
+    for bq in sos.iter().rev() {
+        g.reverse();
+        g = biquad_forward(&g, bq);
+        g.reverse();
+    }
+    g
+}
+
 /// Magnitude response of a whole cascade at angular frequency `omega` (product of sections).
 pub fn sos_magnitude(sos: &[Biquad], omega: f32) -> f32 {
     sos.iter().map(|b| b.magnitude(omega)).product()
@@ -418,6 +432,18 @@ mod tests {
                 "grad_in[{j}]: num {num} vs ana {}",
                 grad_in[j]
             );
+        }
+    }
+
+    #[test]
+    fn sos_input_grad_matches_sos_vjp() {
+        let x = ramp_sine(80, 0.2, 0.5);
+        let gbar = ramp_sine(80, 0.31, 0.0);
+        let sos = butterworth_lowpass(4, 5_000.0, 48_000);
+        let full = sos_vjp(&x, &sos, &gbar).0; // grad_in from the full VJP
+        let light = sos_input_grad(&gbar, &sos);
+        for (a, b) in full.iter().zip(&light) {
+            assert!((a - b).abs() < 1e-5, "{a} vs {b}");
         }
     }
 
