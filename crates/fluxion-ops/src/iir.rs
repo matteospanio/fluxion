@@ -180,6 +180,37 @@ pub fn sos_filter(input: &[f32], sos: &[Biquad]) -> Vec<f32> {
     data
 }
 
+/// Apply an SOS cascade to a **channel-interleaved** batch in place: `data[t * channels + c]` is
+/// channel `c` at frame `t`.
+///
+/// An IIR recurrence is sequential in time (each sample needs the previous), so it can't vectorize
+/// over time — but the channels are independent. With this frame-major layout the `channels` values
+/// at a frame are contiguous, so the inner per-channel loop is data-parallel and auto-vectorizes
+/// (SIMD) across the batch. That is the way to make a sequential filter fast on wide data; building
+/// with `-C target-cpu=native` lets the loop use the full AVX width. The per-channel result is
+/// identical to [`sos_filter`].
+pub fn sos_filter_interleaved(data: &mut [f32], channels: usize, sos: &[Biquad]) {
+    assert!(channels > 0 && !data.is_empty() && data.len() % channels == 0);
+    // One Direct-Form-II-Transposed state pair per channel, reused across sections.
+    let mut s1 = vec![0.0f32; channels];
+    let mut s2 = vec![0.0f32; channels];
+    for bq in sos {
+        s1.iter_mut().for_each(|v| *v = 0.0);
+        s2.iter_mut().for_each(|v| *v = 0.0);
+        let (b0, b1, b2, a1, a2) = (bq.b0, bq.b1, bq.b2, bq.a1, bq.a2);
+        for frame in data.chunks_exact_mut(channels) {
+            // Independent across channels → vectorizes. `s1`/`s2` don't alias `data`.
+            for ((x, p1), p2) in frame.iter_mut().zip(s1.iter_mut()).zip(s2.iter_mut()) {
+                let xi = *x;
+                let y = b0 * xi + *p1;
+                *p1 = b1 * xi - a1 * y + *p2;
+                *p2 = b2 * xi - a2 * y;
+                *x = y;
+            }
+        }
+    }
+}
+
 /// All-pole filter `w[n] = x[n] - a1·w[n-1] - a2·w[n-2]` (i.e. `1/A(z)`), zero initial state.
 fn allpole(input: &[f32], a1: f32, a2: f32) -> Vec<f32> {
     let mut w = vec![0.0f32; input.len()];
@@ -281,6 +312,31 @@ pub fn sos_is_stable(sos: &[Biquad]) -> bool {
 mod tests {
     use super::*;
     use std::f32::consts::{FRAC_1_SQRT_2, PI as PI_F};
+
+    #[test]
+    fn interleaved_matches_per_channel_sos_filter() {
+        let sos = butterworth_lowpass(8, 4_000.0, 48_000); // 4 sections
+        let (channels, frames) = (5usize, 200usize);
+        let rows: Vec<Vec<f32>> = (0..channels)
+            .map(|c| (0..frames).map(|t| (0.05 * (t + c * 7) as f32).sin()).collect())
+            .collect();
+
+        // Interleave (frame-major), filter, then compare each channel to sos_filter.
+        let mut inter = vec![0.0f32; channels * frames];
+        for (c, row) in rows.iter().enumerate() {
+            for (t, &x) in row.iter().enumerate() {
+                inter[t * channels + c] = x;
+            }
+        }
+        sos_filter_interleaved(&mut inter, channels, &sos);
+
+        for (c, row) in rows.iter().enumerate() {
+            let want = sos_filter(row, &sos);
+            for t in 0..frames {
+                assert!((inter[t * channels + c] - want[t]).abs() < 1e-5);
+            }
+        }
+    }
 
     fn omega(f: f32, fs: u32) -> f32 {
         2.0 * PI_F * f / fs as f32

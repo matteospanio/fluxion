@@ -81,7 +81,7 @@ parallelizable around it.
 | D1 | Butterworth SOS design (Lo/Hi), closed-form (no SciPy at runtime). | P0 | M | B1 | — |
 | D2 | Chebyshev I/II SOS design (Lo/Hi). | P1 | M | D1 | ✓ |
 | D3 | RBJ biquads: peaking, low/high shelf, notch, allpass, bandpass. | P1 | M | D1 | ✓ |
-| D4 | SOS/biquad cascade forward kernel (over `Backend`). | P0 | M | C1, D1 | — |
+| D4 | SOS/biquad cascade forward kernel (over `Backend`). **CPU SIMD batch variant (2026-06-26):** `sos_filter_interleaved` filters a channel-interleaved (frame-major) batch in place — the per-channel inner loop auto-vectorizes across the batch (an IIR can't vectorize over time). Single-core ~665–691 Msamples/s vs torchfx's fused C++ kernel ~465 (1.4–1.5×); the prior scalar per-row path was ~85 (5.5× slower). Planar (torch `(B,T)`) input needs a transpose (a blocked one ≈ matches torchfx). | P0 | M | C1, D1 | — |
 | D5 | FIR + FFT-convolution forward. | P1 | M | C1 | ✓ |
 | D6 | Fractional delay line forward. | P1 | M | C1 | ✓ |
 | D7 | Gain, Normalize, sum/diff, DC/mask ops. | P0 | S | C1 | ✓ |
