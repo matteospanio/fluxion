@@ -1,0 +1,16 @@
+# GPU SOS-cascade throughput bench (standalone — own workspace, not part of the main build).
+# Needs an NVIDIA GPU + CUDA toolkit. Run on the GPU box:
+#   CUDA_PATH=/usr/local/cuda PATH=/usr/local/cuda/bin:$PATH cargo run --release
+[package]
+name = "throughput-vs-torchfx"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[profile.release]
+opt-level = 3
+
+[dependencies]
+cubecl = { version = "0.10", features = ["cuda"] }
