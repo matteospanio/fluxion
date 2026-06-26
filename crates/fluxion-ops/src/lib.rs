@@ -16,9 +16,11 @@
 
 pub mod effect;
 pub mod iir;
+pub mod rbj;
 
 pub use effect::{gain, gain_vjp, normalize_peak};
 pub use iir::{
     Biquad, BiquadGrad, Sos, biquad_forward, biquad_vjp, butterworth_highpass, butterworth_lowpass,
     sos_filter, sos_is_stable, sos_magnitude, sos_vjp,
 };
+pub use rbj::{allpass, bandpass, high_shelf, low_shelf, notch, peaking};

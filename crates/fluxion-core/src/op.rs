@@ -20,6 +20,18 @@ pub enum OpKind {
     Highpass,
     /// Peak normalization to a target linear `peak`.
     Normalize,
+    /// RBJ peaking EQ: `gain` dB around `frequency` with bandwidth `q`.
+    Peaking,
+    /// RBJ low shelf: `gain` dB below `frequency` (bandwidth `q`).
+    LowShelf,
+    /// RBJ high shelf: `gain` dB above `frequency` (bandwidth `q`).
+    HighShelf,
+    /// RBJ notch at `frequency` with bandwidth `q`.
+    Notch,
+    /// RBJ band-pass (0 dB peak) at `frequency` with bandwidth `q`.
+    Bandpass,
+    /// RBJ all-pass at `frequency` with bandwidth `q`.
+    Allpass,
 }
 
 // Static parameter tables — one per kind.
@@ -45,6 +57,17 @@ static NORMALIZE_PARAMS: [ParamSpec; 1] = [ParamSpec::new(
     0.0,
     f32::INFINITY,
 )];
+// frequency + gain + q (peaking and both shelves share this schema).
+static PEQ_PARAMS: [ParamSpec; 3] = [
+    ParamSpec::new("frequency", Unit::Hz, 1000.0, 0.0, f32::INFINITY),
+    ParamSpec::new("gain", Unit::Db, 0.0, f32::NEG_INFINITY, f32::INFINITY),
+    ParamSpec::new("q", Unit::Q, 0.707, 1e-3, 1000.0),
+];
+// frequency + q (notch, bandpass, allpass share this schema).
+static FQ_PARAMS: [ParamSpec; 2] = [
+    ParamSpec::new("frequency", Unit::Hz, 1000.0, 0.0, f32::INFINITY),
+    ParamSpec::new("q", Unit::Q, 0.707, 1e-3, 1000.0),
+];
 
 impl OpKind {
     /// Stable identifier used in the DSL / CLI / `.fxg`, e.g. `"lowpass"`.
@@ -54,6 +77,12 @@ impl OpKind {
             OpKind::Lowpass => "lowpass",
             OpKind::Highpass => "highpass",
             OpKind::Normalize => "normalize",
+            OpKind::Peaking => "peaking",
+            OpKind::LowShelf => "lowshelf",
+            OpKind::HighShelf => "highshelf",
+            OpKind::Notch => "notch",
+            OpKind::Bandpass => "bandpass",
+            OpKind::Allpass => "allpass",
         }
     }
 
@@ -64,18 +93,14 @@ impl OpKind {
             OpKind::Lowpass => &LOWPASS_PARAMS,
             OpKind::Highpass => &HIGHPASS_PARAMS,
             OpKind::Normalize => &NORMALIZE_PARAMS,
+            OpKind::Peaking | OpKind::LowShelf | OpKind::HighShelf => &PEQ_PARAMS,
+            OpKind::Notch | OpKind::Bandpass | OpKind::Allpass => &FQ_PARAMS,
         }
     }
 
     /// Look up a kind by its DSL name (inverse of [`OpKind::name`]).
     pub fn from_name(name: &str) -> Option<OpKind> {
-        match name {
-            "gain" => Some(OpKind::Gain),
-            "lowpass" => Some(OpKind::Lowpass),
-            "highpass" => Some(OpKind::Highpass),
-            "normalize" => Some(OpKind::Normalize),
-            _ => None,
-        }
+        OpKind::all().iter().copied().find(|k| k.name() == name)
     }
 
     /// Every op kind, for enumeration (CLI help, validation).
@@ -85,6 +110,12 @@ impl OpKind {
             OpKind::Lowpass,
             OpKind::Highpass,
             OpKind::Normalize,
+            OpKind::Peaking,
+            OpKind::LowShelf,
+            OpKind::HighShelf,
+            OpKind::Notch,
+            OpKind::Bandpass,
+            OpKind::Allpass,
         ]
     }
 
@@ -209,6 +240,8 @@ mod tests {
     fn defaults_match_arity() {
         assert_eq!(OpKind::Lowpass.defaults(), vec![1000.0, 2.0]);
         assert_eq!(OpKind::Gain.defaults(), vec![1.0]);
+        assert_eq!(OpKind::Peaking.defaults().len(), 3);
+        assert_eq!(OpKind::Notch.defaults().len(), 2);
     }
 
     #[test]
@@ -217,5 +250,6 @@ mod tests {
         assert!(Op::new(OpKind::Gain, []).is_err());
         assert!(Op::new(OpKind::Lowpass, [-5.0, 2.0]).is_err());
         assert!(Op::new(OpKind::Lowpass, [1000.0, f32::NAN]).is_err());
+        assert!(Op::new(OpKind::Peaking, [1000.0, 6.0, 0.0]).is_err()); // q below min
     }
 }

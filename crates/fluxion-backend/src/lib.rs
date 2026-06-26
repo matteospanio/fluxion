@@ -9,7 +9,10 @@
 //! and the right primitive set is known. Until then, ops are called directly here.
 
 use fluxion_core::{Graph, Op, OpKind, Signal};
-use fluxion_ops::{butterworth_highpass, butterworth_lowpass, gain, normalize_peak, sos_filter};
+use fluxion_ops::{
+    Biquad, allpass, bandpass, biquad_forward, butterworth_highpass, butterworth_lowpass, gain,
+    high_shelf, low_shelf, normalize_peak, notch, peaking, sos_filter,
+};
 
 /// Run a graph over an input signal on the CPU, returning a new signal.
 ///
@@ -25,6 +28,7 @@ pub fn process(graph: &Graph, input: &Signal) -> Signal {
 
 fn apply_op(op: &Op, input: &Signal) -> Signal {
     let fs = input.fs;
+    let p = &op.params;
     let mut out = input.clone();
     match op.kind {
         OpKind::Gain => {
@@ -50,10 +54,23 @@ fn apply_op(op: &Op, input: &Signal) -> Signal {
         OpKind::Normalize => {
             normalize_peak(&mut out.channels, op.params[0]);
         }
+        OpKind::Peaking => apply_biquad(&mut out, peaking(p[0], p[1], p[2], fs)),
+        OpKind::LowShelf => apply_biquad(&mut out, low_shelf(p[0], p[1], p[2], fs)),
+        OpKind::HighShelf => apply_biquad(&mut out, high_shelf(p[0], p[1], p[2], fs)),
+        OpKind::Notch => apply_biquad(&mut out, notch(p[0], p[1], fs)),
+        OpKind::Bandpass => apply_biquad(&mut out, bandpass(p[0], p[1], fs)),
+        OpKind::Allpass => apply_biquad(&mut out, allpass(p[0], p[1], fs)),
         // `OpKind` is `#[non_exhaustive]`; future ops must be added above before use.
         kind => panic!("fluxion-backend: op '{}' is not implemented", kind.name()),
     }
     out
+}
+
+/// Apply a single biquad to every channel in place.
+fn apply_biquad(sig: &mut Signal, bq: Biquad) {
+    for ch in &mut sig.channels {
+        *ch = biquad_forward(ch, &bq);
+    }
 }
 
 /// Sum two signals channel-by-channel, zero-padding to the longer of each pair.

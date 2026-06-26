@@ -50,4 +50,34 @@ pub mod prelude {
     pub fn normalize(peak: f32) -> Graph {
         Graph::op(OpKind::Normalize, [peak])
     }
+
+    /// RBJ peaking EQ: `gain` dB around `frequency` Hz with bandwidth `q`.
+    pub fn peaking(frequency: f32, gain_db: f32, q: f32) -> Graph {
+        Graph::op(OpKind::Peaking, [frequency, gain_db, q])
+    }
+
+    /// RBJ low shelf: `gain` dB below `frequency` Hz (bandwidth `q`).
+    pub fn lowshelf(frequency: f32, gain_db: f32, q: f32) -> Graph {
+        Graph::op(OpKind::LowShelf, [frequency, gain_db, q])
+    }
+
+    /// RBJ high shelf: `gain` dB above `frequency` Hz (bandwidth `q`).
+    pub fn highshelf(frequency: f32, gain_db: f32, q: f32) -> Graph {
+        Graph::op(OpKind::HighShelf, [frequency, gain_db, q])
+    }
+
+    /// RBJ notch at `frequency` Hz with bandwidth `q`.
+    pub fn notch(frequency: f32, q: f32) -> Graph {
+        Graph::op(OpKind::Notch, [frequency, q])
+    }
+
+    /// RBJ band-pass (0 dB peak) at `frequency` Hz with bandwidth `q`.
+    pub fn bandpass(frequency: f32, q: f32) -> Graph {
+        Graph::op(OpKind::Bandpass, [frequency, q])
+    }
+
+    /// RBJ all-pass at `frequency` Hz with bandwidth `q`.
+    pub fn allpass(frequency: f32, q: f32) -> Graph {
+        Graph::op(OpKind::Allpass, [frequency, q])
+    }
 }
