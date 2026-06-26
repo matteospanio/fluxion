@@ -1,8 +1,13 @@
-//! IIR filter design (Butterworth, second-order sections) and the cascade filter kernel.
+//! IIR filter design (Butterworth, second-order sections), the cascade filter kernel, and its
+//! analytic backward pass (VJP).
 //!
 //! Design is done in `f64` for precision (analog prototype → bilinear transform with frequency
 //! pre-warping), then stored as `f32` biquads. No SciPy at runtime — the closed-form Butterworth
 //! poles are computed directly.
+//!
+//! The backward pass is **analytic**, not autograd-unrolling (the differentiable-IIR approach):
+//! the input gradient is the adjoint filter (the same biquad run over the time-reversed cotangent),
+//! and the coefficient gradients use the all-pole intermediate `1/A(z)` — see [`biquad_vjp`].
 
 use std::f64::consts::PI;
 
@@ -32,10 +37,33 @@ impl Biquad {
         let di = -(self.a1 * s1 + self.a2 * s2);
         ((nr * nr + ni * ni) / (dr * dr + di * di)).sqrt()
     }
+
+    /// True if both poles are strictly inside the unit circle (BIBO stable).
+    ///
+    /// For `A(z) = 1 + a1 z⁻¹ + a2 z⁻²` the Jury condition is `|a2| < 1` and `|a1| < 1 + a2`.
+    /// First-order sections (`a2 == 0`) reduce to `|a1| < 1`.
+    pub fn is_stable(&self) -> bool {
+        self.a2.abs() < 1.0 && self.a1.abs() < 1.0 + self.a2
+    }
 }
 
 /// A cascade of second-order sections.
 pub type Sos = Vec<Biquad>;
+
+/// Cotangents (gradients) for a biquad's five coefficients.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BiquadGrad {
+    /// ∂L/∂b0.
+    pub b0: f32,
+    /// ∂L/∂b1.
+    pub b1: f32,
+    /// ∂L/∂b2.
+    pub b2: f32,
+    /// ∂L/∂a1.
+    pub a1: f32,
+    /// ∂L/∂a2.
+    pub a2: f32,
+}
 
 /// Design a Butterworth low-pass filter as second-order sections.
 pub fn butterworth_lowpass(order: usize, cutoff_hz: f32, fs: u32) -> Sos {
@@ -115,27 +143,109 @@ fn bilinear1(b: [f64; 2], a: [f64; 2], k: f64) -> Biquad {
     }
 }
 
-/// Filter a single channel through a cascade of sections (Direct Form II Transposed).
-///
-/// State starts at zero and is local to this call (offline, whole-buffer processing).
+/// Filter one channel through a single biquad (Direct Form II Transposed), zero initial state.
+pub fn biquad_forward(input: &[f32], bq: &Biquad) -> Vec<f32> {
+    let mut out = vec![0.0f32; input.len()];
+    let (mut s1, mut s2) = (0.0f32, 0.0f32);
+    for (o, &x) in out.iter_mut().zip(input) {
+        let y = bq.b0 * x + s1;
+        s1 = bq.b1 * x - bq.a1 * y + s2;
+        s2 = bq.b2 * x - bq.a2 * y;
+        *o = y;
+    }
+    out
+}
+
+/// Filter one channel through a cascade of sections.
 pub fn sos_filter(input: &[f32], sos: &[Biquad]) -> Vec<f32> {
     let mut data = input.to_vec();
     for bq in sos {
-        let (mut s1, mut s2) = (0.0f32, 0.0f32);
-        for x in data.iter_mut() {
-            let xin = *x;
-            let y = bq.b0 * xin + s1;
-            s1 = bq.b1 * xin - bq.a1 * y + s2;
-            s2 = bq.b2 * xin - bq.a2 * y;
-            *x = y;
-        }
+        data = biquad_forward(&data, bq);
     }
     data
+}
+
+/// All-pole filter `w[n] = x[n] - a1·w[n-1] - a2·w[n-2]` (i.e. `1/A(z)`), zero initial state.
+fn allpole(input: &[f32], a1: f32, a2: f32) -> Vec<f32> {
+    let mut w = vec![0.0f32; input.len()];
+    let (mut w1, mut w2) = (0.0f32, 0.0f32);
+    for (o, &x) in w.iter_mut().zip(input) {
+        let cur = x - a1 * w1 - a2 * w2;
+        *o = cur;
+        w2 = w1;
+        w1 = cur;
+    }
+    w
+}
+
+/// Analytic backward pass for a single biquad.
+///
+/// Given the section input and the cotangent of its output (`grad_out = ∂L/∂y`), returns the
+/// cotangent of the input (`∂L/∂x`) and the gradients of the five coefficients.
+///
+/// - **Input gradient** uses the adjoint of an LTI filter: convolution by the time-reversed impulse
+///   response, computed as `flip(biquad_forward(flip(grad_out)))` — one extra forward pass, no
+///   recursion unrolling.
+/// - **Coefficient gradients** use `∂H/∂b_i = z⁻ⁱ/A(z)` and `∂H/∂a_i = −z⁻ⁱ·Y(z)/A(z)`, i.e. the
+///   all-pole-filtered input `w = 1/A · x` and output `v = 1/A · y`, correlated with `grad_out`.
+pub fn biquad_vjp(input: &[f32], bq: &Biquad, grad_out: &[f32]) -> (Vec<f32>, BiquadGrad) {
+    // Input gradient: adjoint filter = flip · forward · flip.
+    let mut rev = grad_out.to_vec();
+    rev.reverse();
+    let mut grad_in = biquad_forward(&rev, bq);
+    grad_in.reverse();
+
+    // Coefficient gradients.
+    let y = biquad_forward(input, bq);
+    let w = allpole(input, bq.a1, bq.a2); // ∂y/∂b_i = w[n-i]
+    let v = allpole(&y, bq.a1, bq.a2); // ∂y/∂a_i = -v[n-i]
+    let mut g = BiquadGrad::default();
+    for n in 0..input.len() {
+        let gy = grad_out[n];
+        g.b0 += gy * w[n];
+        if n >= 1 {
+            g.b1 += gy * w[n - 1];
+            g.a1 -= gy * v[n - 1];
+        }
+        if n >= 2 {
+            g.b2 += gy * w[n - 2];
+            g.a2 -= gy * v[n - 2];
+        }
+    }
+    (grad_in, g)
+}
+
+/// Analytic backward pass for a whole SOS cascade.
+///
+/// Returns the input cotangent and a per-section [`BiquadGrad`]. The forward intermediates are
+/// recomputed and the sections are traversed in reverse, each via [`biquad_vjp`].
+pub fn sos_vjp(input: &[f32], sos: &[Biquad], grad_out: &[f32]) -> (Vec<f32>, Vec<BiquadGrad>) {
+    // Forward intermediates: inter[i] is the input to section i.
+    let mut inter = Vec::with_capacity(sos.len() + 1);
+    inter.push(input.to_vec());
+    for bq in sos {
+        let next = biquad_forward(inter.last().unwrap(), bq);
+        inter.push(next);
+    }
+
+    let mut grads = vec![BiquadGrad::default(); sos.len()];
+    let mut g = grad_out.to_vec();
+    for i in (0..sos.len()).rev() {
+        let (grad_in, grad_c) = biquad_vjp(&inter[i], &sos[i], &g);
+        grads[i] = grad_c;
+        g = grad_in;
+    }
+    (g, grads)
 }
 
 /// Magnitude response of a whole cascade at angular frequency `omega` (product of sections).
 pub fn sos_magnitude(sos: &[Biquad], omega: f32) -> f32 {
     sos.iter().map(|b| b.magnitude(omega)).product()
+}
+
+/// `true` if every section of the cascade is stable.
+pub fn sos_is_stable(sos: &[Biquad]) -> bool {
+    sos.iter().all(Biquad::is_stable)
 }
 
 #[cfg(test)]
@@ -145,6 +255,22 @@ mod tests {
 
     fn omega(f: f32, fs: u32) -> f32 {
         2.0 * PI_F * f / fs as f32
+    }
+
+    // Deterministic pseudo-signals so tests need no RNG dependency.
+    fn ramp_sine(n: usize, w: f32, phase: f32) -> Vec<f32> {
+        (0..n).map(|i| (w * i as f32 + phase).sin()).collect()
+    }
+
+    // Deterministic broadband pseudo-noise in [-1, 1) (LCG) — well-conditioned for least squares.
+    fn pseudo_noise(n: usize) -> Vec<f32> {
+        let mut s = 0x1234_5678u32;
+        (0..n)
+            .map(|_| {
+                s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (s >> 9) as f32 / (1u32 << 22) as f32 - 1.0
+            })
+            .collect()
     }
 
     #[test]
@@ -189,5 +315,146 @@ mod tests {
         let x = vec![1.0f32; 2_000];
         let y = sos_filter(&x, &sos);
         assert!((y[1_999] - 1.0).abs() < 1e-3, "settled DC = {}", y[1_999]);
+    }
+
+    #[test]
+    fn butterworth_is_stable() {
+        for order in [1, 2, 3, 4, 5, 8] {
+            assert!(sos_is_stable(&butterworth_lowpass(order, 1_000.0, 48_000)));
+            assert!(sos_is_stable(&butterworth_highpass(order, 1_000.0, 48_000)));
+        }
+        // An obviously unstable section is rejected.
+        assert!(
+            !Biquad {
+                b0: 1.0,
+                b1: 0.0,
+                b2: 0.0,
+                a1: 0.0,
+                a2: 1.5
+            }
+            .is_stable()
+        );
+    }
+
+    #[test]
+    fn biquad_vjp_matches_finite_difference() {
+        let x = ramp_sine(64, 0.3, 0.0);
+        let gbar = ramp_sine(64, 0.17, 1.0); // arbitrary cotangent
+        let bq = butterworth_lowpass(2, 6_000.0, 48_000)[0];
+
+        let (grad_in, grad_c) = biquad_vjp(&x, &bq, &gbar);
+
+        // Scalar objective f(θ) = <gbar, forward_θ(x)>; its derivatives must match the VJP.
+        let dot = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(p, q)| p * q).sum::<f32>();
+        let eps = 1e-2;
+        let perturbed = |mutate: &dyn Fn(&mut Biquad, f32)| {
+            let mut hi = bq;
+            mutate(&mut hi, eps);
+            let mut lo = bq;
+            mutate(&mut lo, -eps);
+            (dot(&gbar, &biquad_forward(&x, &hi)) - dot(&gbar, &biquad_forward(&x, &lo)))
+                / (2.0 * eps)
+        };
+        let close = |num: f32, ana: f32, what: &str| {
+            assert!(
+                (num - ana).abs() < 1e-2 * (1.0 + ana.abs()),
+                "{what}: num {num} vs ana {ana}"
+            );
+        };
+        close(perturbed(&|q, d| q.b0 += d), grad_c.b0, "b0");
+        close(perturbed(&|q, d| q.b1 += d), grad_c.b1, "b1");
+        close(perturbed(&|q, d| q.b2 += d), grad_c.b2, "b2");
+        close(perturbed(&|q, d| q.a1 += d), grad_c.a1, "a1");
+        close(perturbed(&|q, d| q.a2 += d), grad_c.a2, "a2");
+
+        // Input gradient at a few indices.
+        for j in [0usize, 7, 31, 63] {
+            let mut hi = x.clone();
+            hi[j] += eps;
+            let mut lo = x.clone();
+            lo[j] -= eps;
+            let num = (dot(&gbar, &biquad_forward(&hi, &bq))
+                - dot(&gbar, &biquad_forward(&lo, &bq)))
+                / (2.0 * eps);
+            close(num, grad_in[j], "grad_in");
+        }
+    }
+
+    #[test]
+    fn sos_vjp_chains_through_sections() {
+        let x = ramp_sine(80, 0.2, 0.5);
+        let gbar = ramp_sine(80, 0.31, 0.0);
+        let sos = butterworth_lowpass(4, 5_000.0, 48_000); // two sections
+
+        let (grad_in, grads) = sos_vjp(&x, &sos, &gbar);
+        assert_eq!(grads.len(), sos.len());
+
+        let dot = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(p, q)| p * q).sum::<f32>();
+        let eps = 1e-2;
+        for j in [0usize, 13, 79] {
+            let mut hi = x.clone();
+            hi[j] += eps;
+            let mut lo = x.clone();
+            lo[j] -= eps;
+            let num = (dot(&gbar, &sos_filter(&hi, &sos)) - dot(&gbar, &sos_filter(&lo, &sos)))
+                / (2.0 * eps);
+            assert!(
+                (num - grad_in[j]).abs() < 1e-2 * (1.0 + grad_in[j].abs()),
+                "grad_in[{j}]: num {num} vs ana {}",
+                grad_in[j]
+            );
+        }
+    }
+
+    #[test]
+    fn gradient_descent_fits_numerator_coeffs() {
+        // Fit b-coefficients (fixed stable denominator) to match a target: a convex least-squares
+        // problem, so GD with the analytic gradient converges. Broadband input keeps the regressors
+        // well-conditioned; the step size is derived from the data so the test needs no tuning.
+        let x = pseudo_noise(256);
+        let denom = butterworth_lowpass(2, 4_000.0, 48_000)[0];
+        let target = Biquad {
+            b0: 0.5,
+            b1: 0.3,
+            b2: -0.2,
+            ..denom
+        };
+        let target_y = biquad_forward(&x, &target);
+
+        // λmax(Hessian) ≤ trace = energies of w and its two shifts ≤ 3·‖w‖²  ⇒  lr = 1/(3‖w‖²) is safe.
+        let w = allpole(&x, denom.a1, denom.a2);
+        let lr = 1.0 / (3.0 * w.iter().map(|v| v * v).sum::<f32>());
+
+        let mut bq = Biquad {
+            b0: 0.0,
+            b1: 0.0,
+            b2: 0.0,
+            ..denom
+        };
+        let loss = |bq: &Biquad| {
+            biquad_forward(&x, bq)
+                .iter()
+                .zip(&target_y)
+                .map(|(y, t)| (y - t) * (y - t))
+                .sum::<f32>()
+        };
+        let initial = loss(&bq);
+        for _ in 0..5_000 {
+            let y = biquad_forward(&x, &bq);
+            let resid: Vec<f32> = y.iter().zip(&target_y).map(|(y, t)| y - t).collect();
+            let (_, g) = biquad_vjp(&x, &bq, &resid); // grad of 0.5·‖resid‖² wrt coeffs
+            bq.b0 -= lr * g.b0;
+            bq.b1 -= lr * g.b1;
+            bq.b2 -= lr * g.b2;
+        }
+        let final_loss = loss(&bq);
+        assert!(
+            final_loss < initial * 1e-3,
+            "did not converge: {initial} -> {final_loss}"
+        );
+        // Coefficients recovered.
+        for (got, want) in [(bq.b0, 0.5), (bq.b1, 0.3), (bq.b2, -0.2)] {
+            assert!((got - want).abs() < 1e-2, "coeff {got} vs {want}");
+        }
     }
 }
