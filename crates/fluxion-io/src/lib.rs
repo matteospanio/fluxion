@@ -57,6 +57,45 @@ pub fn write_wav(path: impl AsRef<Path>, signal: &Signal) -> Result<(), hound::E
     writer.finalize()
 }
 
+/// Metadata about a WAV file, without decoding its samples.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WavInfo {
+    /// Sample rate in Hz.
+    pub fs: u32,
+    /// Channel count.
+    pub channels: u16,
+    /// Bits per sample.
+    pub bits: u16,
+    /// `true` for IEEE-float samples, `false` for integer PCM.
+    pub float: bool,
+    /// Number of frames (samples per channel).
+    pub frames: u32,
+}
+
+impl WavInfo {
+    /// Duration in seconds.
+    pub fn seconds(&self) -> f64 {
+        if self.fs == 0 {
+            0.0
+        } else {
+            self.frames as f64 / self.fs as f64
+        }
+    }
+}
+
+/// Read a WAV file's header metadata without decoding samples.
+pub fn probe_wav(path: impl AsRef<Path>) -> Result<WavInfo, hound::Error> {
+    let reader = WavReader::open(path)?;
+    let spec = reader.spec();
+    Ok(WavInfo {
+        fs: spec.sample_rate,
+        channels: spec.channels,
+        bits: spec.bits_per_sample,
+        float: spec.sample_format == SampleFormat::Float,
+        frames: reader.duration(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{read_wav, write_wav};

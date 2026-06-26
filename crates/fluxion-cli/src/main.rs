@@ -1,14 +1,20 @@
 //! `fluxion` — a modern, SoX-style audio DSP command-line interface.
 //!
-//! M1 scope: process a WAV file through a parsed effect chain on the CPU. The pipeline mirrors
-//! SoX — `fluxion in.wav <effect [--flag value]...> out.wav` — but with named effects, long
-//! `--flags`, and explicit units. `info`/`play`/`record`/`compile` arrive in later milestones.
+//! Process a WAV through a parsed effect chain on the CPU. The pipeline mirrors SoX —
+//! `fluxion in.wav <effect [--flag value]...> out.wav` — but with named effects, long `--flags`,
+//! and explicit units. Two verbs sit alongside it:
+//!
+//! - `fluxion info <file.wav>` — print metadata (soxi-style).
+//! - `fluxion compile <effect...> <out.fxg>` — save an effect chain as a `.fxg` graph.
+//!
+//! A `.fxg` file can be dropped into a pipeline as if it were an effect:
+//! `fluxion in.wav chain.fxg out.wav`.
 
 use std::process::ExitCode;
 
 use clap::Parser;
-use fluxion::{Graph, Op, OpKind, process};
-use fluxion_io::{read_wav, write_wav};
+use fluxion::{Graph, Op, OpKind, fxg, process};
+use fluxion_io::{probe_wav, read_wav, write_wav};
 
 #[derive(Parser)]
 #[command(name = "fluxion", version, about = "Modern, SoX-style audio DSP CLI")]
@@ -17,9 +23,9 @@ struct Cli {
     #[arg(long)]
     fs: Option<u32>,
 
-    /// in.wav [effect [--flag value]...] out.wav
+    /// `info <file>` | `compile <effect...> <out.fxg>` | `<in.wav> [effect...] <out.wav>`
     #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0..)]
-    pipeline: Vec<String>,
+    args: Vec<String>,
 }
 
 fn main() -> ExitCode {
@@ -33,60 +39,95 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<(), String> {
-    if cli.pipeline.len() < 2 {
+    match cli.args.first().map(String::as_str) {
+        Some("info") => cmd_info(&cli.args[1..]),
+        Some("compile") => cmd_compile(&cli.args[1..]),
+        _ => cmd_process(&cli.args, cli.fs),
+    }
+}
+
+/// `fluxion in.wav [effect...] out.wav` — filter a file through the chain.
+fn cmd_process(args: &[String], fs: Option<u32>) -> Result<(), String> {
+    if args.len() < 2 {
         return Err("usage: fluxion <in.wav> [effect [--flag value]...] <out.wav>".into());
     }
-    let input = &cli.pipeline[0];
-    let output = cli.pipeline.last().unwrap();
-    let effects = &cli.pipeline[1..cli.pipeline.len() - 1];
+    let input = &args[0];
+    let output = args.last().unwrap();
+    let effects = &args[1..args.len() - 1];
 
     let mut signal = read_wav(input).map_err(|e| format!("reading '{input}': {e}"))?;
-    if let Some(fs) = cli.fs {
+    if let Some(fs) = fs {
         signal.fs = fs;
     }
-
     let graph = parse_chain(effects)?;
     let out = process(&graph, &signal);
     write_wav(output, &out).map_err(|e| format!("writing '{output}': {e}"))?;
     Ok(())
 }
 
+/// `fluxion info <file.wav>` — print header metadata.
+fn cmd_info(args: &[String]) -> Result<(), String> {
+    let path = args.first().ok_or("usage: fluxion info <file.wav>")?;
+    let info = probe_wav(path).map_err(|e| format!("reading '{path}': {e}"))?;
+    let fmt = if info.float { "float" } else { "int" };
+    println!("{path}");
+    println!("  channels    : {}", info.channels);
+    println!("  sample rate : {} Hz", info.fs);
+    println!("  encoding    : {}-bit {fmt}", info.bits);
+    println!("  frames      : {}", info.frames);
+    println!("  duration    : {:.3} s", info.seconds());
+    Ok(())
+}
+
+/// `fluxion compile <effect...> <out.fxg>` — serialize an effect chain to a `.fxg` graph.
+fn cmd_compile(args: &[String]) -> Result<(), String> {
+    if args.len() < 2 {
+        return Err("usage: fluxion compile <effect [--flag value]...> <out.fxg>".into());
+    }
+    let (effects, out) = args.split_at(args.len() - 1);
+    let graph = parse_chain(effects)?;
+    fxg::save(&graph, &out[0]).map_err(|e| format!("writing '{}': {e}", out[0]))?;
+    eprintln!("wrote {} ({} ops)", out[0], graph.leaf_count());
+    Ok(())
+}
+
 /// Parse a SoX-style effect chain into a series [`Graph`].
 ///
-/// Grammar: `effect [--param value]... effect ...`. Each effect name must be a known [`OpKind`];
-/// `--param` names come from that op's [`OpKind::params`] schema; unspecified params use defaults.
-/// An empty chain yields [`Graph::Id`] (a straight copy / transcode).
+/// Grammar: `effect [--param value]... effect ...`. Each token is either a known [`OpKind`] name
+/// (with its `--param` flags) or a `.fxg` file to load and splice in. Unspecified params use
+/// defaults; an empty chain yields [`Graph::Id`] (a straight copy / transcode).
 fn parse_chain(tokens: &[String]) -> Result<Graph, String> {
     let mut graph = Graph::Id;
     let mut i = 0;
     while i < tokens.len() {
         let name = &tokens[i];
         i += 1;
-        let kind = OpKind::from_name(name).ok_or_else(|| format!("unknown effect '{name}'"))?;
-        let specs = kind.params();
-        let mut params = kind.defaults();
 
-        while i < tokens.len() && tokens[i].starts_with("--") {
-            let flag = &tokens[i][2..];
-            let value = tokens
-                .get(i + 1)
-                .ok_or_else(|| format!("missing value for --{flag}"))?;
-            let idx = specs
-                .iter()
-                .position(|s| s.name == flag)
-                .ok_or_else(|| format!("effect '{name}' has no parameter '--{flag}'"))?;
-            params[idx] = value
-                .parse::<f32>()
-                .map_err(|_| format!("invalid number for --{flag}: '{value}'"))?;
-            i += 2;
-        }
-
-        let op = Op::new(kind, params).map_err(|e| e.to_string())?;
-        graph = if graph.is_empty() {
-            Graph::from(op)
+        let node = if let Some(kind) = OpKind::from_name(name) {
+            let specs = kind.params();
+            let mut params = kind.defaults();
+            while i < tokens.len() && tokens[i].starts_with("--") {
+                let flag = &tokens[i][2..];
+                let value = tokens
+                    .get(i + 1)
+                    .ok_or_else(|| format!("missing value for --{flag}"))?;
+                let idx = specs
+                    .iter()
+                    .position(|s| s.name == flag)
+                    .ok_or_else(|| format!("effect '{name}' has no parameter '--{flag}'"))?;
+                params[idx] = value
+                    .parse::<f32>()
+                    .map_err(|_| format!("invalid number for --{flag}: '{value}'"))?;
+                i += 2;
+            }
+            Graph::from(Op::new(kind, params).map_err(|e| e.to_string())?)
+        } else if name.ends_with(".fxg") {
+            fxg::load(name).map_err(|e| format!("loading '{name}': {e}"))?
         } else {
-            graph | Graph::from(op)
+            return Err(format!("unknown effect '{name}'"));
         };
+
+        graph = if graph.is_empty() { node } else { graph | node };
     }
     Ok(graph)
 }

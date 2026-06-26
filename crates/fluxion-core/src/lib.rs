@@ -15,6 +15,7 @@
 //! assert_eq!(chain.leaf_count(), 2);
 //! ```
 
+pub mod fxg;
 pub mod graph;
 pub mod op;
 pub mod param;

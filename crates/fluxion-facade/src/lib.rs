@@ -14,7 +14,7 @@
 //! ```
 
 pub use fluxion_backend::process;
-pub use fluxion_core::{Graph, Op, OpError, OpKind, ParamSpec, Signal, Unit};
+pub use fluxion_core::{Graph, Op, OpError, OpKind, ParamSpec, Signal, Unit, fxg};
 
 /// Ergonomic node constructors plus the core types.
 pub mod prelude {

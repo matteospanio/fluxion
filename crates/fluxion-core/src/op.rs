@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use crate::param::{ParamSpec, Unit};
 
 /// The kind of a DSP leaf op. Each kind has a fixed parameter schema ([`OpKind::params`]).
@@ -9,7 +11,7 @@ use crate::param::{ParamSpec, Unit};
 /// This is the typed replacement for the earlier string-keyed placeholder: it makes the IR
 /// self-describing (names, units, defaults, bounds) for validation, the CLI parser, and lowering.
 /// New ops are added here as the `fluxion-ops` crate grows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum OpKind {
     /// Linear gain, `y = x * gain`.
@@ -182,7 +184,7 @@ impl fmt::Display for OpError {
 impl std::error::Error for OpError {}
 
 /// A concrete leaf op: an [`OpKind`] plus its positional parameter values.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Op {
     /// What this op does.
     pub kind: OpKind,

@@ -2,6 +2,8 @@
 
 use std::ops::{Add, BitOr};
 
+use serde::{Deserialize, Serialize};
+
 use crate::op::{Op, OpKind};
 
 /// A reified node in the DSP graph — the IR the backends lower.
@@ -16,7 +18,7 @@ use crate::op::{Op, OpKind};
 /// let nested = split | chain;
 /// assert_eq!(nested.leaf_count(), 4);
 /// ```
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Graph {
     /// Pass-through; the identity element of series composition.
     Id,
