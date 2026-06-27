@@ -52,6 +52,27 @@ def test_dlpack_numpy_input():
     np.testing.assert_allclose(fluxion.gain(2.0).process(xd, FS), 2.0 * xd.astype(np.float32), atol=1e-6)
 
 
+def test_array_api_strict_input():
+    """Array-API consumer conformance: accept arrays from any conforming library (strict ref impl)."""
+    xp = pytest.importorskip("array_api_strict")
+    src = np.linspace(-1.0, 1.0, 200, dtype=np.float32)
+    x = xp.asarray(src)
+    chain = fluxion.lowpass(1000.0, 4) | fluxion.gain(0.5)
+    y = chain.process(x, FS)  # strict Array-API array in
+    ref = chain.process(src, FS)
+    np.testing.assert_allclose(np.asarray(y), ref, atol=1e-6)
+
+
+def test_output_is_array_api_compliant():
+    """fluxion's numpy output participates in the Array API (consumable by any conforming lib)."""
+    compat = pytest.importorskip("array_api_compat")
+    y = fluxion.gain(2.0).process(np.arange(8, dtype=np.float32), FS)
+    xp = compat.array_namespace(y)
+    assert xp is not None
+    # round-trip a fluxion output back into a chain via the Array-API namespace.
+    np.testing.assert_allclose(np.asarray(fluxion.gain(0.5).process(xp.asarray(y), FS)), y * 0.5, atol=1e-6)
+
+
 def test_gpu_batch_matches_cpu():
     """GPU batch SOS filter == per-row CPU (only runs in the CUDA-built wheel on a GPU host)."""
     if not fluxion.cuda_available():

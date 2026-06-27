@@ -14,7 +14,7 @@ dependencies = ["numpy>=1.23"]  # numpy.from_dlpack + ndarray.__dlpack__ (zero-c
 
 [project.optional-dependencies]
 torch = ["torch>=2.0"]
-test = ["pytest>=7"]
+test = ["pytest>=7", "scipy", "array_api_strict", "array-api-compat"]
 
 [tool.maturin]
 # Mixed layout: the Rust extension is `fluxion._fluxion`; the Python package lives in python/fluxion/

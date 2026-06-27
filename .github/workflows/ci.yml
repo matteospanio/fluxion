@@ -58,7 +58,7 @@ jobs:
           workspaces: crates/fluxion-py
       # torch / jax are not installed (heavy); those adapter tests skip — eager API, the analytic
       # gradcheck, and scipy filter-design parity are the guards here.
-      - run: pip install --upgrade pip maturin numpy pytest scipy
+      - run: pip install --upgrade pip maturin numpy pytest scipy array_api_strict array-api-compat
       - run: maturin build --release -m crates/fluxion-py/Cargo.toml --out dist
       - run: pip install dist/*.whl
       - run: pytest crates/fluxion-py/tests/ -v

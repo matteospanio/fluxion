@@ -1,9 +1,15 @@
 """fluxion — GPU-accelerated, differentiable audio DSP.
 
-An eager, torchaudio-style API (build a :class:`Chain`, apply it to a NumPy array) plus differentiable
+An eager, torchaudio-style API (build a :class:`Chain`, apply it to an array) plus differentiable
 SOS primitives. Framework autograd adapters live in the optional submodules :mod:`fluxion.torch`
 (``torch.autograd.Function``) and :mod:`fluxion.jax` (``jax.custom_vjp``) — import them only if you
 have torch / jax installed.
+
+**Array-API interop.** fluxion is an Array-API *consumer*: every function accepts an array from any
+conforming library (NumPy, PyTorch, JAX, CuPy, ``array_api_strict``, …) via the DLPack interchange —
+zero-copy when it is already float32 + C-contiguous — and returns a NumPy array, which is itself
+Array-API-compliant (and a DLPack producer, so frameworks consume it zero-copy). fluxion is not an
+Array-API *namespace provider*: it's a transform library, not a general array library.
 """
 
 from ._fluxion import __cuda__
