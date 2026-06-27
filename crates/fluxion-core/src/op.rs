@@ -42,6 +42,10 @@ pub enum OpKind {
     Cheby1Lowpass,
     /// Chebyshev Type I high-pass (`cutoff` Hz, `order`, passband `ripple` dB).
     Cheby1Highpass,
+    /// Chebyshev Type II low-pass (`cutoff` = stopband edge Hz, `order`, stopband `atten` dB).
+    Cheby2Lowpass,
+    /// Chebyshev Type II high-pass (`cutoff` = stopband edge Hz, `order`, stopband `atten` dB).
+    Cheby2Highpass,
     /// Schroeder–Moorer reverb (`room` size, `damping`, wet/dry `mix`).
     Reverb,
 }
@@ -95,6 +99,12 @@ static CHEBY1_PARAMS: [ParamSpec; 3] = [
     ParamSpec::new("order", Unit::Linear, 4.0, 1.0, 16.0),
     ParamSpec::new("ripple", Unit::Db, 1.0, 1e-2, 12.0),
 ];
+// cutoff (stopband edge) + order + stopband attenuation (Chebyshev II low/high-pass).
+static CHEBY2_PARAMS: [ParamSpec; 3] = [
+    ParamSpec::new("cutoff", Unit::Hz, 1000.0, 0.0, f32::INFINITY),
+    ParamSpec::new("order", Unit::Linear, 4.0, 1.0, 16.0),
+    ParamSpec::new("atten", Unit::Db, 40.0, 10.0, 120.0),
+];
 static REVERB_PARAMS: [ParamSpec; 3] = [
     ParamSpec::new("room", Unit::Linear, 0.5, 0.0, 1.0),
     ParamSpec::new("damping", Unit::Linear, 0.3, 0.0, 1.0),
@@ -119,6 +129,8 @@ impl OpKind {
             OpKind::Echo => "echo",
             OpKind::Cheby1Lowpass => "cheby1low",
             OpKind::Cheby1Highpass => "cheby1high",
+            OpKind::Cheby2Lowpass => "cheby2low",
+            OpKind::Cheby2Highpass => "cheby2high",
             OpKind::Reverb => "reverb",
         }
     }
@@ -135,6 +147,7 @@ impl OpKind {
             OpKind::Delay => &DELAY_PARAMS,
             OpKind::Echo => &ECHO_PARAMS,
             OpKind::Cheby1Lowpass | OpKind::Cheby1Highpass => &CHEBY1_PARAMS,
+            OpKind::Cheby2Lowpass | OpKind::Cheby2Highpass => &CHEBY2_PARAMS,
             OpKind::Reverb => &REVERB_PARAMS,
         }
     }
@@ -161,6 +174,8 @@ impl OpKind {
             OpKind::Echo,
             OpKind::Cheby1Lowpass,
             OpKind::Cheby1Highpass,
+            OpKind::Cheby2Lowpass,
+            OpKind::Cheby2Highpass,
             OpKind::Reverb,
         ]
     }

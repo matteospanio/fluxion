@@ -23,7 +23,9 @@ pub mod rbj;
 pub mod reverb;
 pub mod stability;
 
-pub use chebyshev::{chebyshev1_highpass, chebyshev1_lowpass};
+pub use chebyshev::{
+    chebyshev1_highpass, chebyshev1_lowpass, chebyshev2_highpass, chebyshev2_lowpass,
+};
 pub use delay::{delay, delay_vjp, echo, echo_vjp};
 pub use effect::{gain, gain_vjp, normalize_peak};
 pub use fir::{fft_convolve, fir_filter, fir_vjp};

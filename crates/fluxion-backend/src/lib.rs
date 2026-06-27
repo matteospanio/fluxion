@@ -15,8 +15,9 @@ pub mod cuda;
 use fluxion_core::{FrozenSos, Graph, Op, OpKind, Signal};
 use fluxion_ops::{
     Biquad, Sos, allpass, bandpass, butterworth_highpass, butterworth_lowpass, certify_sos,
-    chebyshev1_highpass, chebyshev1_lowpass, delay, echo, gain, high_shelf, low_shelf,
-    normalize_peak, notch, peaking, reverb, small_gain_certify, sos_filter,
+    chebyshev1_highpass, chebyshev1_lowpass, chebyshev2_highpass, chebyshev2_lowpass, delay, echo,
+    gain, high_shelf, low_shelf, normalize_peak, notch, peaking, reverb, small_gain_certify,
+    sos_filter,
 };
 use fluxion_rt::RtGraph;
 
@@ -43,6 +44,8 @@ fn op_sos(op: &Op, fs: u32) -> Option<Sos> {
         OpKind::Highpass => butterworth_highpass(order(1), p[0], fs),
         OpKind::Cheby1Lowpass => chebyshev1_lowpass(order(1), p[0], p[2], fs),
         OpKind::Cheby1Highpass => chebyshev1_highpass(order(1), p[0], p[2], fs),
+        OpKind::Cheby2Lowpass => chebyshev2_lowpass(order(1), p[0], p[2], fs),
+        OpKind::Cheby2Highpass => chebyshev2_highpass(order(1), p[0], p[2], fs),
         OpKind::Peaking => vec![peaking(p[0], p[1], p[2], fs)],
         OpKind::LowShelf => vec![low_shelf(p[0], p[1], p[2], fs)],
         OpKind::HighShelf => vec![high_shelf(p[0], p[1], p[2], fs)],

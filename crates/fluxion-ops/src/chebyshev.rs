@@ -6,8 +6,11 @@
 //! frequency pre-warping as the Butterworth path. High-pass uses the `s → wc/s` transform (poles
 //! reciprocated, zeros at the origin).
 //!
-//! ponytail: Type II (inverse Chebyshev — stopband ripple, finite transmission zeros) is not yet
-//! implemented; it needs zero placement + a different gain normalization and is a separate task.
+//! Type II (inverse Chebyshev) has a maximally-flat passband and equiripple stopband with finite
+//! transmission zeros. Its poles are the reciprocals of the Type I poles; its zeros sit on the jω
+//! axis at `±j/cos(θ_k)`. Each conjugate pole+zero pair forms one analog biquad
+//! `(s² + β²)/(s² − 2·Re(p)·s + |p|²)`, normalized to unit DC (low-pass) / unit Nyquist (high-pass)
+//! gain, then bilinear-transformed — again with real coefficients only.
 
 use std::f64::consts::PI;
 
@@ -78,6 +81,77 @@ fn design1(order: usize, cutoff_hz: f32, ripple_db: f32, fs: u32, highpass: bool
     sos
 }
 
+/// Design a Chebyshev Type II low-pass with `stop_db` of stopband attenuation. `cutoff_hz` is the
+/// **stopband edge** (the frequency at which the attenuation reaches `stop_db`); the passband below
+/// it is maximally flat.
+pub fn chebyshev2_lowpass(order: usize, cutoff_hz: f32, stop_db: f32, fs: u32) -> Sos {
+    design2(order, cutoff_hz, stop_db, fs, false)
+}
+
+/// Design a Chebyshev Type II high-pass with `stop_db` of stopband attenuation (`cutoff_hz` = the
+/// stopband edge).
+pub fn chebyshev2_highpass(order: usize, cutoff_hz: f32, stop_db: f32, fs: u32) -> Sos {
+    design2(order, cutoff_hz, stop_db, fs, true)
+}
+
+fn design2(order: usize, cutoff_hz: f32, stop_db: f32, fs: u32, highpass: bool) -> Sos {
+    let order = order.max(1);
+    let fs = fs as f64;
+    let fc = cutoff_hz as f64;
+    let k = 2.0 * fs;
+    let wc = k * (PI * fc / fs).tan(); // pre-warped stopband-edge frequency
+
+    let rs = (stop_db as f64).max(0.1);
+    let de = 1.0 / (10f64.powf(rs / 10.0) - 1.0).sqrt();
+    let a = (1.0 / de).asinh() / order as f64;
+    let (sh, ch) = (a.sinh(), a.cosh());
+
+    let mut sos = Sos::with_capacity(order.div_ceil(2));
+
+    for i in 0..order / 2 {
+        let theta = PI * (2.0 * i as f64 + 1.0) / (2.0 * order as f64);
+        // Type I prototype pole, then reciprocate for Type II.
+        let sigma = -sh * theta.sin();
+        let omega = ch * theta.cos();
+        let mag2 = sigma * sigma + omega * omega;
+        let re = sigma / mag2; // Re(Type II prototype pole)  (< 0, left half plane)
+        let p2 = 1.0 / mag2; // |Type II prototype pole|²
+        let beta2 = 1.0 / (theta.cos() * theta.cos()); // transmission zero at ±j·√beta2
+
+        let bq = if highpass {
+            // lp→hp (s → wc/s) on the unit-DC-normalized prototype; unit gain at Nyquist.
+            bilinear2(
+                [1.0, 0.0, wc * wc / beta2],
+                [1.0, -2.0 * re * wc / p2, wc * wc / p2],
+                k,
+            )
+        } else {
+            // scaled to the stopband edge wc; unit DC gain.
+            bilinear2(
+                [p2 / beta2, 0.0, p2 * wc * wc],
+                [1.0, -2.0 * re * wc, p2 * wc * wc],
+                k,
+            )
+        };
+        sos.push(bq);
+    }
+
+    // Odd order → the real Type II pole at -1/sinh(a); no finite zero (it sits at ∞). lp→lp keeps
+    // the pole at wc/sinh(a); lp→hp inverts it to wc·sinh(a).
+    if order % 2 == 1 {
+        let bq = if highpass {
+            let wp = wc * sh;
+            bilinear1([1.0, 0.0], [1.0, wp], k) // s / (s + wp)
+        } else {
+            let wp = wc / sh;
+            bilinear1([0.0, wp], [1.0, wp], k) // wp / (s + wp)
+        };
+        sos.push(bq);
+    }
+
+    sos
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,6 +189,57 @@ mod tests {
                 sos_magnitude(&sos, w(8_000.0)) < 0.2,
                 "order {order} stopband"
             );
+        }
+    }
+
+    #[test]
+    fn cheby2_lowpass_stopband_and_passband() {
+        for order in [2, 3, 4, 5, 6] {
+            let rs = 40.0f32;
+            let sos = chebyshev2_lowpass(order, FC, rs, FS);
+            let stop = 10f32.powf(-rs / 20.0); // 0.01 (-40 dB)
+
+            // At the stopband edge (= cutoff) the magnitude is the stopband level.
+            let at_fc = sos_magnitude(&sos, w(FC));
+            assert!(
+                (at_fc - stop).abs() < 0.5 * stop + 2e-3,
+                "order {order}: fc {at_fc} vs {stop}"
+            );
+            // Near DC the passband is flat at unity (the transition band is wide at low order).
+            for f in [10.0, 100.0] {
+                let m = sos_magnitude(&sos, w(f));
+                assert!((0.98..=1.02).contains(&m), "order {order} pass f={f}: {m}");
+            }
+            // Stopband above the edge stays at/below the stopband level (equiripple).
+            for f in [4_000.0, 8_000.0, 16_000.0] {
+                let m = sos_magnitude(&sos, w(f));
+                assert!(m <= stop * 1.2, "order {order} stop f={f}: {m}");
+            }
+        }
+    }
+
+    #[test]
+    fn cheby2_highpass_mirrors() {
+        let rs = 40.0f32;
+        let stop = 10f32.powf(-rs / 20.0);
+        for order in [2, 3, 4, 5] {
+            let sos = chebyshev2_highpass(order, FC, rs, FS);
+            assert!(
+                (sos_magnitude(&sos, w(FC)) - stop).abs() < 0.5 * stop + 2e-3,
+                "order {order} fc"
+            );
+            // Passband near Nyquist is flat at unity (wide transition at low order).
+            for f in [20_000.0, 23_000.0] {
+                let m = sos_magnitude(&sos, w(f));
+                assert!((0.98..=1.02).contains(&m), "order {order} pass f={f}: {m}");
+            }
+            // Stopband below the edge stays low.
+            for f in [100.0, 500.0, 1_500.0] {
+                assert!(
+                    sos_magnitude(&sos, w(f)) <= stop * 1.2,
+                    "order {order} stop f={f}"
+                );
+            }
         }
     }
 

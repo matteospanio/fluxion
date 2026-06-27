@@ -188,3 +188,19 @@ def test_lowpass_parity_with_scipy():
 
     rel_rms = float(np.sqrt(np.mean((y - ref) ** 2)) / np.sqrt(np.mean(ref**2)))
     assert rel_rms < 1e-2, f"relative RMS vs scipy = {rel_rms}"
+
+
+def test_cheby2_parity_with_scipy():
+    """fluxion's Chebyshev II low-pass matches scipy's cheby2 design+filter to f32 precision."""
+    sig = pytest.importorskip("scipy.signal")
+
+    rng = np.random.default_rng(11)
+    x = rng.standard_normal(2000).astype(np.float32)
+    fs, fc, order, rs = 48_000, 2000.0, 6, 40.0
+    y = fluxion.cheby2_lowpass(fc, order, rs).process(x, fs)
+
+    sos = sig.cheby2(order, rs, fc / (fs / 2), btype="low", output="sos")
+    ref = sig.sosfilt(sos, x.astype(np.float64)).astype(np.float32)
+
+    rel_rms = float(np.sqrt(np.mean((y - ref) ** 2)) / np.sqrt(np.mean(ref**2)))
+    assert rel_rms < 1e-2, f"relative RMS vs scipy = {rel_rms}"

@@ -112,6 +112,18 @@ fn cheby1_highpass(cutoff: f32, order: u32, ripple_db: f32) -> PyResult<Chain> {
     make(OpKind::Cheby1Highpass, vec![cutoff, order as f32, ripple_db])
 }
 #[pyfunction]
+fn cheby2_lowpass(cutoff: f32, order: u32, atten_db: f32) -> PyResult<Chain> {
+    make(OpKind::Cheby2Lowpass, vec![cutoff, order as f32, atten_db])
+}
+#[pyfunction]
+fn cheby2_highpass(cutoff: f32, order: u32, atten_db: f32) -> PyResult<Chain> {
+    make(OpKind::Cheby2Highpass, vec![cutoff, order as f32, atten_db])
+}
+#[pyfunction]
+fn reverb(room: f32, damping: f32, mix: f32) -> PyResult<Chain> {
+    make(OpKind::Reverb, vec![room, damping, mix])
+}
+#[pyfunction]
 fn peaking(frequency: f32, gain: f32, q: f32) -> PyResult<Chain> {
     make(OpKind::Peaking, vec![frequency, gain, q])
 }
@@ -226,6 +238,9 @@ fn _fluxion(m: &Bound<'_, PyModule>) -> PyResult<()> {
         highpass,
         cheby1_lowpass,
         cheby1_highpass,
+        cheby2_lowpass,
+        cheby2_highpass,
+        reverb,
         peaking,
         low_shelf,
         high_shelf,
