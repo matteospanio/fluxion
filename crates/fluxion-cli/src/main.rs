@@ -14,7 +14,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use fluxion::{Graph, Op, OpKind, fxg, process};
-use fluxion_io::{decode, probe_wav, read_wav, write_wav};
+use fluxion_io::{decode, probe_wav, read_wav, read_wav_from, write_wav, write_wav_to};
 
 #[derive(Parser)]
 #[command(name = "fluxion", version, about = "Modern, SoX-style audio DSP CLI")]
@@ -44,16 +44,21 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<(), String> {
     match cli.args.first().map(String::as_str) {
-        Some("info") => cmd_info(&cli.args[1..]),
+        // `soxi` is a SoX-compatible alias for `info`.
+        Some("info") | Some("soxi") => cmd_info(&cli.args[1..]),
         Some("compile") => cmd_compile(&cli.args[1..], cli.fs, cli.force),
+        Some("batch") => cmd_batch(&cli.args[1..], cli.fs),
         _ => cmd_process(&cli.args, cli.fs),
     }
 }
 
 /// `fluxion in.wav [effect...] out.wav` — filter a file through the chain.
+///
+/// `-` reads/writes WAV on stdin/stdout (`fluxion - lowpass --cutoff 800 - < in.wav > out.wav`);
+/// `-n` is a null output sink (process for analysis, write nothing).
 fn cmd_process(args: &[String], fs: Option<u32>) -> Result<(), String> {
     if args.len() < 2 {
-        return Err("usage: fluxion <in.wav> [effect [--flag value]...] <out.wav>".into());
+        return Err("usage: fluxion <in.wav|-> [effect [--flag value]...] <out.wav|-|-n>".into());
     }
     let input = &args[0];
     let output = args.last().unwrap();
@@ -65,12 +70,14 @@ fn cmd_process(args: &[String], fs: Option<u32>) -> Result<(), String> {
     }
     let graph = parse_chain(effects)?;
     let out = process(&graph, &signal);
-    write_wav(output, &out).map_err(|e| format!("writing '{output}': {e}"))?;
-    Ok(())
+    write_output(output, &out)
 }
 
-/// Load an input file: WAV via hound, anything else (FLAC/MP3/OGG/…) via Symphonia.
+/// Load an input: `-` = WAV on stdin, `*.wav` via hound, anything else (FLAC/MP3/OGG/…) via Symphonia.
 fn load_input(path: &str) -> Result<fluxion::Signal, String> {
+    if path == "-" {
+        return read_wav_from(std::io::stdin().lock()).map_err(|e| format!("reading stdin: {e}"));
+    }
     let is_wav = std::path::Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
@@ -80,6 +87,44 @@ fn load_input(path: &str) -> Result<fluxion::Signal, String> {
     } else {
         decode(path).map_err(|e| format!("decoding '{path}': {e}"))
     }
+}
+
+/// Write the result: `-` = WAV on stdout, `-n` = null sink (discard), otherwise a WAV file.
+fn write_output(output: &str, signal: &fluxion::Signal) -> Result<(), String> {
+    match output {
+        "-n" => Ok(()), // null sink
+        "-" => write_wav_to(std::io::stdout().lock(), signal)
+            .map_err(|e| format!("writing stdout: {e}")),
+        path => write_wav(path, signal).map_err(|e| format!("writing '{path}': {e}")),
+    }
+}
+
+/// `fluxion batch <out-dir> <glob> [effect...]` — apply the chain to every file matching `glob`,
+/// writing `<out-dir>/<stem>.wav`. Useful for dataset preprocessing.
+fn cmd_batch(args: &[String], fs: Option<u32>) -> Result<(), String> {
+    if args.len() < 2 {
+        return Err("usage: fluxion batch <out-dir> <glob> [effect [--flag value]...]".into());
+    }
+    let (out_dir, pattern, effects) = (&args[0], &args[1], &args[2..]);
+    let graph = parse_chain(effects)?;
+    std::fs::create_dir_all(out_dir).map_err(|e| format!("creating '{out_dir}': {e}"))?;
+
+    let mut count = 0usize;
+    for entry in glob::glob(pattern).map_err(|e| format!("bad glob '{pattern}': {e}"))? {
+        let path = entry.map_err(|e| format!("glob: {e}"))?;
+        let p = path.to_str().ok_or("non-UTF-8 path")?;
+        let mut signal = load_input(p)?;
+        if let Some(fs) = fs {
+            signal.fs = fs;
+        }
+        let out = process(&graph, &signal);
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("out");
+        let out_path = std::path::Path::new(out_dir).join(format!("{stem}.wav"));
+        write_wav(&out_path, &out).map_err(|e| format!("writing '{}': {e}", out_path.display()))?;
+        count += 1;
+    }
+    eprintln!("fluxion: processed {count} file(s) → {out_dir}");
+    Ok(())
 }
 
 /// `fluxion info <file.wav>` — print header metadata.

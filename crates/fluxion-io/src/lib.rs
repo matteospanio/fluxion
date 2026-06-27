@@ -4,6 +4,7 @@
 //! to/from the planar [`Signal`](fluxion_core::Signal) buffer the DSP engine works in. Pure Rust, no
 //! libsndfile/ffmpeg. Arrow/Parquet batch IO lands later (see `PROJECT.md` §7).
 
+use std::io::{Cursor, Read, Write};
 use std::path::Path;
 
 use fluxion_core::Signal;
@@ -20,7 +21,16 @@ use symphonia::core::probe::Hint;
 ///
 /// Integer PCM is normalized by the format's full-scale value; float WAV is passed through.
 pub fn read_wav(path: impl AsRef<Path>) -> Result<Signal, hound::Error> {
-    let mut reader = WavReader::open(path)?;
+    decode_wav(WavReader::open(path)?)
+}
+
+/// Read a WAV from any reader (e.g. stdin) into a planar [`Signal`].
+pub fn read_wav_from(reader: impl Read) -> Result<Signal, hound::Error> {
+    decode_wav(WavReader::new(reader)?)
+}
+
+/// Shared WAV decode body: planarize + normalize integer PCM, pass float through.
+fn decode_wav<R: Read>(mut reader: WavReader<R>) -> Result<Signal, hound::Error> {
     let spec = reader.spec();
     let n = (spec.channels as usize).max(1);
     let mut channels: Vec<Vec<f32>> = vec![Vec::new(); n];
@@ -47,15 +57,34 @@ pub fn read_wav(path: impl AsRef<Path>) -> Result<Signal, hound::Error> {
 ///
 /// Shorter channels are zero-padded to the longest so the interleaved stream stays rectangular.
 pub fn write_wav(path: impl AsRef<Path>, signal: &Signal) -> Result<(), hound::Error> {
-    let spec = WavSpec {
+    encode_wav(WavWriter::create(path, wav_spec(signal))?, signal)
+}
+
+/// Write a planar [`Signal`] as 32-bit float WAV to any writer (e.g. stdout). The WAV is buffered in
+/// memory first because the format needs a seekable sink (the header carries the length); stdout is
+/// not seekable.
+pub fn write_wav_to(mut writer: impl Write, signal: &Signal) -> Result<(), hound::Error> {
+    let mut buf = Cursor::new(Vec::new());
+    encode_wav(WavWriter::new(&mut buf, wav_spec(signal))?, signal)?;
+    writer.write_all(&buf.into_inner())?;
+    Ok(())
+}
+
+fn wav_spec(signal: &Signal) -> WavSpec {
+    WavSpec {
         channels: signal.channel_count() as u16,
         sample_rate: signal.fs,
         bits_per_sample: 32,
         sample_format: SampleFormat::Float,
-    };
-    let mut writer = WavWriter::create(path, spec)?;
-    let frames = signal.frames();
-    for f in 0..frames {
+    }
+}
+
+/// Shared WAV encode body: interleave channels (zero-padding short ones) and finalize.
+fn encode_wav<W: Write + std::io::Seek>(
+    mut writer: WavWriter<W>,
+    signal: &Signal,
+) -> Result<(), hound::Error> {
+    for f in 0..signal.frames() {
         for ch in &signal.channels {
             writer.write_sample(ch.get(f).copied().unwrap_or(0.0))?;
         }
