@@ -43,6 +43,26 @@ def test_invalid_params_raise():
         fluxion.lowpass(-1.0, 4)  # negative cutoff
 
 
+def test_dlpack_numpy_input():
+    # numpy 2.x arrays are DLPack producers; process() consumes them via from_dlpack.
+    x = np.arange(8, dtype=np.float32)
+    np.testing.assert_allclose(fluxion.gain(2.0).process(x, FS), 2.0 * x, atol=1e-6)
+    # non-float32 input is accepted (converted): float64 → float32.
+    xd = np.arange(8, dtype=np.float64)
+    np.testing.assert_allclose(fluxion.gain(2.0).process(xd, FS), 2.0 * xd.astype(np.float32), atol=1e-6)
+
+
+def test_dlpack_torch_roundtrip():
+    """Consume a torch tensor (DLPack) directly; hand the output back to torch via from_dlpack."""
+    torch = pytest.importorskip("torch")
+    x = torch.linspace(-1.0, 1.0, 1000, dtype=torch.float32)
+    y = fluxion.lowpass(1000.0, 4).process(x, FS)  # torch tensor in, no .numpy()
+    yt = torch.from_dlpack(y)  # numpy out → torch, zero-copy
+    ref = fluxion.lowpass(1000.0, 4).process(x.numpy(), FS)
+    np.testing.assert_allclose(yt.numpy(), ref, atol=1e-6)
+    assert yt.shape[0] == 1000
+
+
 # --- differentiable primitives: finite-difference gradcheck --------------------------------------
 
 ONE_BIQUAD = np.array([0.3, 0.5, 0.2, -0.2, 0.05], dtype=np.float32)  # stable section

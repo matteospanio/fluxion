@@ -9,9 +9,10 @@
 // edition-2024 `unsafe_op_in_unsafe_fn` lint flags in the generated code. The macros are sound.
 #![allow(unsafe_op_in_unsafe_fn)]
 
-use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
+use numpy::{IntoPyArray, PyArray1, PyArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 use fluxion_core::{Graph, Op, OpKind, Signal};
 use fluxion_ops::{Biquad, sos_filter, sos_input_grad, sos_vjp};
@@ -19,6 +20,26 @@ use fluxion_ops::{Biquad, sos_filter, sos_input_grad, sos_vjp};
 fn make(kind: OpKind, params: Vec<f32>) -> PyResult<Chain> {
     let op = Op::new(kind, params).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(Chain { graph: Graph::Op(op) })
+}
+
+/// Read any DLPack-capable tensor (numpy / torch / jax CPU array) or array-like as a contiguous 1-D
+/// `float32` numpy array. **Zero-copy** when the input is already `float32` + C-contiguous — DLPack
+/// shares the buffer and `ascontiguousarray(dtype=float32)` is then a no-op; a copy happens only to
+/// satisfy the contiguous-float32 contract. Fluxion's outputs are numpy arrays, which are DLPack
+/// producers, so `torch.from_dlpack(...)` / `jax.dlpack.from_dlpack(...)` consume them zero-copy too.
+fn as_f32_1d<'py>(x: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyArray1<f32>>> {
+    let py = x.py();
+    let np = py.import_bound("numpy")?;
+    let arr = if x.hasattr("__dlpack__")? {
+        np.call_method1("from_dlpack", (x,))?
+    } else {
+        np.call_method1("asarray", (x,))?
+    };
+    let kwargs = PyDict::new_bound(py);
+    kwargs.set_item("dtype", "float32")?;
+    let arr = np.call_method("ascontiguousarray", (arr,), Some(&kwargs))?;
+    arr.downcast_into::<PyArray1<f32>>()
+        .map_err(|e| PyValueError::new_err(format!("expected a 1-D float32-compatible array: {e}")))
 }
 
 fn to_sos(coeffs: &[f32]) -> PyResult<Vec<Biquad>> {
@@ -42,14 +63,16 @@ struct Chain {
 
 #[pymethods]
 impl Chain {
-    /// Apply the chain to a 1-D `float32` array at sample rate `fs`, returning a new array.
+    /// Apply the chain to a 1-D array at sample rate `fs`, returning a new `float32` array. Accepts
+    /// any DLPack tensor (numpy / torch / jax CPU) or array-like; see [`as_f32_1d`].
     fn process<'py>(
         &self,
         py: Python<'py>,
-        x: PyReadonlyArray1<'py, f32>,
+        x: &Bound<'py, PyAny>,
         fs: u32,
     ) -> PyResult<Bound<'py, PyArray1<f32>>> {
-        let input = x.as_slice()?.to_vec();
+        let arr = as_f32_1d(x)?;
+        let input = arr.readonly().as_slice()?.to_vec();
         let out = fluxion_backend::process(&self.graph, &Signal::new(fs, vec![input]));
         let ch = out.channels.into_iter().next().unwrap_or_default();
         Ok(ch.into_pyarray_bound(py))
@@ -135,9 +158,11 @@ fn echo(seconds: f32, feedback: f32, wet: f32) -> PyResult<Chain> {
 #[pyfunction]
 fn sos_forward<'py>(
     py: Python<'py>,
-    x: PyReadonlyArray1<'py, f32>,
-    coeffs: PyReadonlyArray1<'py, f32>,
+    x: &Bound<'py, PyAny>,
+    coeffs: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyArray1<f32>>> {
+    let (x, coeffs) = (as_f32_1d(x)?, as_f32_1d(coeffs)?);
+    let (x, coeffs) = (x.readonly(), coeffs.readonly());
     let sos = to_sos(coeffs.as_slice()?)?;
     Ok(sos_filter(x.as_slice()?, &sos).into_pyarray_bound(py))
 }
@@ -147,10 +172,12 @@ fn sos_forward<'py>(
 #[pyfunction]
 fn sos_backward<'py>(
     py: Python<'py>,
-    grad_out: PyReadonlyArray1<'py, f32>,
-    x: PyReadonlyArray1<'py, f32>,
-    coeffs: PyReadonlyArray1<'py, f32>,
+    grad_out: &Bound<'py, PyAny>,
+    x: &Bound<'py, PyAny>,
+    coeffs: &Bound<'py, PyAny>,
 ) -> PyResult<(Bound<'py, PyArray1<f32>>, Bound<'py, PyArray1<f32>>)> {
+    let (grad_out, x, coeffs) = (as_f32_1d(grad_out)?, as_f32_1d(x)?, as_f32_1d(coeffs)?);
+    let (grad_out, x, coeffs) = (grad_out.readonly(), x.readonly(), coeffs.readonly());
     let sos = to_sos(coeffs.as_slice()?)?;
     let g = grad_out.as_slice()?;
     let grad_x = sos_input_grad(g, &sos);
