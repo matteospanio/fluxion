@@ -2409,6 +2409,7 @@ dependencies = [
  "cubecl",
  "fluxion-core",
  "fluxion-ops",
+ "fluxion-rt",
 ]
 
 [[package]]

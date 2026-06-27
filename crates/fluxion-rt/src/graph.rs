@@ -1,13 +1,14 @@
 //! General-graph realtime executor (plan task G3, beyond a linear cascade).
 //!
 //! [`SosStream`] runs one cascade; [`RtGraph`] runs the full graph algebra — `Series` (chain) and
-//! `Parallel` (sum) composition of filter and gain nodes — block-by-block and allocation-free. The
-//! intermediate buffers that `Series`/`Parallel` need are sized once by [`RtGraph::prepare`]; after
-//! that [`RtGraph::process`] never allocates, so it is audio-thread safe.
+//! `Parallel` (sum) composition of filter, gain, delay, and echo nodes — block-by-block and
+//! allocation-free. The intermediate buffers that `Series`/`Parallel` need are sized once by
+//! [`RtGraph::prepare`]; delay/echo own their fixed-size rings; after that [`RtGraph::process`]
+//! never allocates, so it is audio-thread safe.
 //!
 //! Mirrors `fluxion_core::Graph`'s `|` (series) and `+` (parallel). Lowering an arbitrary
-//! `fluxion_core::Graph` (designing each op's coefficients) to an `RtGraph` belongs in
-//! `fluxion-backend` (next step, like `freeze`); here are the runtime building blocks.
+//! `fluxion_core::Graph` (designing each op's coefficients) to an `RtGraph` is
+//! `fluxion_backend::to_rt_graph` (like `freeze`); here are the runtime building blocks.
 
 use fluxion_ops::Biquad;
 
@@ -31,6 +32,22 @@ pub enum RtGraph {
         left: Box<RtGraph>,
         right: Box<RtGraph>,
         scratch: Vec<f32>,
+    },
+    /// Single delayed tap crossfaded with the dry signal: `(1-mix)·x[n] + mix·x[n-d]`. `ring` is the
+    /// `d`-sample history of inputs; `idx` is the write cursor.
+    Delay {
+        ring: Vec<f32>,
+        idx: usize,
+        mix: f32,
+    },
+    /// Feedback echo: `out = x[n] + wet·w[n]`, `w[n] = x[n-d] + feedback·w[n-d]`. `xring`/`wring` are
+    /// the `d`-sample histories of the input and of `w`.
+    Echo {
+        xring: Vec<f32>,
+        wring: Vec<f32>,
+        idx: usize,
+        feedback: f32,
+        wet: f32,
     },
 }
 
@@ -63,12 +80,40 @@ impl RtGraph {
         }
     }
 
+    /// A delayed-tap node: `(1-mix)·x[n] + mix·x[n-d]`, `d = max(1, delay_samples)`. The `d`-sample
+    /// history is allocated here, so [`process`](Self::process) stays alloc-free.
+    pub fn delay(delay_samples: usize, mix: f32) -> Self {
+        let d = delay_samples.max(1);
+        RtGraph::Delay {
+            ring: vec![0.0; d],
+            idx: 0,
+            mix,
+        }
+    }
+
+    /// A feedback-echo node: `x[n] + wet·w[n]`, `w[n] = x[n-d] + feedback·w[n-d]`,
+    /// `d = max(1, delay_samples)`.
+    pub fn echo(delay_samples: usize, feedback: f32, wet: f32) -> Self {
+        let d = delay_samples.max(1);
+        RtGraph::Echo {
+            xring: vec![0.0; d],
+            wring: vec![0.0; d],
+            idx: 0,
+            feedback,
+            wet,
+        }
+    }
+
     /// Pre-size every internal scratch buffer for blocks up to `max_block` samples. This is the only
     /// allocating step — call it before going realtime. Blocks passed to [`process`](Self::process)
     /// must not exceed `max_block`.
     pub fn prepare(&mut self, max_block: usize) {
         match self {
-            RtGraph::Filter(_) | RtGraph::Gain(_) => {}
+            // Leaves carry their own fixed-size state (cascade state / delay rings) — no scratch.
+            RtGraph::Filter(_)
+            | RtGraph::Gain(_)
+            | RtGraph::Delay { .. }
+            | RtGraph::Echo { .. } => {}
             RtGraph::Series {
                 first,
                 second,
@@ -123,10 +168,43 @@ impl RtGraph {
                     *o += *t;
                 }
             }
+            RtGraph::Delay { ring, idx, mix } => {
+                let d = ring.len();
+                let mix = *mix;
+                for (o, &x) in output.iter_mut().zip(input) {
+                    let xd = ring[*idx]; // x[n-d]
+                    *o = (1.0 - mix) * x + mix * xd;
+                    ring[*idx] = x;
+                    *idx += 1;
+                    if *idx == d {
+                        *idx = 0;
+                    }
+                }
+            }
+            RtGraph::Echo {
+                xring,
+                wring,
+                idx,
+                feedback,
+                wet,
+            } => {
+                let d = xring.len();
+                let (fb, wet) = (*feedback, *wet);
+                for (o, &x) in output.iter_mut().zip(input) {
+                    let w = xring[*idx] + fb * wring[*idx]; // x[n-d] + feedback·w[n-d]
+                    *o = x + wet * w;
+                    xring[*idx] = x;
+                    wring[*idx] = w;
+                    *idx += 1;
+                    if *idx == d {
+                        *idx = 0;
+                    }
+                }
+            }
         }
     }
 
-    /// Reset all filter state in the graph (gains are stateless).
+    /// Reset all stateful nodes (filter state, delay rings) to silence (gains are stateless).
     pub fn reset(&mut self) {
         match self {
             RtGraph::Filter(s) => s.reset(),
@@ -139,6 +217,17 @@ impl RtGraph {
                 left.reset();
                 right.reset();
             }
+            RtGraph::Delay { ring, idx, .. } => {
+                ring.iter_mut().for_each(|s| *s = 0.0);
+                *idx = 0;
+            }
+            RtGraph::Echo {
+                xring, wring, idx, ..
+            } => {
+                xring.iter_mut().for_each(|s| *s = 0.0);
+                wring.iter_mut().for_each(|s| *s = 0.0);
+                *idx = 0;
+            }
         }
     }
 }
@@ -146,7 +235,18 @@ impl RtGraph {
 #[cfg(test)]
 mod tests {
     use super::RtGraph;
-    use fluxion_ops::{butterworth_highpass, butterworth_lowpass, sos_filter};
+    use fluxion_ops::{butterworth_highpass, butterworth_lowpass, delay, echo, sos_filter};
+
+    fn stream_chunks(g: &mut RtGraph, x: &[f32], block: usize) -> Vec<f32> {
+        let mut out = vec![0.0f32; block];
+        let mut streamed = Vec::with_capacity(x.len());
+        for chunk in x.chunks(block) {
+            let out = &mut out[..chunk.len()];
+            g.process(chunk, out);
+            streamed.extend_from_slice(out);
+        }
+        streamed
+    }
 
     fn signal(n: usize) -> Vec<f32> {
         (0..n)
@@ -204,6 +304,30 @@ mod tests {
         for (i, got) in streamed.iter().enumerate() {
             let want = 0.5 * (y_lp[i] + y_hp[i]);
             assert!((got - want).abs() < 1e-4, "at {i}: {got} vs {want}");
+        }
+    }
+
+    #[test]
+    fn delay_node_matches_batch() {
+        let x = signal(1000);
+        let (d, mix) = (37usize, 0.6f32);
+        let mut g = RtGraph::delay(d, mix); // block (64) > d, ring wraps within a block
+        let streamed = stream_chunks(&mut g, &x, 64);
+        let want = delay(&x, d, mix);
+        for (a, b) in streamed.iter().zip(&want) {
+            assert!((a - b).abs() < 1e-5, "{a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn echo_node_matches_batch() {
+        let x = signal(1000);
+        let (d, fb, wet) = (53usize, 0.5f32, 0.8f32);
+        let mut g = RtGraph::echo(d, fb, wet); // block (50) < d
+        let streamed = stream_chunks(&mut g, &x, 50);
+        let want = echo(&x, d, fb, wet);
+        for (a, b) in streamed.iter().zip(&want) {
+            assert!((a - b).abs() < 1e-4, "{a} vs {b}");
         }
     }
 

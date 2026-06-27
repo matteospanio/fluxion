@@ -18,6 +18,7 @@ use fluxion_ops::{
     chebyshev1_highpass, chebyshev1_lowpass, delay, echo, gain, high_shelf, low_shelf,
     normalize_peak, notch, peaking, small_gain_certify, sos_filter,
 };
+use fluxion_rt::RtGraph;
 
 pub use fluxion_ops::{Certificate, Verdict};
 
@@ -167,6 +168,36 @@ pub fn freeze(graph: &Graph, fs: u32) -> Option<FrozenSos> {
     Some(FrozenSos::new(fs, sections))
 }
 
+/// Lower a graph to a realtime [`RtGraph`] executor at sample rate `fs`, designing each op's
+/// coefficients and converting delay times to samples. The result mirrors [`process`]'s per-op
+/// semantics, so streaming it block-by-block matches the batch output. Call
+/// [`RtGraph::prepare`](fluxion_rt::RtGraph::prepare) before going realtime.
+///
+/// Returns `None` for graphs containing an op that isn't chunk-local — currently `Normalize` (it
+/// needs the whole signal's peak) and any not-yet-supported op.
+pub fn to_rt_graph(graph: &Graph, fs: u32) -> Option<RtGraph> {
+    match graph {
+        Graph::Id => Some(RtGraph::gain(1.0)),
+        Graph::Op(op) => op_rt(op, fs),
+        Graph::Series(a, b) => Some(RtGraph::series(to_rt_graph(a, fs)?, to_rt_graph(b, fs)?)),
+        Graph::Parallel(a, b) => Some(RtGraph::parallel(to_rt_graph(a, fs)?, to_rt_graph(b, fs)?)),
+    }
+}
+
+fn op_rt(op: &Op, fs: u32) -> Option<RtGraph> {
+    if let Some(sos) = op_sos(op, fs) {
+        return Some(RtGraph::filter(sos));
+    }
+    let p = &op.params;
+    let to_samples = |secs: f32| (secs * fs as f32).round() as usize;
+    match op.kind {
+        OpKind::Gain => Some(RtGraph::gain(p[0])),
+        OpKind::Delay => Some(RtGraph::delay(to_samples(p[0]), p[1])),
+        OpKind::Echo => Some(RtGraph::echo(to_samples(p[0]), p[1], p[2])),
+        _ => None, // Normalize (whole-signal) and any future non-realtime op
+    }
+}
+
 /// Filter a flat batch of `rows.len() / frames` equal-length rows through an SOS cascade (CPU).
 ///
 /// The GPU kernel ([`cuda::sos_filter_batch`], `cuda` feature) is far faster in raw **compute**
@@ -221,7 +252,9 @@ fn try_batched_filter(graph: &Graph, batch: &[Signal]) -> Option<Vec<Signal>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{FrozenSos, certify_graph, freeze, graph_to_sos, process, process_batch};
+    use super::{
+        FrozenSos, certify_graph, freeze, graph_to_sos, process, process_batch, to_rt_graph,
+    };
     use fluxion_core::{Graph, OpKind, Signal};
 
     fn sig(samples: Vec<f32>) -> Signal {
@@ -291,6 +324,36 @@ mod tests {
         // Survives a JSON round-trip, and a non-cascade graph won't freeze.
         assert_eq!(FrozenSos::from_json(&frozen.to_json()).unwrap(), frozen);
         assert!(freeze(&Graph::op(OpKind::Gain, [0.5]), 48_000).is_none());
+    }
+
+    #[test]
+    fn to_rt_graph_streams_like_process() {
+        // lowpass | (echo + gain) — filters, a feedback effect, and a parallel sum together.
+        let g = Graph::op(OpKind::Lowpass, [2_000.0, 4.0])
+            | (Graph::op(OpKind::Echo, [0.01, 0.4, 0.6]) + Graph::op(OpKind::Gain, [0.5]));
+        let fs = 48_000;
+        let x: Vec<f32> = (0..2_000).map(|i| (0.05 * i as f32).sin()).collect();
+
+        let batch = process(&g, &Signal::new(fs, vec![x.clone()]))
+            .channels
+            .remove(0);
+
+        let mut rt = to_rt_graph(&g, fs).unwrap();
+        rt.prepare(128);
+        let mut out = vec![0.0f32; 128];
+        let mut streamed = Vec::with_capacity(x.len());
+        for chunk in x.chunks(128) {
+            let out = &mut out[..chunk.len()];
+            rt.process(chunk, out);
+            streamed.extend_from_slice(out);
+        }
+
+        assert_eq!(streamed.len(), batch.len());
+        for (a, b) in streamed.iter().zip(&batch) {
+            assert!((a - b).abs() < 1e-4, "{a} vs {b}");
+        }
+        // Normalize needs the whole signal, so it can't be lowered to a realtime graph.
+        assert!(to_rt_graph(&Graph::op(OpKind::Normalize, [1.0]), fs).is_none());
     }
 
     #[test]
