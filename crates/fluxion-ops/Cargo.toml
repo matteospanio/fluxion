@@ -16,4 +16,5 @@ workspace = true
 
 [dependencies]
 fluxion-core = { path = "../fluxion-core" }
-# Backward (VJP) passes + Burn/CubeCL backends are added in later milestones.
+rustfft = "6"  # FFT linear convolution for long FIR kernels (D5)
+# Burn/CubeCL backends are added in later milestones.

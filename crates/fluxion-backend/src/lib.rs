@@ -16,7 +16,7 @@ use fluxion_core::{FrozenSos, Graph, Op, OpKind, Signal};
 use fluxion_ops::{
     Biquad, Sos, allpass, bandpass, butterworth_highpass, butterworth_lowpass, certify_sos,
     chebyshev1_highpass, chebyshev1_lowpass, delay, echo, gain, high_shelf, low_shelf,
-    normalize_peak, notch, peaking, small_gain_certify, sos_filter,
+    normalize_peak, notch, peaking, reverb, small_gain_certify, sos_filter,
 };
 use fluxion_rt::RtGraph;
 
@@ -83,6 +83,11 @@ fn apply_op(op: &Op, input: &Signal) -> Signal {
             let d = (p[0] * fs as f32).round() as usize;
             for ch in &mut out.channels {
                 *ch = echo(ch, d, p[1], p[2]);
+            }
+        }
+        OpKind::Reverb => {
+            for ch in &mut out.channels {
+                *ch = reverb(ch, p[0], p[1], p[2]);
             }
         }
         // `OpKind` is `#[non_exhaustive]`; future ops must be added (here or in `op_sos`) before use.

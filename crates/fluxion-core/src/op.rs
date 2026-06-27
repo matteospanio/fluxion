@@ -42,6 +42,8 @@ pub enum OpKind {
     Cheby1Lowpass,
     /// Chebyshev Type I high-pass (`cutoff` Hz, `order`, passband `ripple` dB).
     Cheby1Highpass,
+    /// Schroeder–Moorer reverb (`room` size, `damping`, wet/dry `mix`).
+    Reverb,
 }
 
 // Static parameter tables — one per kind.
@@ -93,6 +95,11 @@ static CHEBY1_PARAMS: [ParamSpec; 3] = [
     ParamSpec::new("order", Unit::Linear, 4.0, 1.0, 16.0),
     ParamSpec::new("ripple", Unit::Db, 1.0, 1e-2, 12.0),
 ];
+static REVERB_PARAMS: [ParamSpec; 3] = [
+    ParamSpec::new("room", Unit::Linear, 0.5, 0.0, 1.0),
+    ParamSpec::new("damping", Unit::Linear, 0.3, 0.0, 1.0),
+    ParamSpec::new("mix", Unit::Linear, 0.3, 0.0, 1.0),
+];
 
 impl OpKind {
     /// Stable identifier used in the DSL / CLI / `.fxg`, e.g. `"lowpass"`.
@@ -112,6 +119,7 @@ impl OpKind {
             OpKind::Echo => "echo",
             OpKind::Cheby1Lowpass => "cheby1low",
             OpKind::Cheby1Highpass => "cheby1high",
+            OpKind::Reverb => "reverb",
         }
     }
 
@@ -127,6 +135,7 @@ impl OpKind {
             OpKind::Delay => &DELAY_PARAMS,
             OpKind::Echo => &ECHO_PARAMS,
             OpKind::Cheby1Lowpass | OpKind::Cheby1Highpass => &CHEBY1_PARAMS,
+            OpKind::Reverb => &REVERB_PARAMS,
         }
     }
 
@@ -152,6 +161,7 @@ impl OpKind {
             OpKind::Echo,
             OpKind::Cheby1Lowpass,
             OpKind::Cheby1Highpass,
+            OpKind::Reverb,
         ]
     }
 

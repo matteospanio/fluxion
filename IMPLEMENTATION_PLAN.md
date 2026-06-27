@@ -82,10 +82,10 @@ parallelizable around it.
 | D2 | Chebyshev I/II SOS design (Lo/Hi). | P1 | M | D1 | ✓ |
 | D3 | RBJ biquads: peaking, low/high shelf, notch, allpass, bandpass. | P1 | M | D1 | ✓ |
 | D4 | SOS/biquad cascade forward kernel (over `Backend`). **CPU SIMD batch variant (2026-06-26):** `sos_filter_interleaved` filters a channel-interleaved (frame-major) batch in place — the per-channel inner loop auto-vectorizes across the batch (an IIR can't vectorize over time). Single-core ~665–691 Msamples/s vs torchfx's fused C++ kernel ~465 (1.4–1.5×); the prior scalar per-row path was ~85 (5.5× slower). Planar (torch `(B,T)`) input needs a transpose (a blocked one ≈ matches torchfx). | P0 | M | C1, D1 | — |
-| D5 | FIR + FFT-convolution forward. | P1 | M | C1 | ✓ |
+| D5 | FIR + FFT-convolution forward. **DONE (2026-06-27):** `fluxion_ops::fir_filter` (causal, length-preserving) + `fft_convolve` (FFT linear conv via `rustfft`, same result, for long kernels); tested equivalent. | P1 | M | C1 | ✓ |
 | D6 | Fractional delay line forward. | P1 | M | C1 | ✓ |
 | D7 | Gain, Normalize, sum/diff, DC/mask ops. | P0 | S | C1 | ✓ |
-| D8 | Reverb forward (FDN or Schroeder). | P1 | M | D6 | ✓ |
+| D8 | Reverb forward (FDN or Schroeder). **DONE (2026-06-27):** `fluxion_ops::reverb` — Schroeder–Moorer (4 damped feedback combs + 2 series all-pass), `room`/`damping`/`mix`; wired as `OpKind::Reverb` (CLI `reverb --room … --mix …`) + `apply_op`. (Differentiable VJP E5-reverb deferred.) | P1 | M | D6 | ✓ |
 | D9 | Echo forward. | P1 | S | D6 | ✓ |
 | D10 | Filterbank (band split) forward. | P2 | M | D4 | ✓ |
 | D11 | Op registry wiring: every op → `Graph` node + facade constructor, `Lo`/`Hi` naming. | P0 | M | B1, D1, D4, D7 | — |
@@ -96,10 +96,10 @@ parallelizable around it.
 | ID | Task | P | Sz | Deps | ∥ |
 |----|------|---|----|------|---|
 | E1 | Analytic VJP for the SOS cascade (all-pole reformulation, no recursion-unrolling). **Highest-leverage, hardest.** | P1 | L | D4 | — |
-| E2 | VJP for FIR/FFT-conv. | P1 | M | D5 | ✓ |
-| E3 | VJP for delay line. | P1 | M | D6 | ✓ |
+| E2 | VJP for FIR/FFT-conv. **DONE (2026-06-27):** `fir_vjp` — input grad = correlation by `h` (conv adjoint), tap grad = correlate(cotangent, input); finite-diff gradcheck passes. | P1 | M | D5 | ✓ |
+| E3 | VJP for delay line. **DONE (2026-06-27):** `delay_vjp` (grad_input + grad_mix), gradcheck passes. | P1 | M | D6 | ✓ |
 | E4 | VJP for gain/normalize/sum/mask. | P1 | S | D7 | ✓ |
-| E5 | VJP for reverb/echo. | P2 | M | D8, D9, E3 | ✓ |
+| E5 | VJP for reverb/echo. **Echo DONE (2026-06-27):** `echo_vjp` — input grad via the adjoint (time-reversed) feedback loop, grad_feedback + grad_wet via forward intermediates; gradcheck passes. Reverb VJP (recursive combs/all-pass) still deferred. | P2 | M | D8, D9, E3 | ✓ |
 | E6 | Burn `Autodiff` integration: register ops’ owned backward so `loss.backward()` flows. **DONE (2026-06-26):** `fluxion-autodiff` `burn` feature wraps a biquad as a Burn custom op whose backward is the analytic LTI adjoint — gradcheck passes through Burn's tape, backend-agnostic (`Autodiff<NdArray>` tested; `Autodiff<Cuda>` proven in the spike). Coefficient gradients DONE too — `sos_trainable` (binary custom op over input + a trainable coeff tensor, `sos_vjp` for `grad_coeffs`): gradcheck passes and a filter's b-coeffs fit a target through Burn ("learn a filter"). Default build pure-Rust/offline. Next: GPU-kernel forward/backward (wire `fluxion-backend::cuda` into the op). | P1 | M | C4, E1, E4 | — |
 | E7 | Finite-difference gradcheck tests (per op). | P1 | M | E1–E4 | ✓ |
 | E8 | Stability guard: verify designed/optimized SOS poles inside the unit circle before freeze. | P1 | S | D1, E1 | ✓ |

@@ -17,16 +17,20 @@
 pub mod chebyshev;
 pub mod delay;
 pub mod effect;
+pub mod fir;
 pub mod iir;
 pub mod rbj;
+pub mod reverb;
 pub mod stability;
 
 pub use chebyshev::{chebyshev1_highpass, chebyshev1_lowpass};
-pub use delay::{delay, echo};
+pub use delay::{delay, delay_vjp, echo, echo_vjp};
 pub use effect::{gain, gain_vjp, normalize_peak};
+pub use fir::{fft_convolve, fir_filter, fir_vjp};
 pub use iir::{
     Biquad, BiquadGrad, Sos, biquad_forward, biquad_vjp, butterworth_highpass, butterworth_lowpass,
     sos_filter, sos_filter_interleaved, sos_input_grad, sos_is_stable, sos_magnitude, sos_vjp,
 };
 pub use rbj::{allpass, bandpass, high_shelf, low_shelf, notch, peaking};
+pub use reverb::reverb;
 pub use stability::{Certificate, Verdict, certify_biquad, certify_sos, small_gain_certify};
