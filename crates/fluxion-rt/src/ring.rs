@@ -6,15 +6,21 @@
 //! write is visible before the index that exposes it. Single-producer-single-consumer is a
 //! **contract**: exactly one [`Producer`] and one [`Consumer`], each on one thread.
 //!
-//! `T: Copy` keeps it allocation- and drop-free (audio samples are `Copy`); a generic-`T` version
-//! with in-place drop is a later need, not this one.
+//! `T: Copy` keeps it allocation- and drop-free (audio samples and small command enums are `Copy`);
+//! slots are `MaybeUninit` and only read after the producer has published them, so no `Default` seed
+//! is needed and any `Copy` type works. A generic-`T` version with in-place drop is a later need.
+//!
+//! `push`/`pop` take `&mut self`, so the single-producer/single-consumer discipline is
+//! **borrow-checked**: a handle can't be shared by reference across threads and made to race itself
+//! (the [`Producer`]/[`Consumer`] split already prevents *two* producers).
 
 use std::cell::UnsafeCell;
+use std::mem::MaybeUninit;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct Ring<T> {
-    buf: Box<[UnsafeCell<T>]>,
+    buf: Box<[UnsafeCell<MaybeUninit<T>>]>,
     mask: usize,
     head: AtomicUsize, // next write position (producer owns)
     tail: AtomicUsize, // next read position (consumer owns)
@@ -28,9 +34,14 @@ unsafe impl<T: Send> Send for Ring<T> {}
 
 /// Create an SPSC ring holding at least `capacity` items (rounded up to a power of two), returning
 /// the producer and consumer handles. `capacity` is clamped to at least 1.
-pub fn channel<T: Copy + Default>(capacity: usize) -> (Producer<T>, Consumer<T>) {
-    let cap = capacity.max(1).next_power_of_two();
-    let buf = (0..cap).map(|_| UnsafeCell::new(T::default())).collect();
+pub fn channel<T: Copy>(capacity: usize) -> (Producer<T>, Consumer<T>) {
+    let cap = capacity
+        .max(1)
+        .checked_next_power_of_two()
+        .expect("ring capacity too large");
+    let buf = (0..cap)
+        .map(|_| UnsafeCell::new(MaybeUninit::uninit()))
+        .collect();
     let ring = Arc::new(Ring {
         buf,
         mask: cap - 1,
@@ -59,14 +70,15 @@ impl<T: Copy> Producer<T> {
     }
 
     /// Push one item; returns `Err(item)` if the ring is full (never blocks, never allocates).
-    pub fn push(&self, item: T) -> Result<(), T> {
+    /// `&mut self`: only the owning thread can push, so two pushes can never race the same slot.
+    pub fn push(&mut self, item: T) -> Result<(), T> {
         let head = self.ring.head.load(Ordering::Relaxed);
         let tail = self.ring.tail.load(Ordering::Acquire);
         if head.wrapping_sub(tail) == self.ring.buf.len() {
             return Err(item); // full
         }
         // Sole writer of this slot; the consumer can't reach it until `head` is published below.
-        unsafe { *self.ring.buf[head & self.ring.mask].get() = item };
+        unsafe { (*self.ring.buf[head & self.ring.mask].get()).write(item) };
         self.ring
             .head
             .store(head.wrapping_add(1), Ordering::Release);
@@ -76,13 +88,16 @@ impl<T: Copy> Producer<T> {
 
 impl<T: Copy> Consumer<T> {
     /// Pop one item, or `None` if empty (never blocks, never allocates).
-    pub fn pop(&self) -> Option<T> {
+    /// `&mut self`: only the owning thread can pop, so two pops can never race the same slot.
+    pub fn pop(&mut self) -> Option<T> {
         let tail = self.ring.tail.load(Ordering::Relaxed);
         let head = self.ring.head.load(Ordering::Acquire);
         if head == tail {
             return None; // empty
         }
-        let item = unsafe { *self.ring.buf[tail & self.ring.mask].get() };
+        // `head != tail` ⇒ the producer published this slot (wrote it before storing `head`), so it
+        // is initialized. `T: Copy`, so reading the bits leaves the slot valid (no drop / no move).
+        let item = unsafe { (*self.ring.buf[tail & self.ring.mask].get()).assume_init_read() };
         self.ring
             .tail
             .store(tail.wrapping_add(1), Ordering::Release);
@@ -114,7 +129,7 @@ mod tests {
 
     #[test]
     fn fifo_order_and_full_empty() {
-        let (p, c) = channel::<u32>(4); // 4 slots
+        let (mut p, mut c) = channel::<u32>(4); // 4 slots
         assert!(c.pop().is_none(), "empty at start");
         for i in 0..4 {
             assert!(p.push(i).is_ok());
@@ -128,7 +143,7 @@ mod tests {
 
     #[test]
     fn wraps_around_many_times() {
-        let (p, c) = channel::<usize>(8);
+        let (mut p, mut c) = channel::<usize>(8);
         // Push/pop far past capacity to exercise the wrapping counters + mask.
         for i in 0..10_000 {
             assert!(p.push(i).is_ok());
@@ -140,7 +155,7 @@ mod tests {
     #[test]
     fn concurrent_spsc_preserves_every_item() {
         use std::thread;
-        let (p, c) = channel::<usize>(64);
+        let (mut p, mut c) = channel::<usize>(64);
         const N: usize = 1_000_000;
         let prod = thread::spawn(move || {
             let mut i = 0;

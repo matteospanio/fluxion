@@ -10,14 +10,17 @@
 //! - [`ring`] — lock-free SPSC ring buffer (G1).
 //! - [`stream`] — allocation-free streaming SOS cascade, streaming == batch (G3 core).
 //! - [`param`] — click-free [`SmoothedValue`] parameter ramping (G4).
+//! - [`engine`] — [`RtEngine`]: cascade + smoothed gain + lock-free command queue (G3 + G4).
 //!
 //! A frozen cascade plan comes from `fluxion-backend::freeze` (G2); build a stream from it with
 //! [`SosStream::from_sections`]. Next: a CPAL audio backend (G5) and real-time-safety stress (G6).
 
+pub mod engine;
 pub mod param;
 pub mod ring;
 pub mod stream;
 
+pub use engine::{Command, RtEngine};
 pub use param::SmoothedValue;
 pub use ring::{Consumer, Producer, channel};
 pub use stream::SosStream;
