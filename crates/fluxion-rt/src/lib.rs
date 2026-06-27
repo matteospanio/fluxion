@@ -24,3 +24,7 @@ pub use engine::{Command, RtEngine};
 pub use param::SmoothedValue;
 pub use ring::{Consumer, Producer, channel};
 pub use stream::SosStream;
+
+// Re-exported so callers can build cascades (`RtEngine::new`, `SosStream::new`) without also
+// depending on `fluxion-ops` directly.
+pub use fluxion_ops::Biquad;
