@@ -2,7 +2,9 @@
 resolver = "3"
 members = ["crates/*"]
 # GPU spikes are standalone (pull in Burn/CubeCL) and excluded from the default build.
-exclude = ["spikes"]
+# fluxion-py is a PyO3 cdylib built by maturin, not plain cargo (extension-module linking breaks
+# `cargo test --workspace`), so it's a standalone crate too.
+exclude = ["spikes", "crates/fluxion-py"]
 
 # Shared metadata inherited by every member crate via `field.workspace = true`.
 [workspace.package]

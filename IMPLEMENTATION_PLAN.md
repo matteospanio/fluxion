@@ -159,10 +159,10 @@ parallelizable around it.
 
 | ID | Task | P | Sz | Deps | ∥ |
 |----|------|---|----|------|---|
-| J1 | PyO3 module skeleton + maturin build (`crate-type=cdylib`). | P1 | S | — | — |
-| J2 | DLPack producer/consumer (zero-copy ↔ torch/numpy/jax). | P1 | M | C4 | — |
-| J3 | Eager transform API: `chain(x)` torchaudio-style. | P1 | M | J2, D11 | — |
-| J4 | `torch.autograd.Function` adapter (forward + owned backward). | P1 | M | J2, E6 | ✓ |
+| J1 | PyO3 module skeleton + maturin build (`crate-type=cdylib`). **DONE (2026-06-27):** `fluxion-py` is a PyO3 0.22 + numpy cdylib built by maturin (`import fluxion`), a standalone crate excluded from the cargo workspace so `extension-module` linking doesn't break `cargo test --workspace`. | P1 | S | — | — |
+| J2 | DLPack producer/consumer (zero-copy ↔ torch/numpy/jax). Numpy interop via the `numpy` crate (copy-in/out) ships now; zero-copy DLPack for torch/jax tensors is the follow-up. | P1 | M | C4 | — |
+| J3 | Eager transform API: `chain(x)` torchaudio-style. **DONE (2026-06-27):** `Chain` with `lowpass`/`highpass`/`peaking`/`gain`/`delay`/`echo`/… constructors, `|` (series) and `+` (parallel) operators, `.process(np_array, fs)` via `fluxion_backend::process`. Pytest: shapes/dtype, low-pass attenuation, gain/parallel exactness, invalid-param `ValueError`. | P1 | M | J2, D11 | — |
+| J4 | `torch.autograd.Function` adapter (forward + owned backward). **DONE (2026-06-27):** Rust exposes `sos_forward`/`sos_backward` (the analytic VJPs — input grad + coeff grad); a Python `torch.autograd.Function` wraps them. Finite-difference gradcheck (numpy) passes, and the torch adapter gradchecks with real torch (verified against torchfx's torch env). | P1 | M | J2, E6 | ✓ |
 | J5 | `jax.custom_vjp` adapter. | P2 | M | J2, E6 | ✓ |
 | J6 | Array API conformance layer + `.pyi` type stubs. | P2 | M | J3 | ✓ |
 | J7 | Python tests (parity vs torchaudio) + `pyproject` + cibuildwheel (CPU). | P1 | M | J3 | — |

@@ -1,19 +1,30 @@
+# Standalone crate (its own workspace) — built into a Python wheel by maturin, NOT plain cargo.
+# PyO3's `extension-module` defers libpython linking to import time, which breaks `cargo test`, so
+# this is excluded from the main workspace (see the root Cargo.toml).
 [package]
 name = "fluxion-py"
 description = "Fluxion: PyO3 Python bindings with DLPack and torch/jax autograd adapters."
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-authors.workspace = true
-repository.workspace = true
-homepage.workspace = true
-keywords.workspace = true
-categories.workspace = true
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+authors = ["Matteo Spanio"]
+repository = "https://github.com/matteospanio/fluxion"
+homepage = "https://github.com/matteospanio/fluxion"
 
-[lints]
-workspace = true
+[workspace]
 
-# Becomes `crate-type = ["cdylib"]` once PyO3 is wired (built into a wheel via maturin).
+[lib]
+name = "fluxion"
+crate-type = ["cdylib"]
+
 [dependencies]
-# Added when implemented: pyo3, fluxion (facade); torch/jax adapters live on the Python side.
+pyo3 = { version = "0.22", features = ["extension-module"] }
+numpy = "0.22"
+fluxion-core = { path = "../fluxion-core" }
+fluxion-ops = { path = "../fluxion-ops" }
+fluxion-backend = { path = "../fluxion-backend" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

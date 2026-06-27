@@ -1,0 +1,21 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "fluxion"
+version = "0.0.0"
+description = "GPU-accelerated, differentiable audio DSP — Python bindings"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Matteo Spanio" }]
+keywords = ["audio", "dsp", "differentiable", "gpu", "realtime"]
+dependencies = ["numpy>=1.21"]
+
+[project.optional-dependencies]
+torch = ["torch>=2.0"]
+test = ["pytest>=7"]
+
+[tool.maturin]
+# Pure-Rust extension module (`import fluxion`); the lib name in Cargo.toml is `fluxion`.
+strip = true
