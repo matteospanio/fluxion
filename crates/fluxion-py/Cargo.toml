@@ -15,7 +15,9 @@ homepage = "https://github.com/matteospanio/fluxion"
 [workspace]
 
 [lib]
-name = "fluxion"
+# Compiled core imported as `fluxion._fluxion`; the Python package (python/fluxion/) wraps it and
+# adds the torch / jax autograd adapters.
+name = "_fluxion"
 crate-type = ["cdylib"]
 
 [dependencies]

@@ -17,5 +17,8 @@ torch = ["torch>=2.0"]
 test = ["pytest>=7"]
 
 [tool.maturin]
-# Pure-Rust extension module (`import fluxion`); the lib name in Cargo.toml is `fluxion`.
+# Mixed layout: the Rust extension is `fluxion._fluxion`; the Python package lives in python/fluxion/
+# and adds the torch / jax adapters.
+python-source = "python"
+module-name = "fluxion._fluxion"
 strip = true

@@ -163,9 +163,9 @@ parallelizable around it.
 | J2 | DLPack producer/consumer (zero-copy ↔ torch/numpy/jax). Numpy interop via the `numpy` crate (copy-in/out) ships now; zero-copy DLPack for torch/jax tensors is the follow-up. | P1 | M | C4 | — |
 | J3 | Eager transform API: `chain(x)` torchaudio-style. **DONE (2026-06-27):** `Chain` with `lowpass`/`highpass`/`peaking`/`gain`/`delay`/`echo`/… constructors, `|` (series) and `+` (parallel) operators, `.process(np_array, fs)` via `fluxion_backend::process`. Pytest: shapes/dtype, low-pass attenuation, gain/parallel exactness, invalid-param `ValueError`. | P1 | M | J2, D11 | — |
 | J4 | `torch.autograd.Function` adapter (forward + owned backward). **DONE (2026-06-27):** Rust exposes `sos_forward`/`sos_backward` (the analytic VJPs — input grad + coeff grad); a Python `torch.autograd.Function` wraps them. Finite-difference gradcheck (numpy) passes, and the torch adapter gradchecks with real torch (verified against torchfx's torch env). | P1 | M | J2, E6 | ✓ |
-| J5 | `jax.custom_vjp` adapter. | P2 | M | J2, E6 | ✓ |
-| J6 | Array API conformance layer + `.pyi` type stubs. | P2 | M | J3 | ✓ |
-| J7 | Python tests (parity vs torchaudio) + `pyproject` + cibuildwheel (CPU). | P1 | M | J3 | — |
+| J5 | `jax.custom_vjp` adapter. **DONE (2026-06-27):** `fluxion.jax.sos_filter` — a `jax.custom_vjp` wrapping `sos_forward`/`sos_backward` via `jax.pure_callback`; test gradchecks its grad against the analytic VJP (skipped when jax absent). | P2 | M | J2, E6 | ✓ |
+| J6 | Array API conformance layer + `.pyi` type stubs. **Stubs DONE (2026-06-27):** `_fluxion.pyi` (typed `Chain` + all constructors + `sos_forward`/`sos_backward`) + `py.typed`, shipped in the wheel. (Full Array-API conformance still pending.) | P2 | M | J3 | ✓ |
+| J7 | Python tests (parity vs torchaudio) + `pyproject` + cibuildwheel (CPU). **DONE (2026-06-27):** maturin mixed layout (`python/fluxion/` over `_fluxion`); a CI `python` job builds the wheel + runs pytest. Tests include a **scipy** Butterworth design+filter parity check (rel-RMS < 1e-2). Wheel verified to install + pass in a clean venv. (cibuildwheel multi-platform release wheels are the packaging follow-up.) | P1 | M | J3 | — |
 | J8 | Split GPU wheels (cibuildwheel CUDA images). | P2 | L | J7, F1 | — |
 
 ## Epic K — FFI / C-ABI  *(crate: `fluxion-ffi`)*  ·  *parallel*

@@ -163,7 +163,7 @@ fn sos_backward<'py>(
 }
 
 #[pymodule]
-fn fluxion(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _fluxion(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Chain>()?;
     macro_rules! add {
         ($($f:ident),* $(,)?) => { $( m.add_function(wrap_pyfunction!($f, m)?)?; )* };

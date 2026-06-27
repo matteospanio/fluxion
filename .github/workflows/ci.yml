@@ -43,3 +43,22 @@ jobs:
       - uses: actions/checkout@v4
       - uses: taiki-e/install-action@cargo-deny
       - run: cargo deny check
+
+  python:
+    name: python bindings (maturin + pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/fluxion-py
+      # torch / jax are not installed (heavy); those adapter tests skip — eager API, the analytic
+      # gradcheck, and scipy filter-design parity are the guards here.
+      - run: pip install --upgrade pip maturin numpy pytest scipy
+      - run: maturin build --release -m crates/fluxion-py/Cargo.toml --out dist
+      - run: pip install dist/*.whl
+      - run: pytest crates/fluxion-py/tests/ -v

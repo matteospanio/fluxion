@@ -78,27 +78,55 @@ def test_sos_backward_gradchecks():
         assert abs(gc[j] - fd) < 1e-2 * (1 + abs(gc[j])), (j, gc[j], fd)
 
 
-def test_torch_autograd_function():
-    """Optional: a torch.autograd.Function built on the fluxion primitives gradchecks."""
+def test_torch_adapter_matches_primitives():
+    """The shipped fluxion.torch adapter's forward/backward agree with the (gradchecked) primitives."""
     torch = pytest.importorskip("torch")
+    import fluxion.torch as fxt
 
-    class SosFilter(torch.autograd.Function):
-        @staticmethod
-        def forward(ctx, x, coeffs):
-            ctx.save_for_backward(x, coeffs)
-            y = fluxion.sos_forward(x.detach().numpy(), coeffs.detach().numpy())
-            return torch.from_numpy(y)
+    xv = np.random.default_rng(2).standard_normal(48).astype(np.float32)
+    seed = np.random.default_rng(3).standard_normal(48).astype(np.float32)
+    x = torch.tensor(xv, requires_grad=True)
+    c = torch.tensor(ONE_BIQUAD, requires_grad=True)
 
-        @staticmethod
-        def backward(ctx, grad_out):
-            x, coeffs = ctx.saved_tensors
-            gx, gc = fluxion.sos_backward(
-                grad_out.contiguous().numpy(), x.numpy(), coeffs.numpy()
-            )
-            return torch.from_numpy(gx), torch.from_numpy(gc)
+    y = fxt.sos_filter(x, c)
+    np.testing.assert_allclose(y.detach().numpy(), fluxion.sos_forward(xv, ONE_BIQUAD), atol=1e-6)
 
-    x = torch.randn(48, dtype=torch.float32, requires_grad=True)
-    c = torch.tensor(ONE_BIQUAD, dtype=torch.float32, requires_grad=True)
-    SosFilter.apply(x, c).pow(2).sum().backward()
-    assert x.grad is not None and c.grad is not None
-    assert torch.isfinite(x.grad).all() and torch.isfinite(c.grad).all()
+    y.backward(torch.from_numpy(seed))
+    gx, gc = fluxion.sos_backward(seed, xv, ONE_BIQUAD)
+    np.testing.assert_allclose(x.grad.numpy(), gx, atol=1e-5)
+    np.testing.assert_allclose(c.grad.numpy(), gc, atol=1e-5)
+
+
+def test_jax_adapter_gradchecks():
+    """The shipped fluxion.jax custom_vjp adapter's gradient matches the analytic VJP."""
+    jax = pytest.importorskip("jax")
+    import jax.numpy as jnp
+
+    import fluxion.jax as fxj
+
+    xv = np.random.default_rng(4).standard_normal(32).astype(np.float32)
+    seed = np.random.default_rng(5).standard_normal(32).astype(np.float32)
+
+    def loss(x, c):
+        return jnp.sum(jnp.asarray(seed) * fxj.sos_filter(x, c))
+
+    gx, gc = jax.grad(loss, argnums=(0, 1))(jnp.asarray(xv), jnp.asarray(ONE_BIQUAD))
+    rgx, rgc = fluxion.sos_backward(seed, xv, ONE_BIQUAD)
+    np.testing.assert_allclose(np.asarray(gx), rgx, atol=1e-4)
+    np.testing.assert_allclose(np.asarray(gc), rgc, atol=1e-4)
+
+
+def test_lowpass_parity_with_scipy():
+    """fluxion's Butterworth low-pass matches scipy's design+filter to f32 precision."""
+    sig = pytest.importorskip("scipy.signal")
+
+    rng = np.random.default_rng(7)
+    x = rng.standard_normal(2000).astype(np.float32)
+    fs, fc, order = 48_000, 1000.0, 6
+    y = fluxion.lowpass(fc, order).process(x, fs)
+
+    sos = sig.butter(order, fc / (fs / 2), btype="low", output="sos")
+    ref = sig.sosfilt(sos, x.astype(np.float64)).astype(np.float32)
+
+    rel_rms = float(np.sqrt(np.mean((y - ref) ** 2)) / np.sqrt(np.mean(ref**2)))
+    assert rel_rms < 1e-2, f"relative RMS vs scipy = {rel_rms}"
