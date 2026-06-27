@@ -1,4 +1,6 @@
 /target
+# Standalone crates (fluxion-py, spikes) build into their own nested target/ dirs.
+**/target/
 **/*.rs.bk
 Cargo.lock.bak
 
