@@ -49,6 +49,16 @@ pub enum RtGraph {
         feedback: f32,
         wet: f32,
     },
+    /// Fractional delayed tap, linear-interpolated: `(1-mix)·x[n] + mix·x[n-D]` for a possibly
+    /// non-integer `D = i + frac` (`xd = (1-frac)·x[n-i] + frac·x[n-i-1]`). `ring` is the input
+    /// history; `w` is the write cursor.
+    DelayFrac {
+        ring: Vec<f32>,
+        w: usize,
+        i: usize,
+        frac: f32,
+        mix: f32,
+    },
 }
 
 impl RtGraph {
@@ -104,6 +114,22 @@ impl RtGraph {
         }
     }
 
+    /// A fractional (linear-interpolated) delay node: delays by `delay` samples, which may be
+    /// non-integer — useful for chorus/flanger-style modulated delays and sub-sample tuning. The
+    /// `⌈delay⌉+2`-sample history is allocated here, so [`process`](Self::process) stays alloc-free.
+    pub fn delay_frac(delay: f32, mix: f32) -> Self {
+        let delay = delay.max(0.0);
+        let i = delay.floor() as usize;
+        let frac = delay - i as f32;
+        RtGraph::DelayFrac {
+            ring: vec![0.0; i + 2],
+            w: 0,
+            i,
+            frac,
+            mix,
+        }
+    }
+
     /// Pre-size every internal scratch buffer for blocks up to `max_block` samples. This is the only
     /// allocating step — call it before going realtime. Blocks passed to [`process`](Self::process)
     /// must not exceed `max_block`.
@@ -113,7 +139,8 @@ impl RtGraph {
             RtGraph::Filter(_)
             | RtGraph::Gain(_)
             | RtGraph::Delay { .. }
-            | RtGraph::Echo { .. } => {}
+            | RtGraph::Echo { .. }
+            | RtGraph::DelayFrac { .. } => {}
             RtGraph::Series {
                 first,
                 second,
@@ -201,6 +228,27 @@ impl RtGraph {
                     }
                 }
             }
+            RtGraph::DelayFrac {
+                ring,
+                w,
+                i,
+                frac,
+                mix,
+            } => {
+                let n = ring.len();
+                let (i, frac, mix) = (*i, *frac, *mix);
+                for (o, &x) in output.iter_mut().zip(input) {
+                    ring[*w] = x; // write current, then read taps relative to the new cursor
+                    *w += 1;
+                    if *w == n {
+                        *w = 0;
+                    }
+                    let a = ring[(*w + n - 1 - i) % n]; // x[n-i]
+                    let b = ring[(*w + n - 2 - i) % n]; // x[n-i-1]
+                    let xd = (1.0 - frac) * a + frac * b;
+                    *o = (1.0 - mix) * x + mix * xd;
+                }
+            }
         }
     }
 
@@ -227,6 +275,10 @@ impl RtGraph {
                 xring.iter_mut().for_each(|s| *s = 0.0);
                 wring.iter_mut().for_each(|s| *s = 0.0);
                 *idx = 0;
+            }
+            RtGraph::DelayFrac { ring, w, .. } => {
+                ring.iter_mut().for_each(|s| *s = 0.0);
+                *w = 0;
             }
         }
     }
@@ -328,6 +380,45 @@ mod tests {
         let want = echo(&x, d, fb, wet);
         for (a, b) in streamed.iter().zip(&want) {
             assert!((a - b).abs() < 1e-4, "{a} vs {b}");
+        }
+    }
+
+    // Reference fractional delay: (1-mix)·x[n] + mix·x[n-D], x[n-D] linearly interpolated.
+    fn ref_delay_frac(x: &[f32], delay: f32, mix: f32) -> Vec<f32> {
+        let i = delay.floor() as usize;
+        let frac = delay - i as f32;
+        (0..x.len())
+            .map(|n| {
+                let a = if n >= i { x[n - i] } else { 0.0 };
+                let b = if n > i { x[n - i - 1] } else { 0.0 };
+                (1.0 - mix) * x[n] + mix * ((1.0 - frac) * a + frac * b)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn fractional_delay_matches_reference() {
+        let x = signal(1000);
+        for &delay in &[0.0, 0.5, 3.7, 12.25, 40.9] {
+            let mut g = RtGraph::delay_frac(delay, 0.7);
+            let streamed = stream_chunks(&mut g, &x, 64);
+            let want = ref_delay_frac(&x, delay, 0.7);
+            for (k, (a, b)) in streamed.iter().zip(&want).enumerate() {
+                assert!((a - b).abs() < 1e-5, "delay {delay} at {k}: {a} vs {b}");
+            }
+        }
+    }
+
+    #[test]
+    fn integer_fractional_delay_equals_delay_node() {
+        // frac=0 ⇒ a pure integer delay; must agree with the integer Delay node.
+        let x = signal(500);
+        let mut frac = RtGraph::delay_frac(8.0, 0.5);
+        let mut int = RtGraph::delay(8, 0.5);
+        let a = stream_chunks(&mut frac, &x, 50);
+        let b = stream_chunks(&mut int, &x, 50);
+        for (p, q) in a.iter().zip(&b) {
+            assert!((p - q).abs() < 1e-6, "{p} vs {q}");
         }
     }
 
