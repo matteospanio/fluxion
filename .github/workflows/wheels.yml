@@ -48,21 +48,24 @@ jobs:
           name: sdist
           path: dist
 
-  # GPU wheel — built with the CUDA toolkit + the `cuda` feature. GitHub-hosted runners have no CUDA
-  # toolkit, so this runs on a self-hosted CUDA runner (label `cuda`). It's verified manually on the
-  # RTX 3070 dev box meanwhile (`maturin build --release --features cuda -m crates/fluxion-py/Cargo.toml`).
-  # The resulting wheel is tagged with a `+cuXX` local version before publishing so pip can pick CPU
-  # vs GPU. Enable by registering a self-hosted runner; left here as the build recipe.
+  # GPU wheel — built with the CUDA toolkit + the `cuda` feature on a self-hosted CUDA runner
+  # (label `cuda`); GitHub-hosted runners have no CUDA toolkit. maturin-action's manylinux container
+  # also lacks CUDA, so we build directly on the runner. The wheel carries a `+cu12` local version so
+  # it's distinguishable from the CPU wheel (`pip install fluxion==0.0.0+cu12` for the GPU build).
   gpu-wheel:
     name: GPU wheel (CUDA)
-    if: false # flip to a self-hosted CUDA runner to enable
     runs-on: [self-hosted, cuda]
     steps:
       - uses: actions/checkout@v4
-      - uses: PyO3/maturin-action@v1
-        with:
-          command: build
-          args: --release --features cuda -m crates/fluxion-py/Cargo.toml --out dist
+      - name: Build CUDA wheel
+        run: |
+          source "$HOME/.cargo/env"
+          export CUDA_PATH=/usr/local/cuda PATH=/usr/local/cuda/bin:$PATH
+          sed -i 's/^version = "0.0.0"/version = "0.0.0+cu12"/' crates/fluxion-py/pyproject.toml
+          python3 -m venv /tmp/gpuwheel-venv
+          /tmp/gpuwheel-venv/bin/pip install -q --upgrade pip "maturin>=1.5,<2"
+          /tmp/gpuwheel-venv/bin/maturin build --release --features cuda \
+            -m crates/fluxion-py/Cargo.toml --interpreter python3 --out dist
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-gpu
