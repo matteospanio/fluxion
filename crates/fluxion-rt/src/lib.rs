@@ -11,16 +11,24 @@
 //! - [`stream`] — allocation-free streaming SOS cascade, streaming == batch (G3 core).
 //! - [`param`] — click-free [`SmoothedValue`] parameter ramping (G4).
 //! - [`engine`] — [`RtEngine`]: cascade + smoothed gain + lock-free command queue (G3 + G4).
+//! - [`graph`] — [`RtGraph`]: general series/parallel graph executor, alloc-free after `prepare` (G3).
+//! - [`cpal_backend`] — CPAL output stream driving a render callback (G5, feature `cpal`).
 //!
-//! A frozen cascade plan comes from `fluxion-backend::freeze` (G2); build a stream from it with
-//! [`SosStream::from_sections`]. Next: a CPAL audio backend (G5) and real-time-safety stress (G6).
+//! A frozen cascade plan comes from `fluxion-backend::freeze` (G2). Real-time-safety is enforced by
+//! `tests/rt_safety.rs` (G6: no-alloc-in-callback + xrun stress). Next: lower an arbitrary
+//! `fluxion_core::Graph` to an [`RtGraph`] (in `fluxion-backend`), realtime delay/echo nodes, and
+//! duplex (live-input) CPAL.
 
+#[cfg(feature = "cpal")]
+pub mod cpal_backend;
 pub mod engine;
+pub mod graph;
 pub mod param;
 pub mod ring;
 pub mod stream;
 
 pub use engine::{Command, RtEngine};
+pub use graph::RtGraph;
 pub use param::SmoothedValue;
 pub use ring::{Consumer, Producer, channel};
 pub use stream::SosStream;

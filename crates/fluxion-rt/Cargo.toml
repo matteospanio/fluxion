@@ -14,6 +14,11 @@ categories.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Cross-platform realtime audio I/O via CPAL. Requires the platform audio dev libraries (ALSA on
+# Linux); the default build needs none, so it stays pure-Rust and offline.
+cpal = ["dep:cpal"]
+
 [dependencies]
 fluxion-ops = { path = "../fluxion-ops" }
-# Added when implemented: cpal (cross-platform realtime audio IO).
+cpal = { version = "0.15", optional = true }

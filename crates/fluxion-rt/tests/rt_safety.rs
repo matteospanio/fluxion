@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Instant;
 
-use fluxion_rt::{Biquad, Command, RtEngine};
+use fluxion_rt::{Biquad, Command, RtEngine, RtGraph};
 
 // --- allocation tracker ----------------------------------------------------------------------
 
@@ -111,6 +111,31 @@ fn process_block_is_allocation_free() {
         allocs, 0,
         "RtEngine::process_block allocated on the audio thread"
     );
+}
+
+#[test]
+fn rtgraph_process_is_allocation_free() {
+    // (lp + hp) | gain — a nested series/parallel graph with internal scratch buffers.
+    let mut g = RtGraph::series(
+        RtGraph::parallel(
+            RtGraph::filter(stable_cascade()),
+            RtGraph::filter(stable_cascade()),
+        ),
+        RtGraph::gain(0.5),
+    );
+    g.prepare(128); // the only allocating step
+    let input = vec![0.1f32; 128];
+    let mut out = vec![0.0f32; 128];
+
+    let _ = rt_section(|| {});
+    g.process(&input, &mut out); // warm up outside the measured section
+
+    let (_, allocs) = rt_section(|| {
+        for _ in 0..1000 {
+            g.process(&input, &mut out);
+        }
+    });
+    assert_eq!(allocs, 0, "RtGraph::process allocated after prepare()");
 }
 
 #[test]
