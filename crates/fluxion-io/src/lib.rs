@@ -42,8 +42,10 @@ fn decode_wav<R: Read>(mut reader: WavReader<R>) -> Result<Signal, hound::Error>
             }
         }
         SampleFormat::Int => {
-            // Full-scale for signed N-bit PCM is 2^(N-1).
-            let scale = (1u64 << (spec.bits_per_sample - 1)) as f32;
+            // Full-scale for signed N-bit PCM is 2^(N-1). Clamp bits to a sane range so a malformed
+            // header can't underflow/overflow the shift.
+            let bits = spec.bits_per_sample.clamp(1, 64);
+            let scale = (1u64 << (bits - 1)) as f32;
             for (i, s) in reader.samples::<i32>().enumerate() {
                 channels[i % n].push(s? as f32 / scale);
             }

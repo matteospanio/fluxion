@@ -64,6 +64,13 @@ fn cmd_process(args: &[String], fs: Option<u32>) -> Result<(), String> {
     let output = args.last().unwrap();
     let effects = &args[1..args.len() - 1];
 
+    // Refuse to clobber the input by writing the result over it (file paths only; `-`/`-n` are fine).
+    if !is_stream(input) && !is_stream(output) && same_file(input, output) {
+        return Err(format!(
+            "input and output are the same file '{output}' — refusing to overwrite"
+        ));
+    }
+
     let mut signal = load_input(input)?;
     if let Some(fs) = fs {
         signal.fs = fs;
@@ -73,8 +80,27 @@ fn cmd_process(args: &[String], fs: Option<u32>) -> Result<(), String> {
     write_output(output, &out)
 }
 
+/// `-` (std stream) and `-n` (null sink) are not real file paths.
+fn is_stream(path: &str) -> bool {
+    path == "-" || path == "-n"
+}
+
+/// True if two paths resolve to the same existing file.
+fn same_file(a: &str, b: &str) -> bool {
+    match (
+        std::path::Path::new(a).canonicalize(),
+        std::path::Path::new(b).canonicalize(),
+    ) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => false,
+    }
+}
+
 /// Load an input: `-` = WAV on stdin, `*.wav` via hound, anything else (FLAC/MP3/OGG/…) via Symphonia.
 fn load_input(path: &str) -> Result<fluxion::Signal, String> {
+    if path == "-n" {
+        return Err("'-n' is a null output sink, not an input".into());
+    }
     if path == "-" {
         return read_wav_from(std::io::stdin().lock()).map_err(|e| format!("reading stdin: {e}"));
     }
@@ -108,20 +134,39 @@ fn cmd_batch(args: &[String], fs: Option<u32>) -> Result<(), String> {
     let (out_dir, pattern, effects) = (&args[0], &args[1], &args[2..]);
     let graph = parse_chain(effects)?;
     std::fs::create_dir_all(out_dir).map_err(|e| format!("creating '{out_dir}': {e}"))?;
+    // Absolute, so we can detect output collisions and refuse to overwrite an input in place.
+    let out_dir_abs = std::path::Path::new(out_dir)
+        .canonicalize()
+        .map_err(|e| format!("'{out_dir}': {e}"))?;
 
+    let mut produced = std::collections::HashSet::new();
     let mut count = 0usize;
     for entry in glob::glob(pattern).map_err(|e| format!("bad glob '{pattern}': {e}"))? {
         let path = entry.map_err(|e| format!("glob: {e}"))?;
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("out");
+        let out_path = out_dir_abs.join(format!("{stem}.wav"));
+
+        if path.canonicalize().is_ok_and(|p| p == out_path) {
+            return Err(format!("refusing to overwrite input '{}'", path.display()));
+        }
+        if !produced.insert(out_path.clone()) {
+            return Err(format!(
+                "output collision: two inputs map to '{}' (same stem)",
+                out_path.display()
+            ));
+        }
+
         let p = path.to_str().ok_or("non-UTF-8 path")?;
         let mut signal = load_input(p)?;
         if let Some(fs) = fs {
             signal.fs = fs;
         }
         let out = process(&graph, &signal);
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("out");
-        let out_path = std::path::Path::new(out_dir).join(format!("{stem}.wav"));
         write_wav(&out_path, &out).map_err(|e| format!("writing '{}': {e}", out_path.display()))?;
         count += 1;
+    }
+    if count == 0 {
+        return Err(format!("no files matched glob '{pattern}'"));
     }
     eprintln!("fluxion: processed {count} file(s) → {out_dir}");
     Ok(())

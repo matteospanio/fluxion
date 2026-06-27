@@ -42,6 +42,11 @@ pub fn delay_vjp(
     mix: f32,
     grad_out: &[f32],
 ) -> (Vec<f32>, f32) {
+    assert_eq!(
+        grad_out.len(),
+        input.len(),
+        "delay_vjp: grad_out must match the input length"
+    );
     let n = input.len();
     let d = delay_samples.max(1);
     let mut grad_in = vec![0.0f32; n];
@@ -69,6 +74,11 @@ pub fn echo_vjp(
     wet: f32,
     grad_out: &[f32],
 ) -> (Vec<f32>, f32, f32) {
+    assert_eq!(
+        grad_out.len(),
+        input.len(),
+        "echo_vjp: grad_out must match the input length"
+    );
     let n = input.len();
     let d = delay_samples.max(1);
     let w = feedback_delay(input, d, feedback);

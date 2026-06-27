@@ -62,6 +62,11 @@ pub fn fft_convolve(input: &[f32], taps: &[f32]) -> Vec<f32> {
 
 /// Analytic backward for [`fir_filter`]. Returns `(grad_input, grad_taps)` for `grad_out = ∂L/∂y`.
 pub fn fir_vjp(input: &[f32], taps: &[f32], grad_out: &[f32]) -> (Vec<f32>, Vec<f32>) {
+    assert_eq!(
+        grad_out.len(),
+        input.len(),
+        "fir_vjp: grad_out must match the input length"
+    );
     let (n, m) = (input.len(), taps.len());
 
     // ∂L/∂x[j] = Σ_k h[k]·g[j+k]  (adjoint of convolution = correlation by h).

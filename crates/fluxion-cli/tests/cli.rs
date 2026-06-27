@@ -152,3 +152,47 @@ fn batch_processes_a_glob() {
     }
     std::fs::remove_dir_all(&d).ok();
 }
+
+#[test]
+fn process_refuses_in_equals_out() {
+    let d = tmp("inout");
+    let f = d.join("x.wav");
+    write_wav(&f, 48_000, &[0.5; 4]);
+    let st = Command::new(bin())
+        .args([
+            f.to_str().unwrap(),
+            "gain",
+            "--gain",
+            "1",
+            f.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(
+        !st.success(),
+        "writing the result over the input must be refused"
+    );
+    std::fs::remove_dir_all(&d).ok();
+}
+
+#[test]
+fn batch_empty_glob_errors() {
+    let d = tmp("emptyglob");
+    let pattern = format!("{}/no_such_*.wav", d.to_str().unwrap());
+    let st = Command::new(bin())
+        .args([
+            "batch",
+            d.join("out").to_str().unwrap(),
+            &pattern,
+            "gain",
+            "--gain",
+            "1",
+        ])
+        .status()
+        .unwrap();
+    assert!(
+        !st.success(),
+        "a glob matching nothing must error (not silent success)"
+    );
+    std::fs::remove_dir_all(&d).ok();
+}
