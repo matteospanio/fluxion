@@ -14,6 +14,11 @@ homepage = "https://github.com/matteospanio/fluxion"
 
 [workspace]
 
+[features]
+# GPU batch filtering (CUDA). Built only on CUDA hosts → the "GPU wheel"; the default build (CPU
+# wheel) needs no CUDA. maturin: `maturin build --release --features cuda`.
+cuda = ["fluxion-backend/cuda"]
+
 [lib]
 # Compiled core imported as `fluxion._fluxion`; the Python package (python/fluxion/) wraps it and
 # adds the torch / jax autograd adapters.

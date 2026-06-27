@@ -52,6 +52,23 @@ def test_dlpack_numpy_input():
     np.testing.assert_allclose(fluxion.gain(2.0).process(xd, FS), 2.0 * xd.astype(np.float32), atol=1e-6)
 
 
+def test_gpu_batch_matches_cpu():
+    """GPU batch SOS filter == per-row CPU (only runs in the CUDA-built wheel on a GPU host)."""
+    if not fluxion.cuda_available():
+        pytest.skip("not a CUDA build")
+    batch, frames = 64, 512
+    coeffs = np.array(
+        [0.2929, 0.5858, 0.2929, 0.0, 0.1716, 0.5, 0.3, -0.1, -0.2, 0.05], dtype=np.float32
+    )  # two stable sections
+    x = np.random.default_rng(0).standard_normal(batch * frames).astype(np.float32)
+
+    y_gpu = fluxion.sos_filter_batch_gpu(x, frames, coeffs)
+    y_cpu = np.concatenate(
+        [fluxion.sos_forward(x[r * frames : (r + 1) * frames], coeffs) for r in range(batch)]
+    )
+    assert float(np.max(np.abs(y_gpu - y_cpu))) < 1e-4
+
+
 def test_dlpack_torch_roundtrip():
     """Consume a torch tensor (DLPack) directly; hand the output back to torch via from_dlpack."""
     torch = pytest.importorskip("torch")

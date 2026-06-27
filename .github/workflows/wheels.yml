@@ -1,0 +1,64 @@
+name: wheels
+
+# Build distributable wheels. CPU wheels (the default build) are built here for every platform on a
+# version tag or manual dispatch. GPU wheels need a CUDA toolkit at build time and so are built
+# separately on a CUDA-equipped host — see the `gpu-wheel` note below.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  cpu-wheels:
+    name: CPU wheel (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release -m crates/fluxion-py/Cargo.toml --out dist
+          manylinux: auto
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-cpu-${{ matrix.os }}
+          path: dist
+
+  sdist:
+    name: sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: -m crates/fluxion-py/Cargo.toml --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist
+
+  # GPU wheel — built with the CUDA toolkit + the `cuda` feature. GitHub-hosted runners have no CUDA
+  # toolkit, so this runs on a self-hosted CUDA runner (label `cuda`). It's verified manually on the
+  # RTX 3070 dev box meanwhile (`maturin build --release --features cuda -m crates/fluxion-py/Cargo.toml`).
+  # The resulting wheel is tagged with a `+cuXX` local version before publishing so pip can pick CPU
+  # vs GPU. Enable by registering a self-hosted runner; left here as the build recipe.
+  gpu-wheel:
+    name: GPU wheel (CUDA)
+    if: false # flip to a self-hosted CUDA runner to enable
+    runs-on: [self-hosted, cuda]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --features cuda -m crates/fluxion-py/Cargo.toml --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-gpu
+          path: dist

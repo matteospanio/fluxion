@@ -6,6 +6,7 @@ SOS primitives. Framework autograd adapters live in the optional submodules :mod
 have torch / jax installed.
 """
 
+from ._fluxion import __cuda__
 from ._fluxion import (
     Chain,
     allpass,
@@ -44,4 +45,17 @@ __all__ = [
     "echo",
     "sos_forward",
     "sos_backward",
+    "cuda_available",
 ]
+
+
+def cuda_available() -> bool:
+    """True if this wheel was built with CUDA support (the "GPU wheel")."""
+    return bool(__cuda__)
+
+
+# The GPU batch filter exists only in the CUDA-built wheel.
+if __cuda__:
+    from ._fluxion import sos_filter_batch_gpu  # noqa: F401
+
+    __all__.append("sos_filter_batch_gpu")

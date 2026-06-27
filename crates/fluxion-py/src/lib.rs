@@ -189,9 +189,35 @@ fn sos_backward<'py>(
     Ok((grad_x.into_pyarray_bound(py), gc.into_pyarray_bound(py)))
 }
 
+/// Filter a flat batch of `len(x) / frames` equal-length rows through an SOS cascade on the GPU
+/// (CUDA). `coeffs` is flat `[b0,b1,b2,a1,a2]·n_sections`; returns the flat filtered batch. Available
+/// only in the CUDA-built ("GPU") wheel — check [`__cuda__`]. The kernel is bit-accurate vs the CPU
+/// path; a one-shot call is transfer-bound, so it pays off on resident/reused data.
+#[cfg(feature = "cuda")]
+#[pyfunction]
+fn sos_filter_batch_gpu<'py>(
+    py: Python<'py>,
+    x: &Bound<'py, PyAny>,
+    frames: usize,
+    coeffs: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyArray1<f32>>> {
+    let (x, coeffs) = (as_f32_1d(x)?, as_f32_1d(coeffs)?);
+    let (x, coeffs) = (x.readonly(), coeffs.readonly());
+    let sos = to_sos(coeffs.as_slice()?)?;
+    if frames == 0 || x.as_slice()?.len() % frames != 0 {
+        return Err(PyValueError::new_err("len(x) must be a positive multiple of frames"));
+    }
+    let out = fluxion_backend::cuda::sos_filter_batch(x.as_slice()?, frames, &sos);
+    Ok(out.into_pyarray_bound(py))
+}
+
 #[pymodule]
 fn _fluxion(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Chain>()?;
+    // True in the CUDA-built ("GPU") wheel, False in the default ("CPU") wheel.
+    m.add("__cuda__", cfg!(feature = "cuda"))?;
+    #[cfg(feature = "cuda")]
+    m.add_function(wrap_pyfunction!(sos_filter_batch_gpu, m)?)?;
     macro_rules! add {
         ($($f:ident),* $(,)?) => { $( m.add_function(wrap_pyfunction!($f, m)?)?; )* };
     }
