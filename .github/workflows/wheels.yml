@@ -19,10 +19,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # One abi3 wheel (cp310-abi3) covers CPython 3.10+; pin the build interpreter to 3.12 since
+      # PyO3 0.22 doesn't support 3.14 (the runners' default).
       - uses: PyO3/maturin-action@v1
         with:
           command: build
-          args: --release -m crates/fluxion-py/Cargo.toml --out dist
+          args: --release -m crates/fluxion-py/Cargo.toml --out dist --interpreter 3.12
           manylinux: auto
       - uses: actions/upload-artifact@v4
         with:

@@ -26,7 +26,8 @@ name = "_fluxion"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.22", features = ["extension-module"] }
+# abi3-py310: build a single stable-ABI wheel that works on CPython 3.10+ (one wheel, not per-version).
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py310"] }
 numpy = "0.22"
 fluxion-core = { path = "../fluxion-core" }
 fluxion-ops = { path = "../fluxion-ops" }
