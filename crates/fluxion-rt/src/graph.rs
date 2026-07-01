@@ -59,6 +59,23 @@ pub enum RtGraph {
         frac: f32,
         mix: f32,
     },
+    /// Damped feedback comb: `y[n] = x[n] + g·lp(y[n-d])`, `lp = yd·(1-damp) + lp·damp` (the reverb
+    /// building block). `yring` is the `d`-sample history of `y`; `lp` is the one-pole state.
+    Comb {
+        yring: Vec<f32>,
+        idx: usize,
+        lp: f32,
+        g: f32,
+        damp: f32,
+    },
+    /// Schroeder all-pass: `y[n] = -g·x[n] + x[n-d] + g·y[n-d]` (diffuses phase, flat magnitude).
+    /// `xring`/`yring` are the `d`-sample histories of the input and output.
+    Allpass {
+        xring: Vec<f32>,
+        yring: Vec<f32>,
+        idx: usize,
+        g: f32,
+    },
 }
 
 impl RtGraph {
@@ -130,6 +147,57 @@ impl RtGraph {
         }
     }
 
+    /// A damped feedback-comb leaf: `y[n] = x[n] + g·lp(y[n-d])`, `d = max(1, delay_samples)`.
+    pub fn comb(delay_samples: usize, g: f32, damp: f32) -> Self {
+        RtGraph::Comb {
+            yring: vec![0.0; delay_samples.max(1)],
+            idx: 0,
+            lp: 0.0,
+            g,
+            damp,
+        }
+    }
+
+    /// A Schroeder all-pass leaf: `y[n] = -g·x[n] + x[n-d] + g·y[n-d]`, `d = max(1, delay_samples)`.
+    pub fn allpass(delay_samples: usize, g: f32) -> Self {
+        let d = delay_samples.max(1);
+        RtGraph::Allpass {
+            xring: vec![0.0; d],
+            yring: vec![0.0; d],
+            idx: 0,
+            g,
+        }
+    }
+
+    /// A realtime Schroeder–Moorer reverb, built from the same Freeverb topology as the offline
+    /// [`fluxion_ops::reverb`]: four parallel damped combs, averaged, then two series all-passes, wet/
+    /// dry-blended by `mix`. `room_size` sets the comb feedback (clamped `< 1` for BIBO stability),
+    /// `damping` rolls off the tail's high end. Streaming it matches the offline reverb sample-for-
+    /// sample; assembled purely from [`comb`](Self::comb)/[`allpass`](Self::allpass) leaves and the
+    /// series/parallel/gain algebra, so it is alloc-free after [`prepare`](Self::prepare).
+    pub fn reverb(room_size: f32, damping: f32, mix: f32) -> Self {
+        const COMB_DELAYS: [usize; 4] = [1557, 1617, 1491, 1422];
+        const ALLPASS_DELAYS: [usize; 2] = [225, 556];
+        let g = room_size.clamp(0.0, 0.98);
+        let damp = damping.clamp(0.0, 1.0);
+
+        // Sum of the four combs, then average (×0.25).
+        let mut combs = RtGraph::comb(COMB_DELAYS[0], g, damp);
+        for &d in &COMB_DELAYS[1..] {
+            combs = RtGraph::parallel(combs, RtGraph::comb(d, g, damp));
+        }
+        let mut wet = RtGraph::series(combs, RtGraph::gain(0.25));
+        // Series all-pass diffusion.
+        for &d in &ALLPASS_DELAYS {
+            wet = RtGraph::series(wet, RtGraph::allpass(d, 0.5));
+        }
+        // Wet/dry: (1-mix)·x + mix·wet — both branches on the same input, summed.
+        RtGraph::parallel(
+            RtGraph::gain(1.0 - mix),
+            RtGraph::series(wet, RtGraph::gain(mix)),
+        )
+    }
+
     /// Pre-size every internal scratch buffer for blocks up to `max_block` samples. This is the only
     /// allocating step — call it before going realtime. Blocks passed to [`process`](Self::process)
     /// must not exceed `max_block`.
@@ -140,7 +208,9 @@ impl RtGraph {
             | RtGraph::Gain(_)
             | RtGraph::Delay { .. }
             | RtGraph::Echo { .. }
-            | RtGraph::DelayFrac { .. } => {}
+            | RtGraph::DelayFrac { .. }
+            | RtGraph::Comb { .. }
+            | RtGraph::Allpass { .. } => {}
             RtGraph::Series {
                 first,
                 second,
@@ -249,6 +319,46 @@ impl RtGraph {
                     *o = (1.0 - mix) * x + mix * xd;
                 }
             }
+            RtGraph::Comb {
+                yring,
+                idx,
+                lp,
+                g,
+                damp,
+            } => {
+                let d = yring.len();
+                let (g, damp) = (*g, *damp);
+                for (o, &x) in output.iter_mut().zip(input) {
+                    let yd = yring[*idx]; // y[n-d]
+                    *lp = yd * (1.0 - damp) + *lp * damp;
+                    let y = x + g * *lp;
+                    *o = y;
+                    yring[*idx] = y;
+                    *idx += 1;
+                    if *idx == d {
+                        *idx = 0;
+                    }
+                }
+            }
+            RtGraph::Allpass {
+                xring,
+                yring,
+                idx,
+                g,
+            } => {
+                let d = xring.len();
+                let g = *g;
+                for (o, &x) in output.iter_mut().zip(input) {
+                    let y = -g * x + xring[*idx] + g * yring[*idx]; // -g·x + x[n-d] + g·y[n-d]
+                    *o = y;
+                    xring[*idx] = x;
+                    yring[*idx] = y;
+                    *idx += 1;
+                    if *idx == d {
+                        *idx = 0;
+                    }
+                }
+            }
         }
     }
 
@@ -280,6 +390,18 @@ impl RtGraph {
                 ring.iter_mut().for_each(|s| *s = 0.0);
                 *w = 0;
             }
+            RtGraph::Comb { yring, idx, lp, .. } => {
+                yring.iter_mut().for_each(|s| *s = 0.0);
+                *idx = 0;
+                *lp = 0.0;
+            }
+            RtGraph::Allpass {
+                xring, yring, idx, ..
+            } => {
+                xring.iter_mut().for_each(|s| *s = 0.0);
+                yring.iter_mut().for_each(|s| *s = 0.0);
+                *idx = 0;
+            }
         }
     }
 }
@@ -287,7 +409,7 @@ impl RtGraph {
 #[cfg(test)]
 mod tests {
     use super::RtGraph;
-    use fluxion_ops::{butterworth_highpass, butterworth_lowpass, delay, echo, sos_filter};
+    use fluxion_ops::{butterworth_highpass, butterworth_lowpass, delay, echo, reverb, sos_filter};
 
     fn stream_chunks(g: &mut RtGraph, x: &[f32], block: usize) -> Vec<f32> {
         let mut out = vec![0.0f32; block];
@@ -419,6 +541,21 @@ mod tests {
         let b = stream_chunks(&mut int, &x, 50);
         for (p, q) in a.iter().zip(&b) {
             assert!((p - q).abs() < 1e-6, "{p} vs {q}");
+        }
+    }
+
+    #[test]
+    fn reverb_node_matches_batch() {
+        // Streaming the RtGraph reverb must equal the offline Freeverb sample-for-sample.
+        let x = signal(6000);
+        let (room, damp, mix) = (0.8f32, 0.3f32, 0.5f32);
+        let mut g = RtGraph::reverb(room, damp, mix);
+        g.prepare(256);
+        let streamed = stream_chunks(&mut g, &x, 256);
+        let want = reverb(&x, room, damp, mix);
+        assert_eq!(streamed.len(), want.len());
+        for (i, (a, b)) in streamed.iter().zip(&want).enumerate() {
+            assert!((a - b).abs() < 1e-4, "reverb at {i}: {a} vs {b}");
         }
     }
 

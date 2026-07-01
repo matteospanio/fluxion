@@ -272,6 +272,7 @@ fn op_rt(op: &Op, fs: u32) -> Option<RtGraph> {
         OpKind::Gain => Some(RtGraph::gain(p[0])),
         OpKind::Delay => Some(RtGraph::delay(to_samples(p[0]), p[1])),
         OpKind::Echo => Some(RtGraph::echo(to_samples(p[0]), p[1], p[2])),
+        OpKind::Reverb => Some(RtGraph::reverb(p[0], p[1], p[2])),
         _ => None, // Normalize (whole-signal) and any future non-realtime op
     }
 }
@@ -445,6 +446,32 @@ mod tests {
         }
         // Normalize needs the whole signal, so it can't be lowered to a realtime graph.
         assert!(to_rt_graph(&Graph::op(OpKind::Normalize, [1.0]), fs).is_none());
+    }
+
+    #[test]
+    fn to_rt_graph_lowers_reverb() {
+        // Reverb is now realtime-playable (G7): lowering + streaming matches the offline process.
+        let g =
+            Graph::op(OpKind::Lowpass, [3_000.0, 2.0]) | Graph::op(OpKind::Reverb, [0.8, 0.3, 0.5]);
+        let fs = 48_000;
+        let x: Vec<f32> = (0..6_000).map(|i| (0.05 * i as f32).sin()).collect();
+        let batch = process(&g, &Signal::new(fs, vec![x.clone()]))
+            .channels
+            .remove(0);
+
+        let mut rt = to_rt_graph(&g, fs).unwrap();
+        rt.prepare(256);
+        let mut out = vec![0.0f32; 256];
+        let mut streamed = Vec::with_capacity(x.len());
+        for chunk in x.chunks(256) {
+            let out = &mut out[..chunk.len()];
+            rt.process(chunk, out);
+            streamed.extend_from_slice(out);
+        }
+        assert_eq!(streamed.len(), batch.len());
+        for (i, (a, b)) in streamed.iter().zip(&batch).enumerate() {
+            assert!((a - b).abs() < 1e-3, "at {i}: {a} vs {b}");
+        }
     }
 
     #[test]
