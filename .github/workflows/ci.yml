@@ -36,6 +36,20 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+  autodiff:
+    name: autodiff (Burn CPU)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # The Burn integration is behind an optional feature, so the default `test`/`lint` jobs skip it.
+      # Exercise its analytic-VJP custom ops (sos, sos_trainable, sos_design, fir_trainable) here.
+      - run: cargo clippy -p fluxion-autodiff --features burn --all-targets --locked -- -D warnings
+      - run: cargo test -p fluxion-autodiff --features burn --locked
+
   deny:
     name: cargo-deny (licenses & advisories)
     runs-on: ubuntu-latest

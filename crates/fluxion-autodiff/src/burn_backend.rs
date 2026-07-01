@@ -5,11 +5,15 @@
 //! Backend-agnostic: differentiates on `Autodiff<NdArray>` (CPU) or `Autodiff<Cuda>` (GPU, validated
 //! in `spikes/f0-burn-cuda`). Forward reuses [`fluxion_ops::sos_filter`].
 //!
-//! Two ops:
+//! Ops:
 //! - [`sos`] — fixed coefficients; differentiates the **input** (the composable gradient).
 //! - [`sos_trainable`] — coefficients are a Burn tensor too, so the **filter's own parameters
 //!   train** (the DDSP case): input gradient via the adjoint, coefficient gradient via
 //!   [`fluxion_ops::sos_vjp`].
+//! - [`sos_design`] — the cascade is **designed** from trainable params (`cutoff`/`Q`/`gain`), so
+//!   training stays on the always-stable design manifold ([`fluxion_ops::design_param_grad`] ∘
+//!   [`fluxion_ops::sos_vjp`]) — the DDSP `cutoff_learnable` reparameterisation.
+//! - [`fir_trainable`] — a FIR whose taps are a Burn tensor ([`fluxion_ops::fir_vjp`]).
 //!
 //! These run the forward/backward on the host (backend-agnostic). For a GPU-resident path — the
 //! kernels launched directly on a resident Burn tensor, no host roundtrip — see [`crate::cuda`]
@@ -24,7 +28,9 @@ use burn::tensor::backend::Backend;
 use burn::tensor::ops::FloatTensor;
 use burn::tensor::{Tensor, TensorData, TensorPrimitive};
 
-use fluxion_ops::{Biquad, sos_filter, sos_input_grad, sos_vjp};
+use fluxion_ops::{
+    Biquad, design_param_grad, fir_filter, fir_vjp, sos_filter, sos_input_grad, sos_vjp,
+};
 
 /// Run `f` over a 1-D float primitive via a host roundtrip (correctness-first; the GPU-kernel path
 /// replaces this later). The output length may differ from the input (e.g. a coefficient gradient).
@@ -169,12 +175,152 @@ pub fn sos_trainable<B: Backend, K: CheckpointStrategy>(
     Tensor::from_primitive(TensorPrimitive::Float(out))
 }
 
+// ---------- trainable FIR (differentiates input AND taps) ----------
+
+#[derive(Debug)]
+struct FirTrainBackward {
+    taps: Vec<f32>,
+    input: Vec<f32>,
+}
+
+impl<B: Backend> Backward<B, 2> for FirTrainBackward {
+    type State = ();
+
+    fn backward(self, ops: Ops<(), 2>, grads: &mut Gradients, _cp: &mut Checkpointer) {
+        let (taps_x, taps_t) = (self.taps.clone(), self.taps);
+        let (in_x, in_t) = (self.input.clone(), self.input);
+        binary::<B, _, _>(
+            ops.parents,
+            ops.node,
+            grads,
+            // d/d(input): convolution adjoint (correlate the cotangent with the taps).
+            move |g| map_1d::<B>(g, move |gv| fir_vjp(&in_x, &taps_x, &gv).0),
+            // d/d(taps): correlate the cotangent with the input.
+            move |g| map_1d::<B>(g, move |gv| fir_vjp(&in_t, &taps_t, &gv).1),
+        );
+    }
+}
+
+/// Apply a FIR filter whose `taps` are a trainable Burn tensor. Differentiable in **both** the input
+/// and the taps (the canonical trained-FIR / DDSP artifact) — gradients via [`fluxion_ops::fir_vjp`].
+pub fn fir_trainable<B: Backend, K: CheckpointStrategy>(
+    x: Tensor<Autodiff<B, K>, 1>,
+    taps: Tensor<Autodiff<B, K>, 1>,
+) -> Tensor<Autodiff<B, K>, 1> {
+    let x_ad = x.into_primitive().tensor();
+    let t_ad = taps.into_primitive().tensor();
+    let taps_v = read::<B>(t_ad.primitive.clone());
+    let input = read::<B>(x_ad.primitive.clone());
+
+    let backward = FirTrainBackward {
+        taps: taps_v.clone(),
+        input,
+    };
+    let out = match backward
+        .prepare::<K>([x_ad.node.clone(), t_ad.node.clone()])
+        .compute_bound()
+        .stateful()
+    {
+        OpsKind::Tracked(prep) => prep.finish(
+            (),
+            map_1d::<B>(x_ad.primitive, move |v| fir_filter(&v, &taps_v)),
+        ),
+        OpsKind::UnTracked(prep) => prep.finish(map_1d::<B>(x_ad.primitive, move |v| {
+            fir_filter(&v, &taps_v)
+        })),
+    };
+    Tensor::from_primitive(TensorPrimitive::Float(out))
+}
+
+// ---------- learnable filter *design* (differentiates input AND design params) ----------
+
+#[derive(Debug)]
+struct SosDesignBackward {
+    design: fn(&[f32], u32) -> Vec<f32>,
+    params: Vec<f32>,
+    fs: u32,
+    input: Vec<f32>,
+}
+
+impl<B: Backend> Backward<B, 2> for SosDesignBackward {
+    type State = ();
+
+    fn backward(self, ops: Ops<(), 2>, grads: &mut Gradients, _cp: &mut Checkpointer) {
+        let SosDesignBackward {
+            design,
+            params,
+            fs,
+            input,
+        } = self;
+        let sos_x = to_sos(&design(&params, fs)); // for the input adjoint
+        binary::<B, _, _>(
+            ops.parents,
+            ops.node,
+            grads,
+            // d/d(input): the fixed-coefficient adjoint at the current design.
+            move |g| map_1d::<B>(g, move |gv| sos_input_grad(&gv, &sos_x)),
+            // d/d(params): ∂L/∂coeffs (sos_vjp) chained through ∂coeffs/∂params (design_param_grad).
+            move |g| {
+                map_1d::<B>(g, move |gv| {
+                    let sos = to_sos(&design(&params, fs));
+                    let (_, grad_bq) = sos_vjp(&input, &sos, &gv);
+                    let grad_coeffs: Vec<f32> = grad_bq
+                        .iter()
+                        .flat_map(|b| [b.b0, b.b1, b.b2, b.a1, b.a2])
+                        .collect();
+                    design_param_grad(&params, &grad_coeffs, |p| design(p, fs))
+                })
+            },
+        );
+    }
+}
+
+/// Filter `x` through a cascade **designed** from trainable `params`, so the design parameters
+/// (`cutoff`, `Q`, `gain`, …) train directly on the always-stable design manifold — the DDSP
+/// `cutoff_learnable` reparameterisation (PROJECT.md §8.2). `design(params, fs)` is any closed-form
+/// design flattened to `[b0,b1,b2,a1,a2]` per section (e.g. a fn calling
+/// [`fluxion_ops::butterworth_lowpass`]). Differentiable in input (adjoint) and params
+/// ([`fluxion_ops::design_param_grad`] ∘ [`fluxion_ops::sos_vjp`]).
+pub fn sos_design<B: Backend, K: CheckpointStrategy>(
+    x: Tensor<Autodiff<B, K>, 1>,
+    params: Tensor<Autodiff<B, K>, 1>,
+    design: fn(&[f32], u32) -> Vec<f32>,
+    fs: u32,
+) -> Tensor<Autodiff<B, K>, 1> {
+    let x_ad = x.into_primitive().tensor();
+    let p_ad = params.into_primitive().tensor();
+    let params_v = read::<B>(p_ad.primitive.clone());
+    let input = read::<B>(x_ad.primitive.clone());
+    let sos_fwd = to_sos(&design(&params_v, fs));
+
+    let backward = SosDesignBackward {
+        design,
+        params: params_v,
+        fs,
+        input,
+    };
+    let out = match backward
+        .prepare::<K>([x_ad.node.clone(), p_ad.node.clone()])
+        .compute_bound()
+        .stateful()
+    {
+        OpsKind::Tracked(prep) => prep.finish(
+            (),
+            map_1d::<B>(x_ad.primitive, move |v| sos_filter(&v, &sos_fwd)),
+        ),
+        OpsKind::UnTracked(prep) => prep.finish(map_1d::<B>(x_ad.primitive, move |v| {
+            sos_filter(&v, &sos_fwd)
+        })),
+    };
+    Tensor::from_primitive(TensorPrimitive::Float(out))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{sos, sos_trainable};
+    use super::{fir_trainable, sos, sos_design, sos_trainable, to_sos};
     use burn::backend::{Autodiff, NdArray};
     use burn::tensor::Tensor;
-    use fluxion_ops::{Biquad, butterworth_lowpass, sos_filter};
+    use fluxion_ops::{Biquad, butterworth_lowpass, fir_filter, sos_filter};
 
     type B = Autodiff<NdArray>;
 
@@ -262,6 +408,98 @@ mod tests {
                 gc[j]
             );
         }
+    }
+
+    #[test]
+    fn fir_gradients_gradcheck() {
+        let device = Default::default();
+        let taps = vec![0.2f32, -0.5, 0.3, 0.1];
+        let xs: Vec<f32> = (0..24).map(|i| (0.3 * i as f32).sin()).collect();
+        let seed: Vec<f32> = (0..24).map(|i| (0.17 * i as f32 + 1.0).cos()).collect();
+        let seed_t = Tensor::<B, 1>::from_floats(seed.as_slice(), &device);
+
+        let x = Tensor::<B, 1>::from_floats(xs.as_slice(), &device).require_grad();
+        let t = Tensor::<B, 1>::from_floats(taps.as_slice(), &device).require_grad();
+        let loss = (fir_trainable(x.clone(), t.clone()) * seed_t).sum();
+        let grads = loss.backward();
+        let gx = x.grad(&grads).unwrap().into_data().to_vec::<f32>().unwrap();
+        let gt = t.grad(&grads).unwrap().into_data().to_vec::<f32>().unwrap();
+
+        let eps = 1e-3;
+        let dot_x = |v: &[f32]| {
+            fir_filter(v, &taps)
+                .iter()
+                .zip(&seed)
+                .map(|(a, b)| a * b)
+                .sum::<f32>()
+        };
+        for i in 0..xs.len() {
+            let (mut hi, mut lo) = (xs.clone(), xs.clone());
+            hi[i] += eps;
+            lo[i] -= eps;
+            let fd = (dot_x(&hi) - dot_x(&lo)) / (2.0 * eps);
+            assert!((gx[i] - fd).abs() < 1e-2, "gx[{i}] = {} vs fd {fd}", gx[i]);
+        }
+        let dot_t = |tp: &[f32]| {
+            fir_filter(&xs, tp)
+                .iter()
+                .zip(&seed)
+                .map(|(a, b)| a * b)
+                .sum::<f32>()
+        };
+        for j in 0..taps.len() {
+            let (mut hi, mut lo) = (taps.clone(), taps.clone());
+            hi[j] += eps;
+            lo[j] -= eps;
+            let fd = (dot_t(&hi) - dot_t(&lo)) / (2.0 * eps);
+            assert!((gt[j] - fd).abs() < 1e-2, "gt[{j}] = {} vs fd {fd}", gt[j]);
+        }
+    }
+
+    /// A 4th-order Butterworth low-pass designed from `params[0] = cutoff`, flattened to coeffs.
+    fn lp4(p: &[f32], fs: u32) -> Vec<f32> {
+        butterworth_lowpass(4, p[0], fs)
+            .iter()
+            .flat_map(|b| [b.b0, b.b1, b.b2, b.a1, b.a2])
+            .collect()
+    }
+
+    #[test]
+    fn design_param_gradient_gradchecks() {
+        // The learnable-cutoff op: ∂L/∂cutoff flows through Burn's tape via the design Jacobian.
+        let device = Default::default();
+        let fs = 48_000u32;
+        let xs: Vec<f32> = (0..64).map(|i| (0.3 * i as f32).sin()).collect();
+        let seed: Vec<f32> = (0..64).map(|i| (0.2 * i as f32 + 0.5).cos()).collect();
+        let seed_t = Tensor::<B, 1>::from_floats(seed.as_slice(), &device);
+        let cutoff = 3_000.0f32;
+
+        let x = Tensor::<B, 1>::from_floats(xs.as_slice(), &device).require_grad();
+        let p = Tensor::<B, 1>::from_floats([cutoff].as_slice(), &device).require_grad();
+        let loss = (sos_design(x.clone(), p.clone(), lp4, fs) * seed_t).sum();
+        let gp = p
+            .grad(&loss.backward())
+            .unwrap()
+            .into_data()
+            .to_vec::<f32>()
+            .unwrap();
+
+        // FD of the loss w.r.t. cutoff through the whole design → filter.
+        let dot = |c: f32| {
+            let sos = to_sos(&lp4(&[c], fs));
+            sos_filter(&xs, &sos)
+                .iter()
+                .zip(&seed)
+                .map(|(a, b)| a * b)
+                .sum::<f32>()
+        };
+        let h = 1.0;
+        let fd = (dot(cutoff + h) - dot(cutoff - h)) / (2.0 * h);
+        assert!(
+            (gp[0] - fd).abs() <= 1e-2 * fd.abs().max(1e-3),
+            "cutoff grad {} vs fd {fd}",
+            gp[0]
+        );
     }
 
     #[test]
