@@ -427,7 +427,9 @@ mod tests {
     use super::{delay, echo, fir_trainable, sos, sos_design, sos_trainable, to_sos};
     use burn::backend::{Autodiff, NdArray};
     use burn::tensor::Tensor;
-    use fluxion_ops::{Biquad, butterworth_lowpass, fir_filter, sos_filter};
+    use fluxion_ops::{
+        Biquad, butterworth_lowpass, certify_biquad, fir_filter, project_stable_flat, sos_filter,
+    };
 
     type B = Autodiff<NdArray>;
 
@@ -741,5 +743,64 @@ mod tests {
         for (got, want) in [(coeffs[0], 0.5), (coeffs[1], 0.3), (coeffs[2], -0.2)] {
             assert!((got - want).abs() < 1e-2, "coeff {got} vs {want}");
         }
+    }
+
+    #[test]
+    fn free_coeff_training_stays_stable_with_in_loop_projection() {
+        // Train ALL five coefficients (numerator AND the raw feedback a1,a2) to match a target
+        // filter's output, projecting into the Jury triangle after each step (E8). The projection
+        // keeps every iterate strictly stable, so free-coefficient training stays bounded and
+        // converges instead of drifting outside the unit circle and blowing up.
+        let device = Default::default();
+        let target = butterworth_lowpass(2, 4_000.0, 48_000)[0];
+        let mut s = 0x9e37_79b9u32;
+        let xs: Vec<f32> = (0..128)
+            .map(|_| {
+                s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (s >> 9) as f32 / (1u32 << 22) as f32 - 1.0
+            })
+            .collect();
+        let target_y = sos_filter(&xs, &[target]);
+        let xt = Tensor::<B, 1>::from_floats(xs.as_slice(), &device);
+        let tt = Tensor::<B, 1>::from_floats(target_y.as_slice(), &device);
+
+        // Start from a different but stable biquad; project to be safe.
+        let mut coeffs = vec![0.6f32, 0.1, 0.0, -0.4, 0.1];
+        project_stable_flat(&mut coeffs, 1e-3);
+        let mse = |c: &[f32]| {
+            sos_filter(&xs, &[bq_of(c)])
+                .iter()
+                .zip(&target_y)
+                .map(|(y, t)| (y - t) * (y - t))
+                .sum::<f32>()
+        };
+        let initial = mse(&coeffs);
+        let lr = 5e-3f32;
+        for _ in 0..6_000 {
+            let ct = Tensor::<B, 1>::from_floats(coeffs.as_slice(), &device).require_grad();
+            let loss = (sos_trainable(xt.clone(), ct.clone()) - tt.clone())
+                .powf_scalar(2.0)
+                .sum();
+            let gc = ct
+                .grad(&loss.backward())
+                .unwrap()
+                .into_data()
+                .to_vec::<f32>()
+                .unwrap();
+            for (c, g) in coeffs.iter_mut().zip(&gc) {
+                *c -= lr * g.clamp(-1.0, 1.0); // clip the raw step; projection then re-stabilizes a1,a2
+            }
+            project_stable_flat(&mut coeffs, 1e-3);
+            // Invariant: every iterate is strictly stable (never leaves the unit circle).
+            assert!(
+                certify_biquad(&bq_of(&coeffs)).verdict.is_shippable(),
+                "unstable iterate {coeffs:?}"
+            );
+        }
+        assert!(
+            mse(&coeffs) < initial * 0.1,
+            "did not converge: {initial} -> {}",
+            mse(&coeffs)
+        );
     }
 }

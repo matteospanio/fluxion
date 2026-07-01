@@ -37,4 +37,7 @@ pub use iir::{
 };
 pub use rbj::{allpass, bandpass, high_shelf, low_shelf, notch, peaking};
 pub use reverb::reverb;
-pub use stability::{Certificate, Verdict, certify_biquad, certify_sos, small_gain_certify};
+pub use stability::{
+    Certificate, Verdict, certify_biquad, certify_sos, project_stable, project_stable_flat,
+    small_gain_certify,
+};

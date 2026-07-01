@@ -245,6 +245,7 @@ concurrently (ideally one contributor or one worktree per lane).
   - **E4** DONE: `normalize_vjp` (argmax-corrected peak-normalize adjoint). *(sum = the parallel-graph combine, handled by the graph adjoint; no standalone mask/DC ops exist.)*
   - **C1** DONE: `Backend` trait + one generic `eval(&B, graph, x, fs)` dispatch surface; `process` is now `eval::<Cpu>`.
   - **E12** DONE: `fluxion-autodiff::graph` impls `Backend` over Burn tensors → `diff_process` differentiates a whole `Graph`; exposed as `fluxion::diff_process` (`--features autodiff`). Composed gradient verified bit-identical to the hand-derived CPU analytic adjoint. **`fluxion-autodiff` is no longer orphaned — goal #1 is reachable from the facade.**
-  - **E9** DONE: `learn_cutoff` example (Burn autograd end-to-end, converges 1200→3000 Hz). **E8** partial: reverb feedback now small-gain-certified (was a silent `_ => certified()`); in-loop training stability projection still open.
-  - Still open in Epic E: none of the above; the remaining differentiable work is E8's in-loop projection.
+  - **E9** DONE: `learn_cutoff` example (Burn autograd end-to-end, converges 1200→3000 Hz).
+  - **E8** DONE: reverb feedback now small-gain-certified (was a silent `_ => certified()`); `project_stable`/`project_stable_flat` clamp `(a1,a2)` into the Jury triangle for the in-loop projection — free-coefficient training (all 5 coeffs) stays strictly stable every iterate and converges.
+  - **Epic E is complete.**
   - CI gap fixed: the Burn integration (behind an optional feature) was never exercised in CI; a new `autodiff (Burn CPU)` job now runs it plus the facade `--features autodiff`.

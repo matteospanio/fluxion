@@ -155,10 +155,60 @@ pub fn small_gain_certify(loop_gain: impl Fn(f32) -> f32, n: usize) -> Certifica
     Certificate::from_radius(sup)
 }
 
+/// Project a biquad's denominator `(a1, a2)` into the **Jury stability triangle** so every pole sits
+/// strictly inside the unit circle; the numerator is left untouched.
+///
+/// This is the *in-loop* stability projection for training **raw** SOS coefficients — free `a1,a2`
+/// can drift outside the unit circle mid-optimization and the filter blows up. Apply it after each
+/// optimizer step. (Training design parameters instead — `cutoff`/`Q` via
+/// [`crate::design_param_grad`] — stays stable by construction and needs no projection.)
+///
+/// The strict-stability region for `1 + a1·z⁻¹ + a2·z⁻²` is `|a2| < 1` and `|a1| < 1 + a2`.
+/// `margin ∈ [0, 1)` shrinks it to hold a safety buffer off the boundary.
+///
+/// ponytail: a coordinate clamp into the (shrunk) triangle, not the nearest-point Euclidean
+/// projection — it guarantees stability and keeps a training loop bounded, which is all it's for.
+/// Upgrade to the true projection only if minimal-displacement matters for convergence.
+///
+/// # Examples
+/// ```
+/// use fluxion_ops::{project_stable, Biquad};
+/// let unstable = Biquad { b0: 1.0, b1: 0.0, b2: 0.0, a1: 0.0, a2: 1.5 }; // poles at |z| ≈ 1.22
+/// let stable = project_stable(unstable, 1e-2);
+/// assert!(stable.spectral_radius() < 1.0);
+/// ```
+pub fn project_stable(bq: Biquad, margin: f32) -> Biquad {
+    let m = margin.clamp(0.0, 0.999);
+    let a2 = bq.a2.clamp(-(1.0 - m), 1.0 - m);
+    let lim = (1.0 + a2 - m).max(0.0); // |a1| < 1 + a2
+    let a1 = bq.a1.clamp(-lim, lim);
+    Biquad { a1, a2, ..bq }
+}
+
+/// Project every biquad's `(a1, a2)` in a flat `[b0,b1,b2,a1,a2]·n` coefficient vector into the Jury
+/// stability triangle in place ([`project_stable`]) — the convenient in-loop call for a trained SOS
+/// coefficient tensor.
+pub fn project_stable_flat(coeffs: &mut [f32], margin: f32) {
+    for c in coeffs.chunks_exact_mut(5) {
+        let p = project_stable(
+            Biquad {
+                b0: c[0],
+                b1: c[1],
+                b2: c[2],
+                a1: c[3],
+                a2: c[4],
+            },
+            margin,
+        );
+        c[3] = p.a1;
+        c[4] = p.a2;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::butterworth_lowpass;
+    use crate::{butterworth_lowpass, sos_filter};
 
     fn bq(a1: f32, a2: f32) -> Biquad {
         Biquad {
@@ -228,5 +278,47 @@ mod tests {
         let stable = Certificate::certified();
         let unstable = certify_biquad(&bq(0.0, 1.5));
         assert_eq!(stable.worst(unstable).verdict, Verdict::Unstable);
+    }
+
+    #[test]
+    fn projection_lands_in_the_stable_region() {
+        // Every (a1, a2) — stable or not — projects to a strictly-stable, shippable biquad.
+        for &a1 in &[-3.0, -1.9, -1.0, 0.0, 1.0, 1.9, 3.0] {
+            for &a2 in &[-2.0, -0.9, 0.0, 0.9, 1.5, 2.0] {
+                let p = project_stable(bq(a1, a2), 1e-2);
+                let r = p.spectral_radius();
+                assert!(r < 1.0, "a1={a1} a2={a2} -> radius {r}");
+                assert!(certify_biquad(&p).verdict.is_shippable());
+            }
+        }
+    }
+
+    #[test]
+    fn projection_preserves_a_stable_interior_and_the_numerator() {
+        let inside = Biquad {
+            b0: 0.5,
+            b1: -0.2,
+            b2: 0.1,
+            a1: 0.3,
+            a2: 0.2,
+        };
+        let p = project_stable(inside, 1e-2);
+        assert_eq!((p.a1, p.a2), (inside.a1, inside.a2)); // well inside → unchanged
+        assert_eq!((p.b0, p.b1, p.b2), (inside.b0, inside.b1, inside.b2)); // numerator untouched
+    }
+
+    #[test]
+    fn projection_keeps_the_impulse_response_bounded() {
+        // An unstable denominator blows the impulse response up; projection tames it to bounded.
+        let mut impulse = vec![0.0f32; 256];
+        impulse[0] = 1.0;
+
+        let unstable = bq(0.0, 1.5); // |z| ≈ 1.22 → 1.5^128 overflows f32
+        assert_eq!(certify_biquad(&unstable).verdict, Verdict::Unstable);
+        let blown = sos_filter(&impulse, &[unstable]);
+        assert!(blown.iter().any(|&x| !x.is_finite() || x.abs() > 1e3));
+
+        let tamed = sos_filter(&impulse, &[project_stable(unstable, 1e-2)]);
+        assert!(tamed.iter().all(|&x| x.is_finite() && x.abs() <= 1.01));
     }
 }
