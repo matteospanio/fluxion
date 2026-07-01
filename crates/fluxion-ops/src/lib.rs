@@ -16,6 +16,7 @@
 
 pub mod chebyshev;
 pub mod delay;
+pub mod design;
 pub mod effect;
 pub mod fir;
 pub mod iir;
@@ -27,6 +28,7 @@ pub use chebyshev::{
     chebyshev1_highpass, chebyshev1_lowpass, chebyshev2_highpass, chebyshev2_lowpass,
 };
 pub use delay::{delay, delay_vjp, echo, echo_vjp};
+pub use design::design_param_grad;
 pub use effect::{gain, gain_vjp, normalize_peak};
 pub use fir::{fft_convolve, fir_filter, fir_vjp};
 pub use iir::{

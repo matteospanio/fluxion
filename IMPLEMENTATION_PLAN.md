@@ -63,6 +63,8 @@ parallelizable around it.
 | B5 | `.fxg` (de)serialization of a graph + frozen coeffs (serde). | P1 | M | B1 | ✓ |
 | B6 | `Display`/DSL pretty-printer for graphs (CLI + debug). | P2 | S | B1 | ✓ |
 | B7 | Property tests for algebra laws (series assoc., parallel sum commutes). | P1 | S | B1 | ✓ |
+| B8 | Node identity (name or positional path) for graph nodes + decide the feedback `~` operator. **Review (2026-06-28):** the IR is an anonymous `Series`/`Parallel` binary tree today (`graph.rs:22-32`), which blocks per-node RT param automation (G9), the `~` operator (PROJECT.md §5), and FLAMO named-module import (J13). A binary tree can't encode a cycle, so `~` needs a third construct. Settle before `.fxg` freezes at 1.0. | P1 | M | B1 | ✓ |
+| B9 | Versioned serialization envelope `{version, kind, fs, payload}` around `.fxg`/`FrozenSos`. **Review (2026-06-28):** no version field exists today and `OpKind` is `#[non_exhaustive]`, so the op set *will* change and silently mis-decode old files; `.fxg` also carries no `fs`. Publish the documented `OpKind`→named-param/unit schema (already in the `ParamSpec` tables) and serialize params as a name→value map (positional `Vec<f32>` is unreadable to non-Rust consumers). safetensors sidecar for bulk learned tensors deferred until they exist (JSON f32 is bit-exact, just bulky). | P1 | S | B5 | ✓ |
 
 ## Epic C — Tensor & backend abstraction  *(crate: `fluxion-backend`)*
 
@@ -70,9 +72,10 @@ parallelizable around it.
 |----|------|---|----|------|---|
 | C1 | Define the `Backend` trait the ops target: `Buf` assoc type + primitive kernels (`map`, `zip`, `conv1d`, `biquad_scan`, `gather`, `rfft`/`irfft`). | P0 | M | — | — |
 | C2 | CPU backend: scalar-correct `Backend` impl over a channel×sample buffer. | P0 | M | C1 | — |
-| C3 | SIMD-accelerate CPU hot kernels (`pulp`/`wide`, runtime ISA dispatch). | P1 | M | C2, A4 | ✓ |
+| C3 | SIMD-accelerate CPU hot kernels (`pulp`/`wide`, runtime ISA dispatch). **Review (2026-06-28):** the one SIMD kernel that exists (`sos_filter_interleaved`, `iir.rs:192`) is *dead code* — never called by the executor/CLI/Python — and no build sets `-C target-cpu=native`, so shipped wheels emit baseline scalar. This task must (a) wire the interleaved kernel into the batch/multichannel path and (b) add **portable** runtime ISA dispatch, not a native-only build flag. | P1 | M | C2, A4 | ✓ |
 | C4 | Burn backend: `Backend` impl over Burn tensors (unlocks autodiff + GPU). | P1 | L | C1 | ✓ |
 | C5 | Backend/device selection + runtime dispatch (CPU ↔ Burn-CPU ↔ Burn-GPU). | P1 | M | C2, C4 | — |
+| C6 | Fuse the scalar `sos_filter` in registers (one buffer, no fresh `Vec` per biquad section — `iir.rs:175`) + route `process_batch`'s multichannel/non-pure-filter cases off the scalar per-signal loop (`rayon`) instead of the mono-only fast path (`backend/lib.rs:227-259`). | P1 | M | D4 | ✓ |
 
 ## Epic D — DSP ops: forward + coefficient design  *(crate: `fluxion-ops`)*
 
@@ -90,6 +93,7 @@ parallelizable around it.
 | D10 | Filterbank (band split) forward. | P2 | M | D4 | ✓ |
 | D11 | Op registry wiring: every op → `Graph` node + facade constructor, `Lo`/`Hi` naming. | P0 | M | B1, D1, D4, D7 | — |
 | D12 | Golden-vector correctness tests vs SciPy/reference oracle (per op). | P0 | M | each op | ✓ |
+| D13 | Wire FIR/FFT-conv into the `Graph` as an `OpKind` (+ facade constructor, `apply_op`, lowering). **Review (2026-06-28):** the forward exists (D5) but FIR is not yet a graph op, so it can't be composed, frozen, or played — a precursor to the realtime FIR node (G8) and to playing trained FIRs. | P1 | S | D5, D11 | ✓ |
 
 ## Epic E — Differentiability: analytic backward + autodiff  *(crates: `fluxion-ops`, `fluxion-autodiff`)*
 
@@ -102,8 +106,11 @@ parallelizable around it.
 | E5 | VJP for reverb/echo. **Echo DONE (2026-06-27):** `echo_vjp` — input grad via the adjoint (time-reversed) feedback loop, grad_feedback + grad_wet via forward intermediates; gradcheck passes. Reverb VJP (recursive combs/all-pass) still deferred. | P2 | M | D8, D9, E3 | ✓ |
 | E6 | Burn `Autodiff` integration: register ops’ owned backward so `loss.backward()` flows. **DONE (2026-06-26):** `fluxion-autodiff` `burn` feature wraps a biquad as a Burn custom op whose backward is the analytic LTI adjoint — gradcheck passes through Burn's tape, backend-agnostic (`Autodiff<NdArray>` tested; `Autodiff<Cuda>` proven in the spike). Coefficient gradients DONE too — `sos_trainable` (binary custom op over input + a trainable coeff tensor, `sos_vjp` for `grad_coeffs`): gradcheck passes and a filter's b-coeffs fit a target through Burn ("learn a filter"). Default build pure-Rust/offline. Next: GPU-kernel forward/backward (wire `fluxion-backend::cuda` into the op). | P1 | M | C4, E1, E4 | — |
 | E7 | Finite-difference gradcheck tests (per op). | P1 | M | E1–E4 | ✓ |
-| E8 | Stability guard: verify designed/optimized SOS poles inside the unit circle before freeze. | P1 | S | D1, E1 | ✓ |
+| E8 | Stability guard: verify designed/optimized SOS poles inside the unit circle before freeze. **Review (2026-06-28):** also add an *in-loop* projection for free-coefficient training — no training loop applies any stability check today, so raw `a1,a2` can leave the unit circle and blow up. Cheapest via the E10 reparam (train cutoff/Q, always stable); else project `(a1,a2)` into the Jury triangle each step (reuse `spectral_radius`). Separately, fix `certify_op`'s `_ => certified()` catch-all (`backend/lib.rs:143-148`), which silently blesses reverb's feedback combs as stable. | P1 | S | D1, E1 | ✓ |
 | E9 | End-to-end “fit a filter to a target” training example + docs. | P1 | M | E6 | — |
+| E10 | Design-parameter VJP: `∂coeffs/∂(cutoff,Q,gain,ripple)` through the closed-form RBJ/Butterworth design, chained `design_vjp ∘ sos_vjp`, behind a `cutoff_learnable`-style op (PROJECT.md §8.2). **Review (2026-06-28):** the canonical DDSP reparam — only raw coefficient vectors are trainable today (`sos_trainable`), so "learn a cutoff" and the advertised `cutoff_learnable` API are unimplementable; it also keeps training on the always-stable design manifold. Highest-leverage single addition for goal 1. | P1 | M | E1, D1, D3 | ✓ |
+| E11 | Register the existing FIR/delay/echo VJPs (E2/E3/E5-echo) as Burn (and torch/jax) custom ops + a graph-level adjoint (series = compose adjoints, parallel = sum cotangents) so a whole `Graph` is differentiable. **Review (2026-06-28):** the VJPs exist in `fluxion-ops` but only SOS is wired into any autodiff framework, so training reduces to a bare SOS cascade. ~30 lines each, reusing the `sos`/`sos_trainable` pattern. | P1 | M | E2, E3, E5, E6 | ✓ |
+| E12 | Whole-graph differentiable forward/backward (`Graph` → Burn autodiff tensors) exposed through the facade. **Review (2026-06-28):** `fluxion-autodiff` is currently orphaned — no crate depends on it and the facade ships only the non-differentiable `process`, so purpose #1 is unreachable from the public API. Land C1 first so `process` and this lowering share one op-dispatch surface. | P1 | L | C4, E11 | — |
 
 ## Epic F — GPU backend (CubeCL)  ·  *gated on the F0 go/no-go*  *(crate: `fluxion-backend`)*
 
@@ -129,6 +136,10 @@ parallelizable around it.
 | G4 | Parameter command queue + `SmoothedValue` ramping (click-free). **DONE (2026-06-27):** `SmoothedValue` (linear ramp, exact landing, alloc-free) + the G1 ring as the command queue, both wired into `RtEngine` (`Command::SetGain` applied at block boundaries). Hardened by an adversarial multi-agent review of `fluxion-rt`: fixed a **critical** ring soundness hole (`push`/`pop` now take `&mut self` so single-producer/single-consumer is borrow-checked, not just documented) + capacity-overflow guard; `MaybeUninit` slots (any `Copy` type). | P1 | M | G3 | ✓ |
 | G5 | CPAL audio I/O backend (cross-platform callback). **DONE (2026-06-27):** `fluxion-rt::cpal_backend` (feature `cpal`) — `run_output(render)` opens the default output device and drives an alloc-free render callback on the audio thread (returns `sample_rate`/`channels`); `BackendError` wraps the CPAL errors. Compiles + clippy + doctest clean locally (ALSA); default build pulls no audio libs. Remaining: duplex (live-input) + non-f32 formats. | P1 | M | G1, G3 | — |
 | G6 | Real-time-safety tests (no-alloc-in-callback assertion + xrun stress @128/48k). **DONE (2026-06-27):** `fluxion-rt/tests/rt_safety.rs` — a tracking `#[global_allocator]` flags allocations made inside a (thread-local) real-time section; asserts `RtEngine::process_block` allocates zero across 1000+ blocks under concurrent command automation, plus a `meta_tracker` test proving the tracker actually catches allocations (false-negative guard). xrun stress: 5 s of audio @ 128/48 kHz processed ~770× real time, alloc-free. | P1 | M | G3 | ✓ |
+| G7 | Reverb realtime node: `RtGraph::Comb`/`Allpass` leaves (delay ring + index, same shape as `Echo`) + `RtGraph::reverb` + an `op_rt` arm. **Review (2026-06-28):** reverb is offline-only today (`to_rt_graph` returns `None`, `backend/lib.rs:205`) though it's built from RT-friendly delay recurrences — the single biggest gap to the realtime goal. Scale the 44.1k-tuned comb delays by `fs` (`reverb.rs:8` ponytail). | P1 | M | G3, D8 | ✓ |
+| G8 | FIR realtime node (direct-form tap buffer, alloc-free) + `op_rt` arm. **Review (2026-06-28):** frozen DDSP FIRs — the canonical trained artifact — can't be played today; RT runs only the linear LTI subset (SOS+gain+delay+echo). | P2 | S | G3, D13 | ✓ |
+| G9 | Per-node parameter addressing on `RtGraph` + a `SetCoeffs{node, sos}` design-stage coefficient swap with equal-power crossfade. **Review (2026-06-28):** `RtGraph` (the executor that runs delay/echo/parallel) has no command queue at all — automation is output-gain-only on `RtEngine` — so the click-free `set_smoothed("lowpass.cutoff", …)` of PROJECT.md §8.5 is unimplementable today. Keep filter *design* off the audio thread (swap precomputed coeffs). | P1 | M | G4, B8 | — |
+| G10 | RT hardening: `debug_assert` (not `assert_eq!`) on the `process_block` length contract (panic-in-callback footgun, `engine.rs:51`) + cache-line-pad the ring `head`/`tail` (false sharing, `ring.rs:25-26`). | P2 | S | G3 | ✓ |
 
 ## Epic H — Audio & batch IO  *(crate: `fluxion-io`)*
 
@@ -137,7 +148,7 @@ parallelizable around it.
 | H1 | WAV read/write (`hound`). | P0 | S | — | ✓ |
 | H2 | Symphonia decode (flac/mp3/ogg/aac → samples + fs). | P1 | M | — | ✓ |
 | H3 | Encoders for output formats (WAV P0; others P2). | P1 | M | H1 | ✓ |
-| H4 | Arrow/Parquet batch IO (dataset → record batches). | P2 | M | — | ✓ |
+| H4 | Arrow/Parquet batch IO (dataset → record batches). **Review (2026-06-28):** this is the dataset half of the data-augmentation use case (pairs with J9/J12); sequence ahead of fancier effects if goal 3 is prioritized. Keep the `arrow`/`parquet` deps out until then (placeholder-deps rule). | P2 | M | — | ✓ |
 | H5 | Streaming/chunked reader for large files. | P1 | M | H2 | — |
 
 ## Epic I — CLI  *(crate: `fluxion-cli`)*
@@ -167,6 +178,11 @@ parallelizable around it.
 | J6 | Array API conformance layer + `.pyi` type stubs. **DONE (2026-06-27):** `_fluxion.pyi` (typed `Chain` + all constructors + `sos_forward`/`sos_backward`) + `py.typed`, shipped in the wheel. **Array-API consumer conformance:** every entry accepts an array from any conforming library (NumPy/PyTorch/JAX/`array_api_strict`) via DLPack and returns Array-API-compliant NumPy output; tested against the `array_api_strict` reference impl + `array-api-compat` in CI. (fluxion is a transform library, not an Array-API *namespace provider* — that surface is out of scope.) | P2 | M | J3 | ✓ |
 | J7 | Python tests (parity vs torchaudio) + `pyproject` + cibuildwheel (CPU). **DONE (2026-06-27):** maturin mixed layout (`python/fluxion/` over `_fluxion`); a CI `python` job builds the wheel + runs pytest. Tests include a **scipy** Butterworth design+filter parity check (rel-RMS < 1e-2). Wheel verified to install + pass in a clean venv. (cibuildwheel multi-platform release wheels are the packaging follow-up.) | P1 | M | J3 | — |
 | J8 | Split GPU wheels (cibuildwheel CUDA images). **GPU Python path + wheel DONE (2026-06-27):** `fluxion-py` `cuda` feature exposes `sos_filter_batch_gpu` (GPU SOS batch filter) + `cuda_available()` / `__cuda__`; the CUDA wheel built with `maturin --features cuda` on the RTX 3070 and its GPU test matches the CPU per-row result. `.github/workflows/wheels.yml` builds CPU wheels (one abi3 `cp310-abi3` wheel per platform, 3.10+, via `maturin-action`) + sdist, **and the GPU wheel on a registered self-hosted CUDA runner** (the RTX 3070 box, label `cuda`) — `maturin --features cuda`, tagged `0.0.0+cu12` so it's distinguishable, uploaded as an artifact. Verified green end-to-end (all wheel jobs incl. GPU). Remaining: make the runner a persistent service (currently a `nohup` process) + publish to PyPI/a release on tags (needs a `PYPI_TOKEN` secret). | P2 | L | J7, F1 | ✓ |
+| J9 | Batched Python path: bind `process_batch`/`sos_filter_batch` (already in the facade, tested) as `Chain.process_batch((B,T), fs)` — CPU default, GPU when built with `cuda`. **Review (2026-06-28):** no batched augmentation path exists in Python today despite the Rust kernels being ready. | P1 | S | J3 | ✓ |
+| J10 | `Chain.process` accepts 2-D `(B,T)`/`(C,T)` (last axis = time), matching the PROJECT.md §8.3 example — it rejects 2-D today (`py/src/lib.rs:68-79`). Or correct the §8.3 example + add `Raises ValueError` to the docstring. | P1 | S | J3 | ✓ |
+| J11 | `nn.Module`/DataLoader composability: a `fluxion.torch.SosModule` holding coeffs as `nn.Parameter` over `_SosFilter`, + a `Chain`→coeffs accessor. **Review (2026-06-28):** the §8.3-promised `chain.torch()` with `nn.Parameter` doesn't exist; only `sos_filter(x, coeffs)`. | P2 | M | J4 | ✓ |
+| J12 | **(new goal — not in PROJECT.md)** Stochastic augmentation transforms: a pure-Python `RandomChain`/`Compose` sampling parameters over the existing constructors. *Add the data-augmentation goal to PROJECT.md first.* | P2 | S | J3 | ✓ |
+| J13 | **(new goal — not in PROJECT.md)** FLAMO / torch-DDSP checkpoint import (Python side): read a `.safetensors` state_dict, replay FLAMO's param→coeff math for a **SISO** Biquad/SVF cascade → `FrozenSos`. MIMO banks + frequency-sampled FIR are out of the clean slice (FLAMO is frequency-domain + named MIMO modules; fluxion is time-domain SISO). *Add cross-framework import to PROJECT.md first; also fix the dangling `references/flamo/` link at PROJECT.md:528.* | P2 | M | B9, J2 | ✓ |
 
 ## Epic K — FFI / C-ABI  *(crate: `fluxion-ffi`)*  ·  *parallel*
 
@@ -214,3 +230,11 @@ concurrently (ideally one contributor or one worktree per lane).
   `pyo3` (J1) happens inside their own crates so the rest of the workspace keeps building offline.
 - **A 1.0 without GPU is still shippable** as `1.0.0` (CPU + differentiable + CLI + realtime +
   Python), with GPU promoted from a feature flag once F5 signs off — decide at M3 based on F0.
+- **Review findings (2026-06-28).** A multi-agent review (each finding verified against the code)
+  added tasks **B8–B9, C6, D13, E10–E12, G7–G10, J9–J13** and annotations on **C3/E8/H4**. Headline
+  gaps against the four stated goals: the SIMD kernel is unwired dead code (C3/C6); only a bare SOS
+  cascade is trainable end-to-end and `fluxion-autodiff` is orphaned (E10–E12); reverb and FIR can't
+  be played live (G7/G8); there is no batched or 2-D Python path (J9/J10); and `.fxg` has no version
+  gate (B9). **Two goals the brief names — data augmentation (J12) and importing foreign-trained DDSP
+  modules like FLAMO (J13) — are absent from PROJECT.md; add them to the design doc before building.**
+  The well-built foundations (analytic VJPs, the lock-free ring, the GPU kernel) were confirmed sound.
