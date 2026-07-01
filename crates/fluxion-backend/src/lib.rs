@@ -79,6 +79,10 @@ pub trait Backend {
     fn reverb(&self, x: Self::Buf, room: f32, damping: f32, mix: f32) -> Self::Buf;
     /// Sum two buffers (the `+` parallel combine).
     fn add(&self, a: Self::Buf, b: Self::Buf) -> Self::Buf;
+    /// A feedback loop (the `~` operator): `y[n] = forward(x[n] + feedback(y)[n-1])`. A backend that
+    /// can't run sample-recursive feedback (e.g. the block/autodiff engines) may leave it
+    /// `unimplemented!` — guarded by [`is_differentiable`] / `to_rt_graph` returning `None`.
+    fn feedback(&self, x: Self::Buf, forward: &Graph, feedback: &Graph, fs: u32) -> Self::Buf;
 }
 
 /// Walk `graph`, dispatching each op to backend `b`'s kernels; `fs` converts delay/echo seconds to
@@ -92,6 +96,9 @@ pub fn eval<B: Backend>(b: &B, graph: &Graph, x: B::Buf, fs: u32) -> B::Buf {
             eval(b, c, y, fs)
         }
         Graph::Parallel(a, c) => b.add(eval(b, a, x.clone(), fs), eval(b, c, x, fs)),
+        // A named node is transparent — it runs exactly as its inner node (B8 node identity).
+        Graph::Named { node, .. } => eval(b, node, x, fs),
+        Graph::Feedback { forward, feedback } => b.feedback(x, forward, feedback, fs),
     }
 }
 
@@ -126,6 +133,8 @@ pub fn is_differentiable(graph: &Graph, fs: u32) -> bool {
         Graph::Series(a, b) | Graph::Parallel(a, b) => {
             is_differentiable(a, fs) && is_differentiable(b, fs)
         }
+        Graph::Named { node, .. } => is_differentiable(node, fs),
+        Graph::Feedback { .. } => false, // sample-recursive; not wired into the autodiff engine
     }
 }
 
@@ -194,6 +203,42 @@ impl Backend for Cpu {
             })
             .collect()
     }
+    fn feedback(
+        &self,
+        x: Vec<Vec<f32>>,
+        forward: &Graph,
+        feedback: &Graph,
+        fs: u32,
+    ) -> Vec<Vec<f32>> {
+        x.into_iter()
+            .map(|ch| feedback_channel(&ch, forward, feedback, fs))
+            .collect()
+    }
+}
+
+/// Reference CPU feedback `y[n] = forward(x[n] + feedback(y)[n-1])`, run sample-by-sample with the
+/// sub-paths lowered to **stateful** [`RtGraph`]s (so filter state persists across the loop). Both
+/// paths must be realtime-lowerable (filters / gain / delay / echo / reverb / FIR).
+///
+/// ponytail: one sample per `RtGraph::process` call — correct but O(N) dispatch; a fused feedback
+/// kernel is a follow-up. Realtime and autodiff execution of `~` aren't wired yet (`to_rt_graph` /
+/// `is_differentiable` return `None` / `false` for `Feedback`).
+fn feedback_channel(ch: &[f32], forward: &Graph, feedback: &Graph, fs: u32) -> Vec<f32> {
+    let mut fwd = to_rt_graph(forward, fs)
+        .expect("feedback forward path must be realtime-lowerable (filters/gain/delay/…)");
+    let mut fbk = to_rt_graph(feedback, fs)
+        .expect("feedback loop-back path must be realtime-lowerable (filters/gain/delay/…)");
+    fwd.prepare(1);
+    fbk.prepare(1);
+    let mut y = vec![0.0f32; ch.len()];
+    let (mut fb_prev, mut yb, mut fbb) = (0.0f32, [0.0f32], [0.0f32]);
+    for (n, &xn) in ch.iter().enumerate() {
+        fwd.process(&[xn + fb_prev], &mut yb); // y[n] = forward(x[n] + feedback(y)[n-1])
+        y[n] = yb[0];
+        fbk.process(&yb, &mut fbb); // feedback(y)[n] → used next iteration as [n-1]
+        fb_prev = fbb[0];
+    }
+    y
 }
 
 /// Certify the stability of a graph's frozen coefficients at sample rate `fs`.
@@ -209,6 +254,13 @@ pub fn certify_graph(graph: &Graph, fs: u32) -> Certificate {
         Graph::Series(a, b) | Graph::Parallel(a, b) => {
             certify_graph(a, fs).worst(certify_graph(b, fs))
         }
+        Graph::Named { node, .. } => certify_graph(node, fs),
+        // A general `~` loop's stability is a small-gain property of the *whole* loop; auto-certifying
+        // an arbitrary feedback sub-graph isn't wired yet, so it carries no certificate (not shippable).
+        Graph::Feedback { .. } => Certificate {
+            verdict: Verdict::NotCertified,
+            margin: f32::NAN,
+        },
     }
 }
 
@@ -241,7 +293,8 @@ pub fn graph_to_sos(graph: &Graph, fs: u32) -> Option<Sos> {
             s.extend(graph_to_sos(b, fs)?);
             Some(s)
         }
-        Graph::Parallel(..) => None,
+        Graph::Named { node, .. } => graph_to_sos(node, fs), // transparent
+        Graph::Parallel(..) | Graph::Feedback { .. } => None,
     }
 }
 
@@ -268,6 +321,8 @@ pub fn to_rt_graph(graph: &Graph, fs: u32) -> Option<RtGraph> {
         Graph::Op(op) => op_rt(op, fs),
         Graph::Series(a, b) => Some(RtGraph::series(to_rt_graph(a, fs)?, to_rt_graph(b, fs)?)),
         Graph::Parallel(a, b) => Some(RtGraph::parallel(to_rt_graph(a, fs)?, to_rt_graph(b, fs)?)),
+        Graph::Named { node, .. } => to_rt_graph(node, fs), // transparent
+        Graph::Feedback { .. } => None, // realtime `~` (an alloc-free feedback node) is a follow-up
     }
 }
 
@@ -513,6 +568,30 @@ mod tests {
         for (a, b) in streamed.iter().zip(&want) {
             assert!((a - b).abs() < 1e-4, "rt {a} vs {b}");
         }
+    }
+
+    #[test]
+    fn process_runs_feedback_loops() {
+        let fs = 48_000;
+        // gain(1) ~ gain(0.5): a first-order IIR, y[n] = x[n] + 0.5·y[n-1] → impulse response 0.5ⁿ.
+        let g = Graph::op(OpKind::Gain, [1.0]).feedback(Graph::op(OpKind::Gain, [0.5]));
+        let mut impulse = vec![0.0f32; 16];
+        impulse[0] = 1.0;
+        let y = process(&g, &Signal::new(fs, vec![impulse]))
+            .channels
+            .remove(0);
+        for (n, &v) in y.iter().enumerate() {
+            assert!((v - 0.5f32.powi(n as i32)).abs() < 1e-5, "y[{n}] = {v}");
+        }
+        // A filter *inside* the loop (which eval_ref can't do): the small-gain loop stays bounded.
+        let g2 =
+            Graph::op(OpKind::Lowpass, [4_000.0, 2.0]).feedback(Graph::op(OpKind::Gain, [0.3]));
+        let x: Vec<f32> = (0..2_000).map(|i| (0.1 * i as f32).sin()).collect();
+        let y2 = process(&g2, &Signal::new(fs, vec![x])).channels.remove(0);
+        assert!(
+            y2.iter().all(|v| v.is_finite() && v.abs() < 50.0),
+            "feedback loop blew up"
+        );
     }
 
     #[test]

@@ -54,6 +54,17 @@ impl<B: BurnBackend, K: CheckpointStrategy> Backend for BurnAd<B, K> {
     fn add(&self, a: Self::Buf, b: Self::Buf) -> Self::Buf {
         a + b
     }
+    fn feedback(
+        &self,
+        _x: Self::Buf,
+        _forward: &fluxion_core::Graph,
+        _feedback: &fluxion_core::Graph,
+        _fs: u32,
+    ) -> Self::Buf {
+        unimplemented!(
+            "feedback (~) is sample-recursive — not differentiable here; guard with is_differentiable"
+        )
+    }
 }
 
 /// Differentiably run a whole [`Graph`] on a 1-D Burn autodiff tensor at sample rate `fs`: the input
