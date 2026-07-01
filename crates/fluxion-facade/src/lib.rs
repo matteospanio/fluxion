@@ -100,6 +100,13 @@ pub mod prelude {
         Graph::op(OpKind::Echo, [time, feedback, wet])
     }
 
+    /// A direct-form FIR filter from its tap vector: `y[n] = Σ_k taps[k]·x[n-k]` — the graph form of
+    /// a trained/frozen FIR. Composable, freezable (`.fxg`), and realtime-playable (lowers to an
+    /// `RtGraph::Fir` node). Panics if `taps` is empty.
+    pub fn fir(taps: impl Into<Vec<f32>>) -> Graph {
+        Graph::op(OpKind::Fir, taps)
+    }
+
     /// Chebyshev Type I low-pass: `cutoff` Hz, `order`, passband `ripple` dB.
     pub fn cheby1_lowpass(cutoff_hz: f32, order: u32, ripple_db: f32) -> Graph {
         Graph::op(OpKind::Cheby1Lowpass, [cutoff_hz, order as f32, ripple_db])

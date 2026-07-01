@@ -13,8 +13,8 @@ use fluxion_core::{FrozenSos, Graph, Op, OpKind, Signal};
 use fluxion_ops::{
     Biquad, Sos, allpass, bandpass, butterworth_highpass, butterworth_lowpass, certify_sos,
     chebyshev1_highpass, chebyshev1_lowpass, chebyshev2_highpass, chebyshev2_lowpass, delay, echo,
-    gain, high_shelf, low_shelf, normalize_peak, notch, peaking, reverb, small_gain_certify,
-    sos_filter,
+    fir_filter, gain, high_shelf, low_shelf, normalize_peak, notch, peaking, reverb,
+    small_gain_certify, sos_filter,
 };
 use fluxion_rt::RtGraph;
 
@@ -71,6 +71,8 @@ pub trait Backend {
     fn delay(&self, x: Self::Buf, samples: usize, mix: f32) -> Self::Buf;
     /// Feedback echo.
     fn echo(&self, x: Self::Buf, samples: usize, feedback: f32, wet: f32) -> Self::Buf;
+    /// Direct-form FIR (`taps`).
+    fn fir(&self, x: Self::Buf, taps: &[f32]) -> Self::Buf;
     /// Peak-normalize (cross-channel).
     fn normalize(&self, x: Self::Buf, peak: f32) -> Self::Buf;
     /// Schroeder–Moorer reverb.
@@ -105,6 +107,7 @@ fn eval_op<B: Backend>(b: &B, op: &Op, x: B::Buf, fs: u32) -> B::Buf {
         OpKind::Delay => b.delay(x, samples(p[0]), p[1]),
         OpKind::Echo => b.echo(x, samples(p[0]), p[1], p[2]),
         OpKind::Reverb => b.reverb(x, p[0], p[1], p[2]),
+        OpKind::Fir => b.fir(x, p), // params ARE the taps (variadic op)
         // `OpKind` is `#[non_exhaustive]`; future ops must be added (here or in `op_sos`) before use.
         kind => panic!("fluxion-backend: op '{}' is not implemented", kind.name()),
     }
@@ -154,6 +157,12 @@ impl Backend for Cpu {
     fn echo(&self, mut x: Vec<Vec<f32>>, samples: usize, feedback: f32, wet: f32) -> Vec<Vec<f32>> {
         for ch in &mut x {
             *ch = echo(ch, samples, feedback, wet);
+        }
+        x
+    }
+    fn fir(&self, mut x: Vec<Vec<f32>>, taps: &[f32]) -> Vec<Vec<f32>> {
+        for ch in &mut x {
+            *ch = fir_filter(ch, taps);
         }
         x
     }
@@ -273,6 +282,7 @@ fn op_rt(op: &Op, fs: u32) -> Option<RtGraph> {
         OpKind::Delay => Some(RtGraph::delay(to_samples(p[0]), p[1])),
         OpKind::Echo => Some(RtGraph::echo(to_samples(p[0]), p[1], p[2])),
         OpKind::Reverb => Some(RtGraph::reverb(p[0], p[1], p[2])),
+        OpKind::Fir => Some(RtGraph::fir(p.clone())), // taps ARE the params (G8 realtime FIR)
         _ => None, // Normalize (whole-signal) and any future non-realtime op
     }
 }
@@ -471,6 +481,37 @@ mod tests {
         assert_eq!(streamed.len(), batch.len());
         for (i, (a, b)) in streamed.iter().zip(&batch).enumerate() {
             assert!((a - b).abs() < 1e-3, "at {i}: {a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn fir_op_processes_and_lowers_to_realtime() {
+        // FIR is now a first-class graph op (D13): CPU process == offline fir_filter, and it lowers
+        // to the RtGraph::Fir node (G8) so a trained FIR is realtime-playable.
+        let taps = vec![0.2f32, -0.5, 0.3, 0.1, -0.05];
+        let g = Graph::op(OpKind::Fir, taps.clone());
+        let fs = 48_000;
+        let x: Vec<f32> = (0..500).map(|i| (0.1 * i as f32).sin()).collect();
+        let want = fluxion_ops::fir_filter(&x, &taps);
+
+        let out = process(&g, &Signal::new(fs, vec![x.clone()]))
+            .channels
+            .remove(0);
+        for (a, b) in out.iter().zip(&want) {
+            assert!((a - b).abs() < 1e-5, "process {a} vs {b}");
+        }
+
+        let mut rt = to_rt_graph(&g, fs).unwrap();
+        rt.prepare(64);
+        let mut o = vec![0.0f32; 64];
+        let mut streamed = Vec::new();
+        for chunk in x.chunks(64) {
+            let o = &mut o[..chunk.len()];
+            rt.process(chunk, o);
+            streamed.extend_from_slice(o);
+        }
+        for (a, b) in streamed.iter().zip(&want) {
+            assert!((a - b).abs() < 1e-4, "rt {a} vs {b}");
         }
     }
 

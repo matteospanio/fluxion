@@ -38,6 +38,11 @@ impl<B: BurnBackend, K: CheckpointStrategy> Backend for BurnAd<B, K> {
     fn echo(&self, x: Self::Buf, samples: usize, feedback: f32, wet: f32) -> Self::Buf {
         echo_op(x, samples, feedback, wet)
     }
+    fn fir(&self, _x: Self::Buf, _taps: &[f32]) -> Self::Buf {
+        unimplemented!(
+            "FIR-in-graph isn't differentiable here (use fir_trainable) — guard with is_differentiable"
+        )
+    }
     fn normalize(&self, _x: Self::Buf, _peak: f32) -> Self::Buf {
         unimplemented!(
             "normalize is cross-channel / non-differentiable — guard with is_differentiable"

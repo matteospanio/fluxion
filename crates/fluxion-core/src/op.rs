@@ -48,6 +48,9 @@ pub enum OpKind {
     Cheby2Highpass,
     /// Schroeder–Moorer reverb (`room` size, `damping`, wet/dry `mix`).
     Reverb,
+    /// Direct-form FIR filter: `y[n] = Σ_k taps[k]·x[n-k]`. **Variadic** — its parameters are the tap
+    /// vector itself (≥ 1), the realtime/graph form of a trained/frozen FIR (see [`OpKind::is_variadic`]).
+    Fir,
 }
 
 // Static parameter tables — one per kind.
@@ -110,6 +113,15 @@ static REVERB_PARAMS: [ParamSpec; 3] = [
     ParamSpec::new("damping", Unit::Linear, 0.3, 0.0, 1.0),
     ParamSpec::new("mix", Unit::Linear, 0.3, 0.0, 1.0),
 ];
+// The prototype for one FIR tap. `Fir` is variadic: its parameters are a `≥1`-length vector of
+// these (any finite value), so the arity check is "at least one" rather than a fixed count.
+static FIR_PARAMS: [ParamSpec; 1] = [ParamSpec::new(
+    "tap",
+    Unit::Linear,
+    1.0,
+    f32::NEG_INFINITY,
+    f32::INFINITY,
+)];
 
 impl OpKind {
     /// Stable identifier used in the DSL / CLI / `.fxg`, e.g. `"lowpass"`.
@@ -132,7 +144,16 @@ impl OpKind {
             OpKind::Cheby2Lowpass => "cheby2low",
             OpKind::Cheby2Highpass => "cheby2high",
             OpKind::Reverb => "reverb",
+            OpKind::Fir => "fir",
         }
+    }
+
+    /// Whether this op is **variadic** — its parameters are a variable-length list of one repeated
+    /// [`params`](OpKind::params) spec (`≥ 1` entries), rather than a fixed positional tuple. Only
+    /// [`OpKind::Fir`] (the tap vector) is variadic today; [`Op::new`] validates it as "at least one,
+    /// each within the single spec's bounds".
+    pub fn is_variadic(self) -> bool {
+        matches!(self, OpKind::Fir)
     }
 
     /// The parameter schema for this op, in positional order.
@@ -149,6 +170,7 @@ impl OpKind {
             OpKind::Cheby1Lowpass | OpKind::Cheby1Highpass => &CHEBY1_PARAMS,
             OpKind::Cheby2Lowpass | OpKind::Cheby2Highpass => &CHEBY2_PARAMS,
             OpKind::Reverb => &REVERB_PARAMS,
+            OpKind::Fir => &FIR_PARAMS,
         }
     }
 
@@ -177,6 +199,7 @@ impl OpKind {
             OpKind::Cheby2Lowpass,
             OpKind::Cheby2Highpass,
             OpKind::Reverb,
+            OpKind::Fir,
         ]
     }
 
@@ -263,6 +286,31 @@ impl Op {
     pub fn new(kind: OpKind, params: impl Into<Vec<f32>>) -> Result<Op, OpError> {
         let params = params.into();
         let specs = kind.params();
+
+        if kind.is_variadic() {
+            // One repeated spec (`specs[0]`); require at least one value, each within bounds.
+            let spec = &specs[0];
+            if params.is_empty() {
+                return Err(OpError::Arity {
+                    kind,
+                    expected: 1,
+                    got: 0,
+                });
+            }
+            for &v in &params {
+                if v.is_nan() || v < spec.min || v > spec.max {
+                    return Err(OpError::OutOfRange {
+                        kind,
+                        param: spec.name,
+                        value: v,
+                        min: spec.min,
+                        max: spec.max,
+                    });
+                }
+            }
+            return Ok(Op { kind, params });
+        }
+
         if params.len() != specs.len() {
             return Err(OpError::Arity {
                 kind,
@@ -312,5 +360,15 @@ mod tests {
         assert!(Op::new(OpKind::Lowpass, [-5.0, 2.0]).is_err());
         assert!(Op::new(OpKind::Lowpass, [1000.0, f32::NAN]).is_err());
         assert!(Op::new(OpKind::Peaking, [1000.0, 6.0, 0.0]).is_err()); // q below min
+    }
+
+    #[test]
+    fn fir_is_variadic() {
+        assert!(OpKind::Fir.is_variadic());
+        assert!(Op::new(OpKind::Fir, [0.1, -0.2, 0.3, 0.05]).is_ok()); // any length ≥ 1
+        assert!(Op::new(OpKind::Fir, [1.0]).is_ok());
+        assert!(Op::new(OpKind::Fir, []).is_err()); // needs at least one tap
+        assert!(Op::new(OpKind::Fir, [0.1, f32::NAN]).is_err()); // taps must be finite
+        assert_eq!(OpKind::Fir.defaults(), vec![1.0]); // one identity tap
     }
 }
