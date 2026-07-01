@@ -31,8 +31,8 @@ fn allpass(input: &[f32], d: usize, g: f32) -> Vec<f32> {
     y
 }
 
-/// Reverberate `input`: `room_size` ∈ [0,1] sets the comb feedback (tail length), `damping` ∈ [0,1]
-/// rolls off the high end of the tail, `mix` ∈ [0,1] is the wet/dry blend.
+/// Reverberate `input`: `room_size` in `[0,1]` sets the comb feedback (tail length), `damping` in
+/// `[0,1]` rolls off the high end of the tail, `mix` in `[0,1]` is the wet/dry blend.
 pub fn reverb(input: &[f32], room_size: f32, damping: f32, mix: f32) -> Vec<f32> {
     let n = input.len();
     if n == 0 {

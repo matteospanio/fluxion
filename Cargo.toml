@@ -18,6 +18,9 @@ homepage = "https://github.com/matteospanio/fluxion"
 keywords = ["audio", "dsp", "differentiable", "gpu", "realtime"]
 categories = ["multimedia::audio", "science", "mathematics"]
 
+[workspace.lints.rust]
+missing_docs = "warn"
+
 [workspace.lints.clippy]
 all = "warn"
 

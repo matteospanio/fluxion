@@ -71,7 +71,7 @@ fn sos_kernel<F: Float>(
 /// each call, so a one-shot batch is **transfer-bound** (~430 ms for 67 Msamples — slower than the
 /// CPU). It pays off when the data is already resident and reused across many launches; that resident
 /// path (and the differentiable GPU forward/backward) is the next step. The CubeCL client is cached
-/// (see [`client`]) so the JIT'd kernel is reused across calls.
+/// (the module-level `client`) so the JIT'd kernel is reused across calls.
 pub fn sos_filter_batch(input: &[f32], frames: usize, sos: &[Biquad]) -> Vec<f32> {
     assert!(frames > 0 && !sos.is_empty() && !input.is_empty() && input.len() % frames == 0);
     let n = input.len();

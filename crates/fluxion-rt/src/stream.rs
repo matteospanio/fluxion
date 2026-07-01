@@ -4,7 +4,7 @@
 //! streaming a signal in chunks is bit-identical to filtering it whole ([`fluxion_ops::sos_filter`]).
 //! No allocation in [`SosStream::process_block`] — the only state is the pre-sized `state` vector,
 //! filled at construction. This is the inference kernel the realtime executor drives; freezing an
-//! arbitrary [`Graph`](fluxion_core::Graph) to a cascade (G2) and the SIMD/general-graph executor are
+//! arbitrary `fluxion_core::Graph` to a cascade (G2) and the SIMD/general-graph executor are
 //! later steps.
 
 use std::f32::consts::FRAC_PI_2;

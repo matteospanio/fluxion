@@ -36,6 +36,19 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+  docs:
+    name: rustdoc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # `-D warnings` fails on any rustdoc issue (broken/ambiguous doc links); combined with the
+      # workspace `missing_docs = "warn"` lint (denied by the clippy job), the public API stays
+      # documented. `--lib` documents every library target (skipping the `fluxion` CLI binary, which
+      # would otherwise collide with the facade lib's doc output).
+      - run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --lib --locked
+
   autodiff:
     name: autodiff (Burn CPU)
     runs-on: ubuntu-latest

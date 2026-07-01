@@ -344,7 +344,7 @@ fn op_rt(op: &Op, fs: u32) -> Option<RtGraph> {
 
 /// Filter a flat batch of `rows.len() / frames` equal-length rows through an SOS cascade (CPU).
 ///
-/// The GPU kernel ([`cuda::sos_filter_batch`], `cuda` feature) is far faster in raw **compute**
+/// The GPU kernel (`cuda::sos_filter_batch`, `cuda` feature) is far faster in raw **compute**
 /// (~59× on an RTX 3070), but a one-shot batch filter is dominated by host↔device transfer (~430 ms
 /// vs ~300 ms CPU for 67 Msamples), so the CPU is the right default here. The GPU pays off for
 /// **resident / repeated** workloads where the data stays on the device across many operations

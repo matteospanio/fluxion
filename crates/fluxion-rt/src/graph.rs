@@ -23,64 +23,95 @@ pub enum RtGraph {
     Gain(f32),
     /// Run `first`, feed its output into `second`. `scratch` holds the intermediate.
     Series {
+        /// The upstream node.
         first: Box<RtGraph>,
+        /// The downstream node, fed `first`'s output.
         second: Box<RtGraph>,
+        /// Intermediate buffer between the two (sized by [`prepare`](RtGraph::prepare)).
         scratch: Vec<f32>,
     },
     /// Run `left` and `right` on the same input and sum. `scratch` holds the right branch's output.
     Parallel {
+        /// The left branch (writes into `output`).
         left: Box<RtGraph>,
+        /// The right branch (written into `scratch`, then summed).
         right: Box<RtGraph>,
+        /// The right branch's output buffer (sized by [`prepare`](RtGraph::prepare)).
         scratch: Vec<f32>,
     },
     /// Single delayed tap crossfaded with the dry signal: `(1-mix)·x[n] + mix·x[n-d]`. `ring` is the
     /// `d`-sample history of inputs; `idx` is the write cursor.
     Delay {
+        /// `d`-sample input history.
         ring: Vec<f32>,
+        /// Write cursor into `ring`.
         idx: usize,
+        /// Wet/dry blend.
         mix: f32,
     },
     /// Feedback echo: `out = x[n] + wet·w[n]`, `w[n] = x[n-d] + feedback·w[n-d]`. `xring`/`wring` are
     /// the `d`-sample histories of the input and of `w`.
     Echo {
+        /// `d`-sample input history.
         xring: Vec<f32>,
+        /// `d`-sample history of the echo signal `w`.
         wring: Vec<f32>,
+        /// Write cursor into both rings.
         idx: usize,
+        /// Feedback coefficient.
         feedback: f32,
+        /// Wet (echo) level.
         wet: f32,
     },
     /// Fractional delayed tap, linear-interpolated: `(1-mix)·x[n] + mix·x[n-D]` for a possibly
     /// non-integer `D = i + frac` (`xd = (1-frac)·x[n-i] + frac·x[n-i-1]`). `ring` is the input
     /// history; `w` is the write cursor.
     DelayFrac {
+        /// Input history (`⌈delay⌉+2` samples).
         ring: Vec<f32>,
+        /// Write cursor into `ring`.
         w: usize,
+        /// Integer part of the delay.
         i: usize,
+        /// Fractional part of the delay.
         frac: f32,
+        /// Wet/dry blend.
         mix: f32,
     },
     /// Damped feedback comb: `y[n] = x[n] + g·lp(y[n-d])`, `lp = yd·(1-damp) + lp·damp` (the reverb
     /// building block). `yring` is the `d`-sample history of `y`; `lp` is the one-pole state.
     Comb {
+        /// `d`-sample history of the output `y`.
         yring: Vec<f32>,
+        /// Write cursor into `yring`.
         idx: usize,
+        /// One-pole low-pass state in the feedback path.
         lp: f32,
+        /// Feedback gain.
         g: f32,
+        /// Damping coefficient.
         damp: f32,
     },
     /// Schroeder all-pass: `y[n] = -g·x[n] + x[n-d] + g·y[n-d]` (diffuses phase, flat magnitude).
     /// `xring`/`yring` are the `d`-sample histories of the input and output.
     Allpass {
+        /// `d`-sample input history.
         xring: Vec<f32>,
+        /// `d`-sample output history.
         yring: Vec<f32>,
+        /// Write cursor into both rings.
         idx: usize,
+        /// All-pass coefficient.
         g: f32,
     },
     /// Direct-form FIR: `y[n] = Σ_k taps[k]·x[n-k]` (the realtime form of a trained/frozen FIR).
     /// `ring` holds the last `taps.len()` inputs; `idx` is the write cursor.
     Fir {
+        /// Filter taps.
         taps: Vec<f32>,
+        /// Input history (`taps.len()` samples).
         ring: Vec<f32>,
+        /// Write cursor into `ring`.
         idx: usize,
     },
 }
@@ -189,7 +220,7 @@ impl RtGraph {
     }
 
     /// A realtime Schroeder–Moorer reverb, built from the same Freeverb topology as the offline
-    /// [`fluxion_ops::reverb`]: four parallel damped combs, averaged, then two series all-passes, wet/
+    /// [`fluxion_ops::reverb()`]: four parallel damped combs, averaged, then two series all-passes, wet/
     /// dry-blended by `mix`. `room_size` sets the comb feedback (clamped `< 1` for BIBO stability),
     /// `damping` rolls off the tail's high end. Streaming it matches the offline reverb sample-for-
     /// sample; assembled purely from [`comb`](Self::comb)/[`allpass`](Self::allpass) leaves and the

@@ -1,7 +1,7 @@
 //! `fluxion-io` — audio and batch IO.
 //!
 //! WAV read/write/probe via [`hound`], and [`decode`] for FLAC/MP3/OGG/AAC/… via Symphonia — both
-//! to/from the planar [`Signal`](fluxion_core::Signal) buffer the DSP engine works in. Pure Rust, no
+//! to/from the planar [`fluxion_core::Signal`] buffer the DSP engine works in. Pure Rust, no
 //! libsndfile/ffmpeg. Arrow/Parquet batch IO lands later (see `PROJECT.md` §7).
 
 use std::io::{Cursor, Read, Write};

@@ -1,9 +1,9 @@
 //! `fluxion-autodiff` — make the graph trainable without owning an autograd engine.
 //!
 //! "Own the backward, rent the graph" (see `PROJECT.md` §2): the analytic VJPs live in `fluxion-ops`
-//! ([`fluxion_ops::biquad_vjp`], [`fluxion_ops::sos_vjp`], [`fluxion_ops::gain_vjp`]), gradcheck-
+//! (`fluxion_ops::biquad_vjp`, `sos_vjp`, `gain_vjp`), gradcheck-
 //! verified. This crate registers them with a host framework's autograd. The Burn integration
-//! ([`burn_backend`], feature `burn`) wraps a biquad as a Burn custom op whose backward is the
+//! (`burn_backend`, feature `burn`) wraps a biquad as a Burn custom op whose backward is the
 //! analytic adjoint — differentiable on `Autodiff<NdArray>` (CPU) or `Autodiff<Cuda>` (GPU) without
 //! unrolling the recursion. `torch.autograd.Function` / `jax.custom_vjp` adapters (in `fluxion-py`)
 //! follow the same pattern.
@@ -17,7 +17,7 @@ pub mod burn_backend;
 #[cfg(feature = "burn")]
 pub mod graph;
 
-/// GPU-resident differentiable ops (feature `cuda`): the same analytic VJPs as [`burn_backend`], but
+/// GPU-resident differentiable ops (feature `cuda`): the same analytic VJPs as `burn_backend`, but
 /// forward and backward launch CubeCL kernels directly on a resident Burn tensor — no host roundtrip,
 /// so a training loop stays on the device. The host-roundtrip ops stay the backend-agnostic fallback.
 #[cfg(feature = "cuda")]

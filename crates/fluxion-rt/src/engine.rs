@@ -16,7 +16,12 @@ use crate::stream::SosStream;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Command {
     /// Ramp the output gain to `target` (linear), over `ramp_samples` samples (`0` = immediate).
-    SetGain { target: f32, ramp_samples: u32 },
+    SetGain {
+        /// Target linear gain.
+        target: f32,
+        /// Ramp length in samples (`0` = immediate).
+        ramp_samples: u32,
+    },
 }
 
 /// A real-time block processor: cascade filter → smoothed output gain, with lock-free parameter
