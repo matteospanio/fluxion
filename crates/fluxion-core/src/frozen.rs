@@ -10,6 +10,11 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::envelope::{Envelope, LoadError};
+
+/// The envelope `kind` tag for a serialized frozen plan.
+const FROZEN_KIND: &str = "frozen-sos";
+
 /// A frozen SOS cascade: the designed sections plus the sample rate they were designed for. Each
 /// section is `[b0, b1, b2, a1, a2]` (the denominator `a0` is normalized to 1).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -26,14 +31,17 @@ impl FrozenSos {
         Self { fs, sections }
     }
 
-    /// Serialize to pretty JSON (a flat list of coefficients — cannot fail).
+    /// Serialize to pretty JSON, wrapped in a versioned [`Envelope`] (with `fs`; cannot fail).
     pub fn to_json(&self) -> String {
-        serde_json::to_string_pretty(self).expect("frozen plan is always serializable")
+        serde_json::to_string_pretty(&Envelope::new(FROZEN_KIND, Some(self.fs), self))
+            .expect("frozen plan is always serializable")
     }
 
-    /// Parse from JSON.
-    pub fn from_json(s: &str) -> serde_json::Result<Self> {
-        serde_json::from_str(s)
+    /// Parse from JSON, validating the envelope version and kind.
+    pub fn from_json(s: &str) -> Result<Self, LoadError> {
+        let env: Envelope<FrozenSos> = serde_json::from_str(s)?;
+        env.check(FROZEN_KIND)?;
+        Ok(env.payload)
     }
 
     /// Write to a `.fxg`-style file.
@@ -44,7 +52,7 @@ impl FrozenSos {
     /// Read from a file.
     pub fn load(path: impl AsRef<Path>) -> io::Result<Self> {
         let s = std::fs::read_to_string(path)?;
-        Self::from_json(&s).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        Self::from_json(&s).map_err(io::Error::other)
     }
 }
 
@@ -60,5 +68,15 @@ mod tests {
         );
         let back = FrozenSos::from_json(&plan.to_json()).unwrap();
         assert_eq!(plan, back);
+    }
+
+    #[test]
+    fn envelope_carries_fs_and_rejects_wrong_kind() {
+        let plan = FrozenSos::new(44_100, vec![[1.0, 0.0, 0.0, -0.2, 0.0]]);
+        let json = plan.to_json();
+        assert!(json.contains("\"frozen-sos\"") && json.contains("\"fs\": 44100"));
+        // A graph envelope loaded as a frozen plan is rejected, not mis-decoded.
+        let wrong = json.replace("\"frozen-sos\"", "\"graph\"");
+        assert!(FrozenSos::from_json(&wrong).is_err());
     }
 }

@@ -17,7 +17,9 @@ pub use fluxion_backend::{
     Backend, Certificate, Cpu, Verdict, certify_graph, eval, graph_to_sos, is_differentiable,
     process, process_batch, sos_filter_batch,
 };
-pub use fluxion_core::{Graph, Op, OpError, OpKind, ParamSpec, Signal, Unit, fxg};
+pub use fluxion_core::{
+    FORMAT_VERSION, Graph, LoadError, Op, OpError, OpKind, ParamSpec, Signal, Unit, fxg,
+};
 
 /// Whole-graph differentiation through Burn's autograd (feature `autodiff`): [`diff_process`] lowers
 /// a [`Graph`] onto Burn so `loss.backward()` flows a gradient through an entire effect chain, via
