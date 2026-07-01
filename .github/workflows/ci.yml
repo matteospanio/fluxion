@@ -49,6 +49,8 @@ jobs:
       # Exercise its analytic-VJP custom ops (sos, sos_trainable, sos_design, fir_trainable) here.
       - run: cargo clippy -p fluxion-autodiff --features burn --all-targets --locked -- -D warnings
       - run: cargo test -p fluxion-autodiff --features burn --locked
+      # The facade's whole-graph autodiff surface (diff_process) is behind its own feature.
+      - run: cargo test -p fluxion --features autodiff --locked
 
   deny:
     name: cargo-deny (licenses & advisories)

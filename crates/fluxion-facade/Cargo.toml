@@ -14,6 +14,12 @@ categories.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Whole-graph differentiation via Burn's autograd (plan tasks E12 + C1). Pulls in Burn; the default
+# facade stays pure-Rust and offline.
+autodiff = ["dep:fluxion-autodiff", "fluxion-autodiff/burn"]
+
 [dependencies]
 fluxion-core = { path = "../fluxion-core" }
 fluxion-backend = { path = "../fluxion-backend" }
+fluxion-autodiff = { path = "../fluxion-autodiff", optional = true }

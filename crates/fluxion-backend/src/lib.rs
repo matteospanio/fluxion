@@ -1,13 +1,10 @@
 //! `fluxion-backend` — graph execution and stability certification.
 //!
-//! Today: a concrete scalar CPU executor ([`process`]) that walks a [`Graph`] and applies the
-//! `fluxion-ops` kernels across a multichannel [`Signal`], plus [`certify_graph`], which checks the
-//! stability of a graph's frozen coefficients before they are shipped (`.fxg` export / realtime).
-//!
-//! ponytail: the generic `Backend` trait (one kernel set, many devices — plan task C1) is
-//! deliberately *not* introduced yet. With only a CPU implementation it would be an abstraction
-//! with one impl; it gets extracted at M2/M3 when the Burn backend is the real second
-//! implementation. Until then, ops are called directly here.
+//! [`eval`] is the one graph-walk / op-dispatch surface (plan task C1): it walks a [`Graph`] and
+//! calls a [`Backend`]'s kernels. The scalar [`Cpu`] backend here powers [`process`]; the
+//! differentiable Burn backend in `fluxion-autodiff` reuses the *same* `eval` to make a whole graph
+//! differentiable (plan task E12). Also [`certify_graph`], which checks the stability of a graph's
+//! frozen coefficients before they are shipped (`.fxg` export / realtime).
 
 #[cfg(feature = "cuda")]
 pub mod cuda;
@@ -25,14 +22,13 @@ pub use fluxion_ops::{Certificate, Verdict};
 
 /// Run a graph over an input signal on the CPU, returning a new signal.
 ///
-/// `|` chains in order; `+` runs both branches on the same input and sums their outputs.
+/// `|` chains in order; `+` runs both branches on the same input and sums their outputs. This is
+/// [`eval`] over the [`Cpu`] backend — the same graph walk the differentiable Burn backend uses.
 pub fn process(graph: &Graph, input: &Signal) -> Signal {
-    match graph {
-        Graph::Id => input.clone(),
-        Graph::Op(op) => apply_op(op, input),
-        Graph::Series(a, b) => process(b, &process(a, input)),
-        Graph::Parallel(a, b) => add_signals(&process(a, input), &process(b, input)),
-    }
+    Signal::new(
+        input.fs,
+        eval(&Cpu, graph, input.channels.clone(), input.fs),
+    )
 }
 
 /// The SOS cascade an op lowers to, if it is a (cascade of) biquad(s); `None` for non-filter ops.
@@ -56,69 +52,139 @@ fn op_sos(op: &Op, fs: u32) -> Option<Sos> {
     })
 }
 
-fn apply_op(op: &Op, input: &Signal) -> Signal {
-    let fs = input.fs;
-    let p = &op.params;
-    let mut out = input.clone();
+/// The per-channel-set kernels the graph executor dispatches to — **one kernel set, many devices**
+/// (plan task C1). [`eval`] walks a [`Graph`] and calls these, so the scalar [`Cpu`] executor here
+/// and the differentiable Burn executor in `fluxion-autodiff` share a single dispatch surface.
+///
+/// `Buf` is a backend's signal representation (the CPU's is all channels at once; Burn's is one
+/// differentiable tensor). `normalize`/`reverb` are cross-channel / non-differentiable — a backend
+/// that can't express them (e.g. autodiff) may leave them `unimplemented!`, guarded by
+/// [`is_differentiable`].
+pub trait Backend {
+    /// A backend's signal buffer.
+    type Buf: Clone;
+    /// Apply a designed SOS cascade.
+    fn filter(&self, x: Self::Buf, sos: &[Biquad]) -> Self::Buf;
+    /// Multiply by a linear gain.
+    fn gain(&self, x: Self::Buf, factor: f32) -> Self::Buf;
+    /// `mix`-blend a `samples`-delayed copy.
+    fn delay(&self, x: Self::Buf, samples: usize, mix: f32) -> Self::Buf;
+    /// Feedback echo.
+    fn echo(&self, x: Self::Buf, samples: usize, feedback: f32, wet: f32) -> Self::Buf;
+    /// Peak-normalize (cross-channel).
+    fn normalize(&self, x: Self::Buf, peak: f32) -> Self::Buf;
+    /// Schroeder–Moorer reverb.
+    fn reverb(&self, x: Self::Buf, room: f32, damping: f32, mix: f32) -> Self::Buf;
+    /// Sum two buffers (the `+` parallel combine).
+    fn add(&self, a: Self::Buf, b: Self::Buf) -> Self::Buf;
+}
 
-    if let Some(sos) = op_sos(op, fs) {
-        for ch in &mut out.channels {
-            *ch = sos_filter(ch, &sos);
+/// Walk `graph`, dispatching each op to backend `b`'s kernels; `fs` converts delay/echo seconds to
+/// samples. Series composes, parallel runs both branches on the same input and [`Backend::add`]s.
+pub fn eval<B: Backend>(b: &B, graph: &Graph, x: B::Buf, fs: u32) -> B::Buf {
+    match graph {
+        Graph::Id => x,
+        Graph::Op(op) => eval_op(b, op, x, fs),
+        Graph::Series(a, c) => {
+            let y = eval(b, a, x, fs);
+            eval(b, c, y, fs)
         }
-        return out;
+        Graph::Parallel(a, c) => b.add(eval(b, a, x.clone(), fs), eval(b, c, x, fs)),
     }
+}
 
+fn eval_op<B: Backend>(b: &B, op: &Op, x: B::Buf, fs: u32) -> B::Buf {
+    if let Some(sos) = op_sos(op, fs) {
+        return b.filter(x, &sos);
+    }
+    let p = &op.params;
+    let samples = |secs: f32| (secs * fs as f32).round() as usize;
     match op.kind {
-        OpKind::Gain => {
-            let g = p[0];
-            for ch in &mut out.channels {
-                gain(ch, g);
-            }
-        }
-        OpKind::Normalize => normalize_peak(&mut out.channels, p[0]),
-        OpKind::Delay => {
-            let d = (p[0] * fs as f32).round() as usize;
-            for ch in &mut out.channels {
-                *ch = delay(ch, d, p[1]);
-            }
-        }
-        OpKind::Echo => {
-            let d = (p[0] * fs as f32).round() as usize;
-            for ch in &mut out.channels {
-                *ch = echo(ch, d, p[1], p[2]);
-            }
-        }
-        OpKind::Reverb => {
-            for ch in &mut out.channels {
-                *ch = reverb(ch, p[0], p[1], p[2]);
-            }
-        }
+        OpKind::Gain => b.gain(x, p[0]),
+        OpKind::Normalize => b.normalize(x, p[0]),
+        OpKind::Delay => b.delay(x, samples(p[0]), p[1]),
+        OpKind::Echo => b.echo(x, samples(p[0]), p[1], p[2]),
+        OpKind::Reverb => b.reverb(x, p[0], p[1], p[2]),
         // `OpKind` is `#[non_exhaustive]`; future ops must be added (here or in `op_sos`) before use.
         kind => panic!("fluxion-backend: op '{}' is not implemented", kind.name()),
     }
-    out
 }
 
-/// Sum two signals channel-by-channel, zero-padding to the longer of each pair.
-fn add_signals(a: &Signal, b: &Signal) -> Signal {
-    let n = a.channels.len().max(b.channels.len());
-    let mut channels = Vec::with_capacity(n);
-    for c in 0..n {
-        match (a.channels.get(c), b.channels.get(c)) {
-            (Some(x), Some(y)) => {
-                let len = x.len().max(y.len());
-                let mut sum = vec![0.0f32; len];
-                for (i, s) in sum.iter_mut().enumerate() {
-                    *s = x.get(i).copied().unwrap_or(0.0) + y.get(i).copied().unwrap_or(0.0);
-                }
-                channels.push(sum);
-            }
-            (Some(x), None) => channels.push(x.clone()),
-            (None, Some(y)) => channels.push(y.clone()),
-            (None, None) => channels.push(Vec::new()),
+/// True if every op in `graph` lowers to a differentiable Burn op (filters / gain / delay / echo) —
+/// i.e. no cross-channel or non-differentiable op (`Normalize`, `Reverb`, or a future op). Guards
+/// the autodiff graph lowering (`fluxion-autodiff`), which can't express those.
+pub fn is_differentiable(graph: &Graph, fs: u32) -> bool {
+    match graph {
+        Graph::Id => true,
+        Graph::Op(op) => {
+            op_sos(op, fs).is_some()
+                || matches!(op.kind, OpKind::Gain | OpKind::Delay | OpKind::Echo)
+        }
+        Graph::Series(a, b) | Graph::Parallel(a, b) => {
+            is_differentiable(a, fs) && is_differentiable(b, fs)
         }
     }
-    Signal::new(a.fs, channels)
+}
+
+/// The scalar CPU backend: a `Buf` is all channels of a signal, each kernel mapping over them (the
+/// cross-channel `normalize` needs them together).
+pub struct Cpu;
+
+impl Backend for Cpu {
+    type Buf = Vec<Vec<f32>>;
+
+    fn filter(&self, mut x: Vec<Vec<f32>>, sos: &[Biquad]) -> Vec<Vec<f32>> {
+        for ch in &mut x {
+            *ch = sos_filter(ch, sos);
+        }
+        x
+    }
+    fn gain(&self, mut x: Vec<Vec<f32>>, factor: f32) -> Vec<Vec<f32>> {
+        for ch in &mut x {
+            gain(ch, factor);
+        }
+        x
+    }
+    fn delay(&self, mut x: Vec<Vec<f32>>, samples: usize, mix: f32) -> Vec<Vec<f32>> {
+        for ch in &mut x {
+            *ch = delay(ch, samples, mix);
+        }
+        x
+    }
+    fn echo(&self, mut x: Vec<Vec<f32>>, samples: usize, feedback: f32, wet: f32) -> Vec<Vec<f32>> {
+        for ch in &mut x {
+            *ch = echo(ch, samples, feedback, wet);
+        }
+        x
+    }
+    fn normalize(&self, mut x: Vec<Vec<f32>>, peak: f32) -> Vec<Vec<f32>> {
+        normalize_peak(&mut x, peak);
+        x
+    }
+    fn reverb(&self, mut x: Vec<Vec<f32>>, room: f32, damping: f32, mix: f32) -> Vec<Vec<f32>> {
+        for ch in &mut x {
+            *ch = reverb(ch, room, damping, mix);
+        }
+        x
+    }
+    /// Channel-by-channel sum, zero-padding to the longer of each pair (and the more channels).
+    fn add(&self, a: Vec<Vec<f32>>, b: Vec<Vec<f32>>) -> Vec<Vec<f32>> {
+        let n = a.len().max(b.len());
+        (0..n)
+            .map(|c| match (a.get(c), b.get(c)) {
+                (Some(x), Some(y)) => {
+                    let mut sum = vec![0.0f32; x.len().max(y.len())];
+                    for (i, s) in sum.iter_mut().enumerate() {
+                        *s = x.get(i).copied().unwrap_or(0.0) + y.get(i).copied().unwrap_or(0.0);
+                    }
+                    sum
+                }
+                (Some(x), None) => x.clone(),
+                (None, Some(y)) => y.clone(),
+                (None, None) => Vec::new(),
+            })
+            .collect()
+    }
 }
 
 /// Certify the stability of a graph's frozen coefficients at sample rate `fs`.

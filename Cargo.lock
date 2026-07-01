@@ -2388,6 +2388,7 @@ dependencies = [
 name = "fluxion"
 version = "0.0.0"
 dependencies = [
+ "fluxion-autodiff",
  "fluxion-backend",
  "fluxion-core",
 ]
@@ -2399,6 +2400,8 @@ dependencies = [
  "burn",
  "burn-cubecl",
  "cubecl",
+ "fluxion-backend",
+ "fluxion-core",
  "fluxion-ops",
 ]
 
