@@ -238,3 +238,13 @@ concurrently (ideally one contributor or one worktree per lane).
   gate (B9). **Two goals the brief names — data augmentation (J12) and importing foreign-trained DDSP
   modules like FLAMO (J13) — are absent from PROJECT.md; add them to the design doc before building.**
   The well-built foundations (analytic VJPs, the lock-free ring, the GPU kernel) were confirmed sound.
+- **Progress (2026-07-01) — differentiable-training thread closed to the public API.**
+  - **D2** DONE: Chebyshev Type II (Lo/Hi) SOS design, matched to `scipy.signal.cheby2` over 2048 points.
+  - **E10** DONE: `design_param_grad` — ∂L/∂(cutoff/Q/gain) by Jᵀ·∂L/∂coeffs (FD design-Jacobian ∘ analytic `sos_vjp`); train on the always-stable design manifold ("learn a cutoff").
+  - **E11** DONE: `sos_design`/`fir_trainable` + `delay`/`echo` registered as Burn custom ops (all leaf ops now differentiable); each gradchecks through Burn's tape.
+  - **E4** DONE: `normalize_vjp` (argmax-corrected peak-normalize adjoint). *(sum = the parallel-graph combine, handled by the graph adjoint; no standalone mask/DC ops exist.)*
+  - **C1** DONE: `Backend` trait + one generic `eval(&B, graph, x, fs)` dispatch surface; `process` is now `eval::<Cpu>`.
+  - **E12** DONE: `fluxion-autodiff::graph` impls `Backend` over Burn tensors → `diff_process` differentiates a whole `Graph`; exposed as `fluxion::diff_process` (`--features autodiff`). Composed gradient verified bit-identical to the hand-derived CPU analytic adjoint. **`fluxion-autodiff` is no longer orphaned — goal #1 is reachable from the facade.**
+  - **E9** DONE: `learn_cutoff` example (Burn autograd end-to-end, converges 1200→3000 Hz). **E8** partial: reverb feedback now small-gain-certified (was a silent `_ => certified()`); in-loop training stability projection still open.
+  - Still open in Epic E: none of the above; the remaining differentiable work is E8's in-loop projection.
+  - CI gap fixed: the Burn integration (behind an optional feature) was never exercised in CI; a new `autodiff (Burn CPU)` job now runs it plus the facade `--features autodiff`.
