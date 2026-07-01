@@ -29,7 +29,7 @@ pub use chebyshev::{
 };
 pub use delay::{delay, delay_vjp, echo, echo_vjp};
 pub use design::design_param_grad;
-pub use effect::{gain, gain_vjp, normalize_peak};
+pub use effect::{gain, gain_vjp, normalize_peak, normalize_vjp};
 pub use fir::{fft_convolve, fir_filter, fir_vjp};
 pub use iir::{
     Biquad, BiquadGrad, Sos, biquad_forward, biquad_vjp, butterworth_highpass, butterworth_lowpass,

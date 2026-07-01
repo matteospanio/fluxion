@@ -34,9 +34,43 @@ pub fn normalize_peak(channels: &mut [Vec<f32>], target: f32) {
     }
 }
 
+/// Backward pass for single-channel peak-normalization (`y = x · target / peak`, `peak = maxₖ|xₖ|`).
+///
+/// Returns the input cotangent. The gain depends on `x` through the peak, so the argmax sample `m`
+/// carries an extra term: `grad_in = (target/peak)·grad_out`, then
+/// `grad_in[m] -= target·sign(x[m])·⟨grad_out, x⟩ / peak²`. A silent input (peak 0) is an identity,
+/// so the gradient passes straight through.
+///
+/// ponytail: `peak = max` is non-smooth at ties (two samples of equal magnitude); the gradient there
+/// is a valid subgradient. Fine for training — real signals don't sit exactly on a tie.
+pub fn normalize_vjp(input: &[f32], target: f32, grad_out: &[f32]) -> Vec<f32> {
+    assert_eq!(
+        input.len(),
+        grad_out.len(),
+        "normalize_vjp: grad_out ({}) must match input length ({})",
+        grad_out.len(),
+        input.len()
+    );
+    let (mut peak, mut m) = (0.0f32, 0usize);
+    for (i, &x) in input.iter().enumerate() {
+        if x.abs() > peak {
+            peak = x.abs();
+            m = i;
+        }
+    }
+    if peak == 0.0 {
+        return grad_out.to_vec(); // identity forward → pass-through gradient
+    }
+    let s = target / peak;
+    let mut grad: Vec<f32> = grad_out.iter().map(|&g| s * g).collect();
+    let dot: f32 = grad_out.iter().zip(input).map(|(&g, &x)| g * x).sum();
+    grad[m] -= target * input[m].signum() * dot / (peak * peak);
+    grad
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{gain, gain_vjp, normalize_peak};
+    use super::{gain, gain_vjp, normalize_peak, normalize_vjp};
 
     #[test]
     fn gain_scales() {
@@ -61,6 +95,35 @@ mod tests {
         let eps = 1e-3;
         let num = (dot(factor + eps) - dot(factor - eps)) / (2.0 * eps);
         assert!((num - grad_factor).abs() < 1e-2 * (1.0 + grad_factor.abs()));
+    }
+
+    #[test]
+    fn normalize_vjp_matches_finite_difference() {
+        // Unique peak (index 2) so the argmax is stable under the FD perturbation.
+        let x = vec![0.3f32, -0.5, 2.0, 0.25, -1.1];
+        let seed = vec![1.0f32, 0.5, -0.5, 2.0, 0.7];
+        let target = 0.8f32;
+
+        let norm = |v: &[f32]| {
+            let peak = v.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
+            let s = if peak > 0.0 { target / peak } else { 1.0 };
+            v.iter().map(|&x| x * s).collect::<Vec<_>>()
+        };
+        let g = normalize_vjp(&x, target, &seed);
+
+        let loss = |v: &[f32]| norm(v).iter().zip(&seed).map(|(a, b)| a * b).sum::<f32>();
+        let eps = 1e-3;
+        for j in 0..x.len() {
+            let (mut hi, mut lo) = (x.clone(), x.clone());
+            hi[j] += eps;
+            lo[j] -= eps;
+            let fd = (loss(&hi) - loss(&lo)) / (2.0 * eps);
+            assert!(
+                (g[j] - fd).abs() < 1e-2 * (1.0 + fd.abs()),
+                "grad[{j}] = {} vs fd {fd}",
+                g[j]
+            );
+        }
     }
 
     #[test]

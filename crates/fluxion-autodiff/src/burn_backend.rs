@@ -14,6 +14,8 @@
 //!   training stays on the always-stable design manifold ([`fluxion_ops::design_param_grad`] ∘
 //!   [`fluxion_ops::sos_vjp`]) — the DDSP `cutoff_learnable` reparameterisation.
 //! - [`fir_trainable`] — a FIR whose taps are a Burn tensor ([`fluxion_ops::fir_vjp`]).
+//! - [`delay`] / [`echo`] — fixed-parameter feedforward/feedback delays; differentiate the input so
+//!   they compose inside a differentiable graph ([`fluxion_ops::delay_vjp`] / `echo_vjp`).
 //!
 //! These run the forward/backward on the host (backend-agnostic). For a GPU-resident path — the
 //! kernels launched directly on a resident Burn tensor, no host roundtrip — see [`crate::cuda`]
@@ -29,7 +31,8 @@ use burn::tensor::ops::FloatTensor;
 use burn::tensor::{Tensor, TensorData, TensorPrimitive};
 
 use fluxion_ops::{
-    Biquad, design_param_grad, fir_filter, fir_vjp, sos_filter, sos_input_grad, sos_vjp,
+    Biquad, delay_vjp, design_param_grad, echo_vjp, fir_filter, fir_vjp, sos_filter,
+    sos_input_grad, sos_vjp,
 };
 
 /// Run `f` over a 1-D float primitive via a host roundtrip (correctness-first; the GPU-kernel path
@@ -315,9 +318,113 @@ pub fn sos_design<B: Backend, K: CheckpointStrategy>(
     Tensor::from_primitive(TensorPrimitive::Float(out))
 }
 
+// ---------- delay / echo (fixed params; differentiate the input — composable in a graph) ----------
+
+#[derive(Debug)]
+struct DelayBackward {
+    samples: usize,
+    mix: f32,
+}
+
+impl<B: Backend> Backward<B, 1> for DelayBackward {
+    type State = ();
+
+    fn backward(self, ops: Ops<(), 1>, grads: &mut Gradients, _cp: &mut Checkpointer) {
+        let (samples, mix) = (self.samples, self.mix);
+        unary::<B, _>(ops.parents, ops.node, grads, move |g| {
+            // Delay is linear in the input, so grad_input is independent of the input values.
+            map_1d::<B>(g, move |gv| {
+                delay_vjp(&vec![0.0; gv.len()], samples, mix, &gv).0
+            })
+        });
+    }
+}
+
+/// Apply a `mix`-blended delay (`samples` fixed) as a differentiable op — input gradient via
+/// [`fluxion_ops::delay_vjp`], so a delay composes inside a differentiable graph.
+pub fn delay<B: Backend, K: CheckpointStrategy>(
+    x: Tensor<Autodiff<B, K>, 1>,
+    samples: usize,
+    mix: f32,
+) -> Tensor<Autodiff<B, K>, 1> {
+    let ad = x.into_primitive().tensor();
+    let bwd = DelayBackward { samples, mix };
+    let out = match bwd
+        .prepare::<K>([ad.node.clone()])
+        .compute_bound()
+        .stateful()
+    {
+        OpsKind::Tracked(prep) => prep.finish(
+            (),
+            map_1d::<B>(ad.primitive, move |v| fluxion_ops::delay(&v, samples, mix)),
+        ),
+        OpsKind::UnTracked(prep) => prep.finish(map_1d::<B>(ad.primitive, move |v| {
+            fluxion_ops::delay(&v, samples, mix)
+        })),
+    };
+    Tensor::from_primitive(TensorPrimitive::Float(out))
+}
+
+#[derive(Debug)]
+struct EchoBackward {
+    samples: usize,
+    feedback: f32,
+    wet: f32,
+}
+
+impl<B: Backend> Backward<B, 1> for EchoBackward {
+    type State = ();
+
+    fn backward(self, ops: Ops<(), 1>, grads: &mut Gradients, _cp: &mut Checkpointer) {
+        let EchoBackward {
+            samples,
+            feedback,
+            wet,
+        } = self;
+        unary::<B, _>(ops.parents, ops.node, grads, move |g| {
+            // Echo is linear in the input; grad_input is the adjoint loop, independent of input.
+            map_1d::<B>(g, move |gv| {
+                echo_vjp(&vec![0.0; gv.len()], samples, feedback, wet, &gv).0
+            })
+        });
+    }
+}
+
+/// Apply a feedback `echo` (`samples`/`feedback`/`wet` fixed) as a differentiable op — input gradient
+/// via [`fluxion_ops::echo_vjp`]'s adjoint feedback loop.
+pub fn echo<B: Backend, K: CheckpointStrategy>(
+    x: Tensor<Autodiff<B, K>, 1>,
+    samples: usize,
+    feedback: f32,
+    wet: f32,
+) -> Tensor<Autodiff<B, K>, 1> {
+    let ad = x.into_primitive().tensor();
+    let bwd = EchoBackward {
+        samples,
+        feedback,
+        wet,
+    };
+    let out = match bwd
+        .prepare::<K>([ad.node.clone()])
+        .compute_bound()
+        .stateful()
+    {
+        OpsKind::Tracked(prep) => prep.finish(
+            (),
+            map_1d::<B>(ad.primitive, move |v| {
+                fluxion_ops::echo(&v, samples, feedback, wet)
+            }),
+        ),
+        OpsKind::UnTracked(prep) => prep.finish(map_1d::<B>(ad.primitive, move |v| {
+            fluxion_ops::echo(&v, samples, feedback, wet)
+        })),
+    };
+    Tensor::from_primitive(TensorPrimitive::Float(out))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{fir_trainable, sos, sos_design, sos_trainable, to_sos};
+    use super::{delay, echo, fir_trainable, sos, sos_design, sos_trainable, to_sos};
     use burn::backend::{Autodiff, NdArray};
     use burn::tensor::Tensor;
     use fluxion_ops::{Biquad, butterworth_lowpass, fir_filter, sos_filter};
@@ -500,6 +607,71 @@ mod tests {
             "cutoff grad {} vs fd {fd}",
             gp[0]
         );
+    }
+
+    #[test]
+    fn delay_echo_input_gradients_gradcheck() {
+        let device = Default::default();
+        let xs: Vec<f32> = (0..32).map(|i| (0.3 * i as f32).sin()).collect();
+        let seed: Vec<f32> = (0..32).map(|i| (0.2 * i as f32 + 0.5).cos()).collect();
+        let seed_t = Tensor::<B, 1>::from_floats(seed.as_slice(), &device);
+        let eps = 1e-3;
+
+        // delay
+        let x = Tensor::<B, 1>::from_floats(xs.as_slice(), &device).require_grad();
+        let loss = (delay(x.clone(), 5, 0.7) * seed_t.clone()).sum();
+        let gx = x
+            .grad(&loss.backward())
+            .unwrap()
+            .into_data()
+            .to_vec::<f32>()
+            .unwrap();
+        let dot_d = |v: &[f32]| {
+            fluxion_ops::delay(v, 5, 0.7)
+                .iter()
+                .zip(&seed)
+                .map(|(a, b)| a * b)
+                .sum::<f32>()
+        };
+        for i in 0..xs.len() {
+            let (mut hi, mut lo) = (xs.clone(), xs.clone());
+            hi[i] += eps;
+            lo[i] -= eps;
+            let fd = (dot_d(&hi) - dot_d(&lo)) / (2.0 * eps);
+            assert!(
+                (gx[i] - fd).abs() < 1e-2,
+                "delay gx[{i}] = {} vs fd {fd}",
+                gx[i]
+            );
+        }
+
+        // echo
+        let x = Tensor::<B, 1>::from_floats(xs.as_slice(), &device).require_grad();
+        let loss = (echo(x.clone(), 4, 0.5, 0.6) * seed_t).sum();
+        let gx = x
+            .grad(&loss.backward())
+            .unwrap()
+            .into_data()
+            .to_vec::<f32>()
+            .unwrap();
+        let dot_e = |v: &[f32]| {
+            fluxion_ops::echo(v, 4, 0.5, 0.6)
+                .iter()
+                .zip(&seed)
+                .map(|(a, b)| a * b)
+                .sum::<f32>()
+        };
+        for i in 0..xs.len() {
+            let (mut hi, mut lo) = (xs.clone(), xs.clone());
+            hi[i] += eps;
+            lo[i] -= eps;
+            let fd = (dot_e(&hi) - dot_e(&lo)) / (2.0 * eps);
+            assert!(
+                (gx[i] - fd).abs() < 1e-2,
+                "echo gx[{i}] = {} vs fd {fd}",
+                gx[i]
+            );
+        }
     }
 
     #[test]
