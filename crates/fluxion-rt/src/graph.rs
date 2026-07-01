@@ -1,8 +1,8 @@
 //! General-graph realtime executor (plan task G3, beyond a linear cascade).
 //!
 //! [`SosStream`] runs one cascade; [`RtGraph`] runs the full graph algebra — `Series` (chain) and
-//! `Parallel` (sum) composition of filter, gain, delay, and echo nodes — block-by-block and
-//! allocation-free. The intermediate buffers that `Series`/`Parallel` need are sized once by
+//! `Parallel` (sum) composition of filter, gain, delay, echo, comb/all-pass (reverb) and FIR nodes —
+//! block-by-block and allocation-free. The intermediate buffers that `Series`/`Parallel` need are sized once by
 //! [`RtGraph::prepare`]; delay/echo own their fixed-size rings; after that [`RtGraph::process`]
 //! never allocates, so it is audio-thread safe.
 //!
@@ -75,6 +75,13 @@ pub enum RtGraph {
         yring: Vec<f32>,
         idx: usize,
         g: f32,
+    },
+    /// Direct-form FIR: `y[n] = Σ_k taps[k]·x[n-k]` (the realtime form of a trained/frozen FIR).
+    /// `ring` holds the last `taps.len()` inputs; `idx` is the write cursor.
+    Fir {
+        taps: Vec<f32>,
+        ring: Vec<f32>,
+        idx: usize,
     },
 }
 
@@ -169,6 +176,18 @@ impl RtGraph {
         }
     }
 
+    /// A direct-form FIR leaf from a tap vector — the realtime form of a frozen/trained FIR:
+    /// `y[n] = Σ_k taps[k]·x[n-k]`. The `taps.len()`-sample history is allocated here, so
+    /// [`process`](Self::process) stays alloc-free.
+    pub fn fir(taps: Vec<f32>) -> Self {
+        let n = taps.len().max(1);
+        RtGraph::Fir {
+            taps,
+            ring: vec![0.0; n],
+            idx: 0,
+        }
+    }
+
     /// A realtime Schroeder–Moorer reverb, built from the same Freeverb topology as the offline
     /// [`fluxion_ops::reverb`]: four parallel damped combs, averaged, then two series all-passes, wet/
     /// dry-blended by `mix`. `room_size` sets the comb feedback (clamped `< 1` for BIBO stability),
@@ -210,7 +229,8 @@ impl RtGraph {
             | RtGraph::Echo { .. }
             | RtGraph::DelayFrac { .. }
             | RtGraph::Comb { .. }
-            | RtGraph::Allpass { .. } => {}
+            | RtGraph::Allpass { .. }
+            | RtGraph::Fir { .. } => {}
             RtGraph::Series {
                 first,
                 second,
@@ -359,6 +379,21 @@ impl RtGraph {
                     }
                 }
             }
+            RtGraph::Fir { taps, ring, idx } => {
+                let n = ring.len();
+                for (o, &x) in output.iter_mut().zip(input) {
+                    ring[*idx] = x; // x[n] at idx; x[n-k] at (idx + n - k) mod n
+                    let mut acc = 0.0f32;
+                    for (k, &h) in taps.iter().enumerate() {
+                        acc += h * ring[(*idx + n - k) % n];
+                    }
+                    *o = acc;
+                    *idx += 1;
+                    if *idx == n {
+                        *idx = 0;
+                    }
+                }
+            }
         }
     }
 
@@ -402,6 +437,10 @@ impl RtGraph {
                 yring.iter_mut().for_each(|s| *s = 0.0);
                 *idx = 0;
             }
+            RtGraph::Fir { ring, idx, .. } => {
+                ring.iter_mut().for_each(|s| *s = 0.0);
+                *idx = 0;
+            }
         }
     }
 }
@@ -409,7 +448,9 @@ impl RtGraph {
 #[cfg(test)]
 mod tests {
     use super::RtGraph;
-    use fluxion_ops::{butterworth_highpass, butterworth_lowpass, delay, echo, reverb, sos_filter};
+    use fluxion_ops::{
+        butterworth_highpass, butterworth_lowpass, delay, echo, fir_filter, reverb, sos_filter,
+    };
 
     fn stream_chunks(g: &mut RtGraph, x: &[f32], block: usize) -> Vec<f32> {
         let mut out = vec![0.0f32; block];
@@ -541,6 +582,22 @@ mod tests {
         let b = stream_chunks(&mut int, &x, 50);
         for (p, q) in a.iter().zip(&b) {
             assert!((p - q).abs() < 1e-6, "{p} vs {q}");
+        }
+    }
+
+    #[test]
+    fn fir_node_matches_batch() {
+        // Streaming the direct-form FIR node must equal the offline fir_filter, across block sizes
+        // (block smaller and larger than the tap count).
+        let x = signal(1000);
+        let taps = vec![0.2f32, -0.5, 0.3, 0.1, -0.05, 0.02];
+        let want = fir_filter(&x, &taps);
+        for block in [4, 64] {
+            let mut g = RtGraph::fir(taps.clone());
+            let streamed = stream_chunks(&mut g, &x, block);
+            for (a, b) in streamed.iter().zip(&want) {
+                assert!((a - b).abs() < 1e-5, "block {block}: {a} vs {b}");
+            }
         }
     }
 
