@@ -31,3 +31,7 @@ burn = { version = "0.21", default-features = false, features = [
 ], optional = true }
 burn-cubecl = { version = "0.21", optional = true }
 cubecl = { version = "0.10", features = ["cuda"], optional = true }
+
+[[example]]
+name = "learn_cutoff"
+required-features = ["burn"]

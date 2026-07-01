@@ -124,8 +124,9 @@ fn add_signals(a: &Signal, b: &Signal) -> Signal {
 /// Certify the stability of a graph's frozen coefficients at sample rate `fs`.
 ///
 /// Returns the worst verdict across the graph: filter ops are certified from their designed SOS
-/// poles, the feedback `echo` op via its small-gain loop bound, and feedforward ops (gain /
-/// normalize / delay) are unconditionally stable. Series/parallel aggregate to their worst child.
+/// poles, the feedback `echo`/`reverb` ops via their small-gain loop bound, and feedforward ops
+/// (gain / normalize / delay) are unconditionally stable. Series/parallel aggregate to the worst
+/// child.
 pub fn certify_graph(graph: &Graph, fs: u32) -> Certificate {
     match graph {
         Graph::Id => Certificate::certified(),
@@ -141,8 +142,11 @@ fn certify_op(op: &Op, fs: u32) -> Certificate {
         return certify_sos(&sos);
     }
     match op.kind {
-        // Echo is the one feedback op: its loop gain is the (frequency-flat) feedback coefficient.
+        // Echo is a feedback op: its loop gain is the (frequency-flat) feedback coefficient.
         OpKind::Echo => small_gain_certify(|_| op.params[1].abs(), 1),
+        // Reverb is parallel damped-feedback combs; each comb's loop gain is the room-size feedback
+        // (the one-pole damping only attenuates), clamped < 1 in the design → BIBO-stable.
+        OpKind::Reverb => small_gain_certify(|_| op.params[0].clamp(0.0, 0.98), 1),
         // Gain / Normalize / Delay are feedforward and unconditionally stable.
         _ => Certificate::certified(),
     }
@@ -303,6 +307,19 @@ mod tests {
             | Graph::op(OpKind::Echo, [0.1, 0.5, 0.4])
             | Graph::op(OpKind::Peaking, [3_000.0, 6.0, 1.0]);
         assert!(certify_graph(&g, 48_000).verdict.is_shippable());
+    }
+
+    #[test]
+    fn reverb_certifies_via_small_gain_not_the_catch_all() {
+        // Reverb's feedback combs are now actually checked (room-size loop gain < 1), with a real
+        // stability margin — not silently blessed by the `_ => certified()` fall-through.
+        let c = certify_graph(&Graph::op(OpKind::Reverb, [0.8, 0.5, 0.3]), 48_000);
+        assert!(c.verdict.is_shippable());
+        assert!(
+            c.margin > 0.0 && c.margin.is_finite(),
+            "expected a real margin, got {}",
+            c.margin
+        );
     }
 
     #[test]
