@@ -7,20 +7,85 @@
 //! arbitrary [`Graph`](fluxion_core::Graph) to a cascade (G2) and the SIMD/general-graph executor are
 //! later steps.
 
+use std::f32::consts::FRAC_PI_2;
+
 use fluxion_ops::Biquad;
 
 /// A streaming SOS cascade: the sections plus each section's Direct-Form-II-Transposed state.
+///
+/// Supports a click-free coefficient swap ([`set_coeffs`](Self::set_coeffs), plan task G9): the
+/// incoming cascade runs alongside the current one and their outputs are equal-power blended over a
+/// fade window, then the new one takes over. Design the new coefficients off the audio thread; the
+/// swap itself is allocation-free (after [`prepare`](Self::prepare)) when the section count is
+/// unchanged — the common case for automating a filter's cutoff/Q.
 #[derive(Debug, Clone)]
 pub struct SosStream {
     sos: Vec<Biquad>,
     state: Vec<[f32; 2]>, // (s1, s2) per section
+    // Crossfade-to-new-coefficients state (idle when `fade_left == 0`).
+    next_sos: Vec<Biquad>,
+    next_state: Vec<[f32; 2]>,
+    fade_left: u32,
+    fade_len: u32,
+    scratch: Vec<f32>, // the incoming branch's output during a fade (sized by `prepare`)
 }
 
 impl SosStream {
     /// Build a stream from a frozen cascade, all state zeroed.
     pub fn new(sos: Vec<Biquad>) -> Self {
         let state = vec![[0.0f32; 2]; sos.len()];
-        Self { sos, state }
+        Self {
+            sos,
+            state,
+            next_sos: Vec::new(),
+            next_state: Vec::new(),
+            fade_left: 0,
+            fade_len: 0,
+            scratch: Vec::new(),
+        }
+    }
+
+    /// Pre-size the crossfade scratch for blocks up to `max_block`, and the incoming-coefficient
+    /// storage for the current section count — so a same-order [`set_coeffs`](Self::set_coeffs) is
+    /// allocation-free. Call before going realtime if you will swap coefficients live.
+    pub fn prepare(&mut self, max_block: usize) {
+        self.scratch.resize(max_block, 0.0);
+        if self.next_sos.len() != self.sos.len() {
+            self.next_sos = self.sos.clone();
+            self.next_state = vec![[0.0f32; 2]; self.sos.len()];
+        }
+    }
+
+    /// Swap to `new_sos` with an equal-power crossfade over `fade_samples` (a design-stage swap;
+    /// design happens off the audio thread). Allocation-free when `new_sos.len()` equals the current
+    /// section count (after [`prepare`](Self::prepare)); a different order reallocates the incoming
+    /// storage. A swap requested mid-fade restarts the fade from the current output.
+    pub fn set_coeffs(&mut self, new_sos: &[Biquad], fade_samples: u32) {
+        if self.next_sos.len() == new_sos.len() {
+            self.next_sos.copy_from_slice(new_sos);
+        } else {
+            self.next_sos = new_sos.to_vec();
+            self.next_state = vec![[0.0f32; 2]; new_sos.len()];
+        }
+        self.next_state.iter_mut().for_each(|s| *s = [0.0; 2]);
+        self.fade_len = fade_samples.max(1);
+        self.fade_left = self.fade_len;
+    }
+
+    /// The Direct-Form-II-Transposed cascade inner loop over one block, carrying `state`.
+    fn run(sos: &[Biquad], state: &mut [[f32; 2]], input: &[f32], output: &mut [f32]) {
+        output.copy_from_slice(input);
+        for (bq, st) in sos.iter().zip(state.iter_mut()) {
+            let (mut s1, mut s2) = (st[0], st[1]);
+            for y in output.iter_mut() {
+                let x = *y;
+                let out = bq.b0 * x + s1; // Direct Form II Transposed
+                s1 = bq.b1 * x - bq.a1 * out + s2;
+                s2 = bq.b2 * x - bq.a2 * out;
+                *y = out;
+            }
+            *st = [s1, s2];
+        }
     }
 
     /// Build a stream from frozen sections `[b0, b1, b2, a1, a2]` (e.g. `FrozenSos::sections` from
@@ -39,26 +104,43 @@ impl SosStream {
         Self::new(sos)
     }
 
-    /// Reset all section state to zero (e.g. between independent files).
+    /// Reset all section state to zero and cancel any in-progress crossfade.
     pub fn reset(&mut self) {
         self.state.iter_mut().for_each(|s| *s = [0.0; 2]);
+        self.next_state.iter_mut().for_each(|s| *s = [0.0; 2]);
+        self.fade_left = 0;
     }
 
     /// Filter one block into `output`, carrying state across calls. `input` and `output` must be the
-    /// same length. Allocation-free.
+    /// same length. Allocation-free. During a [`set_coeffs`](Self::set_coeffs) crossfade the current
+    /// and incoming cascades are equal-power blended.
     pub fn process_block(&mut self, input: &[f32], output: &mut [f32]) {
         assert_eq!(input.len(), output.len(), "block in/out length mismatch");
-        output.copy_from_slice(input);
-        for (bq, st) in self.sos.iter().zip(self.state.iter_mut()) {
-            let (mut s1, mut s2) = (st[0], st[1]);
-            for y in output.iter_mut() {
-                let x = *y;
-                let out = bq.b0 * x + s1; // Direct Form II Transposed
-                s1 = bq.b1 * x - bq.a1 * out + s2;
-                s2 = bq.b2 * x - bq.a2 * out;
-                *y = out;
-            }
-            *st = [s1, s2];
+        let n = input.len();
+
+        // Fast path: no crossfade (also the fallback if `prepare` wasn't called to size scratch).
+        if self.fade_left == 0 || self.scratch.len() < n {
+            Self::run(&self.sos, &mut self.state, input, output);
+            return;
+        }
+
+        // Crossfade: current → output, incoming → scratch, equal-power blend (cos²+sin² = 1).
+        Self::run(&self.sos, &mut self.state, input, output);
+        let scratch = &mut self.scratch[..n];
+        Self::run(&self.next_sos, &mut self.next_state, input, scratch);
+        let (done0, flen) = (
+            (self.fade_len - self.fade_left) as f32,
+            self.fade_len as f32,
+        );
+        for (i, (o, &s)) in output.iter_mut().zip(scratch.iter()).enumerate() {
+            let theta = ((done0 + i as f32) / flen).min(1.0) * FRAC_PI_2;
+            *o = theta.cos() * *o + theta.sin() * s;
+        }
+        self.fade_left = self.fade_left.saturating_sub(n as u32);
+        if self.fade_left == 0 {
+            // Adopt the incoming cascade (pointer swaps, no allocation).
+            std::mem::swap(&mut self.sos, &mut self.next_sos);
+            std::mem::swap(&mut self.state, &mut self.next_state);
         }
     }
 }
@@ -66,7 +148,7 @@ impl SosStream {
 #[cfg(test)]
 mod tests {
     use super::SosStream;
-    use fluxion_ops::{butterworth_lowpass, sos_filter};
+    use fluxion_ops::{butterworth_highpass, butterworth_lowpass, sos_filter};
 
     #[test]
     fn streaming_in_chunks_matches_whole_signal() {
@@ -104,6 +186,45 @@ mod tests {
         a.process_block(&x, &mut oa);
         b.process_block(&x, &mut ob);
         assert_eq!(oa, ob);
+    }
+
+    #[test]
+    fn coeff_crossfade_is_click_free_and_converges() {
+        // DC input: a low-pass passes it (→1), a high-pass kills it (→0). Swapping lp→hp with a
+        // crossfade must slide the output smoothly 1→0 (no click) and settle at 0.
+        let lp = butterworth_lowpass(2, 2_000.0, 48_000);
+        let hp = butterworth_highpass(2, 2_000.0, 48_000);
+        let dc = vec![1.0f32; 4000];
+
+        let mut s = SosStream::new(lp);
+        s.prepare(200);
+        let mut y = Vec::with_capacity(dc.len());
+        let mut out = vec![0.0f32; 200];
+        let mut swapped = false;
+        for chunk in dc.chunks(200) {
+            let o = &mut out[..chunk.len()];
+            s.process_block(chunk, o);
+            y.extend_from_slice(o);
+            if !swapped && y.len() >= 2000 {
+                s.set_coeffs(&hp, 1000); // swap at a block boundary, 1000-sample fade
+                swapped = true;
+            }
+        }
+        assert!(
+            (y[1999] - 1.0).abs() < 0.02,
+            "not settled to lp DC before swap: {}",
+            y[1999]
+        );
+        // No click during the fade: every sample-to-sample step stays tiny.
+        let jump = y[2000..3000]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(jump < 0.02, "click during crossfade: {jump}");
+        assert!(
+            y[3500..].iter().all(|&v| v.abs() < 0.02),
+            "not settled to hp DC after fade"
+        );
     }
 
     #[test]

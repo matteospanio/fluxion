@@ -28,7 +28,7 @@ pub mod ring;
 pub mod stream;
 
 pub use engine::{Command, RtEngine};
-pub use graph::RtGraph;
+pub use graph::{MAX_SETCOEFFS_SECTIONS, RtGraph, SetCoeffs};
 pub use param::SmoothedValue;
 pub use ring::{Consumer, Producer, channel};
 pub use stream::SosStream;

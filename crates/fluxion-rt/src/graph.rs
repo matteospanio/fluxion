@@ -222,9 +222,10 @@ impl RtGraph {
     /// must not exceed `max_block`.
     pub fn prepare(&mut self, max_block: usize) {
         match self {
-            // Leaves carry their own fixed-size state (cascade state / delay rings) — no scratch.
-            RtGraph::Filter(_)
-            | RtGraph::Gain(_)
+            // A filter leaf pre-sizes its crossfade scratch (for a live `set_coeffs`).
+            RtGraph::Filter(s) => s.prepare(max_block),
+            // The other leaves carry their own fixed-size state (delay rings) — no scratch.
+            RtGraph::Gain(_)
             | RtGraph::Delay { .. }
             | RtGraph::Echo { .. }
             | RtGraph::DelayFrac { .. }
@@ -443,6 +444,98 @@ impl RtGraph {
             }
         }
     }
+
+    /// Number of addressable filter (SOS) nodes, in depth-first order — the valid index range for
+    /// [`set_coeffs`](Self::set_coeffs).
+    pub fn filter_count(&self) -> usize {
+        match self {
+            RtGraph::Filter(_) => 1,
+            RtGraph::Series { first, second, .. } => first.filter_count() + second.filter_count(),
+            RtGraph::Parallel { left, right, .. } => left.filter_count() + right.filter_count(),
+            _ => 0,
+        }
+    }
+
+    /// Swap the `node`-th filter's coefficients (depth-first order) to `new_sos` with an equal-power
+    /// crossfade over `fade_samples` — click-free live filter automation (plan task G9). The new
+    /// coefficients are designed off the audio thread; the swap is allocation-free (after
+    /// [`prepare`](Self::prepare)) when the section count is unchanged. Returns `false` if `node` is
+    /// out of range. Apply between `process` blocks, e.g. driven from a command queue.
+    pub fn set_coeffs(&mut self, node: usize, new_sos: &[Biquad], fade_samples: u32) -> bool {
+        let mut remaining = node;
+        self.set_coeffs_at(&mut remaining, new_sos, fade_samples)
+    }
+
+    fn set_coeffs_at(&mut self, remaining: &mut usize, new_sos: &[Biquad], fade: u32) -> bool {
+        match self {
+            RtGraph::Filter(s) => {
+                if *remaining == 0 {
+                    s.set_coeffs(new_sos, fade);
+                    true
+                } else {
+                    *remaining -= 1;
+                    false
+                }
+            }
+            RtGraph::Series { first, second, .. } => {
+                first.set_coeffs_at(remaining, new_sos, fade)
+                    || second.set_coeffs_at(remaining, new_sos, fade)
+            }
+            RtGraph::Parallel { left, right, .. } => {
+                left.set_coeffs_at(remaining, new_sos, fade)
+                    || right.set_coeffs_at(remaining, new_sos, fade)
+            }
+            _ => false,
+        }
+    }
+
+    /// Apply a [`SetCoeffs`] command drained from the ring on the audio thread — routes to the node
+    /// and starts the crossfade. Returns `false` if the node index is out of range.
+    pub fn apply(&mut self, cmd: &SetCoeffs) -> bool {
+        let n = (cmd.count as usize).min(MAX_SETCOEFFS_SECTIONS);
+        self.set_coeffs(cmd.node as usize, &cmd.sections[..n], cmd.fade_samples)
+    }
+}
+
+/// The maximum SOS sections a [`SetCoeffs`] command carries (16th-order — 8 biquads).
+pub const MAX_SETCOEFFS_SECTIONS: usize = 8;
+
+/// A `Copy`, ring-friendly command to swap a filter node's coefficients live (plan task G9). Build it
+/// off the audio thread with [`SetCoeffs::new`], send it over the lock-free [`ring`](crate::ring), and
+/// apply it on the audio thread with [`RtGraph::apply`]. Fixed-capacity so it stays `Copy` and needs
+/// no allocation on the audio thread; a cascade longer than [`MAX_SETCOEFFS_SECTIONS`] can't be sent
+/// this way (design a shorter one, or swap it via [`RtGraph::set_coeffs`] between blocks).
+#[derive(Clone, Copy, Debug)]
+pub struct SetCoeffs {
+    node: u32,
+    fade_samples: u32,
+    sections: [Biquad; MAX_SETCOEFFS_SECTIONS],
+    count: u8,
+}
+
+impl SetCoeffs {
+    /// Pack a coefficient swap for the `node`-th filter (crossfaded over `fade_samples`). Returns
+    /// `None` if `sos` has more than [`MAX_SETCOEFFS_SECTIONS`] sections.
+    pub fn new(node: u32, sos: &[Biquad], fade_samples: u32) -> Option<Self> {
+        if sos.len() > MAX_SETCOEFFS_SECTIONS {
+            return None;
+        }
+        let zero = Biquad {
+            b0: 0.0,
+            b1: 0.0,
+            b2: 0.0,
+            a1: 0.0,
+            a2: 0.0,
+        };
+        let mut sections = [zero; MAX_SETCOEFFS_SECTIONS];
+        sections[..sos.len()].copy_from_slice(sos);
+        Some(Self {
+            node,
+            fade_samples,
+            sections,
+            count: sos.len() as u8,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -583,6 +676,64 @@ mod tests {
         for (p, q) in a.iter().zip(&b) {
             assert!((p - q).abs() < 1e-6, "{p} vs {q}");
         }
+    }
+
+    #[test]
+    fn set_coeffs_targets_the_addressed_filter() {
+        // series(lp, lp); swap node 0 to a high-pass with a crossfade → the graph behaves like
+        // series(hp, lp), proving the index addresses the right node.
+        let lp = butterworth_lowpass(2, 4_000.0, 48_000);
+        let hp = butterworth_highpass(2, 4_000.0, 48_000);
+        let x = signal(1500);
+
+        let mut g = RtGraph::series(RtGraph::filter(lp.clone()), RtGraph::filter(lp.clone()));
+        assert_eq!(g.filter_count(), 2);
+        g.prepare(64);
+        assert!(
+            !g.set_coeffs(9, &hp, 4),
+            "out-of-range node must return false"
+        );
+        assert!(g.set_coeffs(0, &hp, 1), "node 0 swap must apply");
+        let got = stream_chunks(&mut g, &x, 64);
+
+        let mut want_g = RtGraph::series(RtGraph::filter(hp), RtGraph::filter(lp));
+        want_g.prepare(64);
+        let want = stream_chunks(&mut want_g, &x, 64);
+        for (a, b) in got.iter().zip(&want).skip(4) {
+            // skip the brief crossfade transient
+            assert!((a - b).abs() < 1e-3, "{a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn setcoeffs_command_rides_the_ring() {
+        // The full G9 path: design coeffs off-thread → pack → lock-free ring → drain + apply on the
+        // audio thread → crossfade. Here single-threaded, but the SetCoeffs is Copy so it's SPSC-safe.
+        use super::{MAX_SETCOEFFS_SECTIONS, SetCoeffs};
+        use crate::ring::channel;
+
+        let lp = butterworth_lowpass(2, 4_000.0, 48_000);
+        let hp = butterworth_highpass(2, 4_000.0, 48_000);
+        let (mut tx, mut rx) = channel::<SetCoeffs>(4);
+        tx.push(SetCoeffs::new(0, &hp, 1).unwrap()).unwrap();
+
+        let x = signal(800);
+        let mut g = RtGraph::filter(lp);
+        g.prepare(64);
+        while let Some(cmd) = rx.pop() {
+            assert!(g.apply(&cmd)); // audio thread drains + applies
+        }
+        let got = stream_chunks(&mut g, &x, 64);
+
+        let mut want_g = RtGraph::filter(hp.clone());
+        want_g.prepare(64);
+        let want = stream_chunks(&mut want_g, &x, 64);
+        for (a, b) in got.iter().zip(&want).skip(4) {
+            assert!((a - b).abs() < 1e-3, "{a} vs {b}");
+        }
+        // A cascade longer than the fixed capacity can't ride the ring.
+        let too_long = vec![hp[0]; MAX_SETCOEFFS_SECTIONS + 1];
+        assert!(SetCoeffs::new(0, &too_long, 1).is_none());
     }
 
     #[test]
