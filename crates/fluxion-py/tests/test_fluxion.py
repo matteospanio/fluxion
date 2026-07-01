@@ -204,3 +204,44 @@ def test_cheby2_parity_with_scipy():
 
     rel_rms = float(np.sqrt(np.mean((y - ref) ** 2)) / np.sqrt(np.mean(ref**2)))
     assert rel_rms < 1e-2, f"relative RMS vs scipy = {rel_rms}"
+
+
+def test_process_2d_multichannel():
+    # A 2-D (C, T) input is one multichannel signal: each channel equals the 1-D result (J10).
+    chain = fluxion.lowpass(2000.0, 4)
+    rng = np.random.default_rng(3)
+    x2 = rng.standard_normal((2, 500)).astype(np.float32)
+    y2 = chain.process(x2, FS)
+    assert y2.shape == (2, 500)
+    for c in range(2):
+        np.testing.assert_allclose(y2[c], chain.process(x2[c], FS), atol=1e-5)
+
+
+def test_process_rejects_3d():
+    with pytest.raises(ValueError):
+        fluxion.gain(1.0).process(np.zeros((2, 2, 2), dtype=np.float32), FS)
+
+
+def test_fir_impulse_response_is_the_taps():
+    taps = [0.2, -0.5, 0.3]
+    impulse = np.array([1.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    y = fluxion.fir(taps).process(impulse, FS)
+    np.testing.assert_allclose(y[:3], np.array(taps, dtype=np.float32), atol=1e-6)
+
+
+def test_sos_coeffs_seeds_from_a_design():
+    coeffs = fluxion.lowpass(3000.0, 4).sos_coeffs(FS)  # 4th order = 2 sections × 5
+    assert coeffs.shape == (10,)
+    with pytest.raises(ValueError):  # not a pure cascade
+        (fluxion.lowpass(1000.0, 2) | fluxion.gain(0.5)).sos_coeffs(FS)
+
+
+def test_torch_sos_module_is_trainable():
+    torch = pytest.importorskip("torch")
+    import fluxion.torch as fxt
+
+    m = fxt.SosModule.from_chain(fluxion.lowpass(2000.0, 4), FS)
+    assert isinstance(m.coeffs, torch.nn.Parameter)
+    x = torch.randn(256, requires_grad=True)
+    m(x).pow(2).sum().backward()
+    assert m.coeffs.grad is not None and x.grad is not None

@@ -45,3 +45,34 @@ def sos_filter(x: "torch.Tensor", coeffs: "torch.Tensor") -> "torch.Tensor":
     ``coeffs`` is a flat ``[b0, b1, b2, a1, a2] · n_sections`` tensor.
     """
     return _SosFilter.apply(x, coeffs)
+
+
+class SosModule(torch.nn.Module):
+    """A trainable SOS cascade as an ``nn.Module``: its coefficients are an ``nn.Parameter`` and
+    ``forward`` runs the analytic-VJP :func:`sos_filter`, so it drops into a torch model / optimizer
+    and its coefficients train through fluxion's closed-form IIR adjoint.
+
+        >>> import fluxion, torch, fluxion.torch as fxt
+        >>> m = fxt.SosModule.from_chain(fluxion.lowpass(2000.0, 4), fs=48_000)  # seed from a design
+        >>> y = m(torch.randn(512))                # differentiable; m.coeffs is an nn.Parameter
+        >>> list(m.parameters())[0].shape          # trainable in an optimizer
+        torch.Size([10])
+    """
+
+    def __init__(self, coeffs) -> None:
+        super().__init__()
+        c = torch.as_tensor(coeffs, dtype=torch.float32).flatten()
+        if c.numel() == 0 or c.numel() % 5 != 0:
+            raise ValueError(
+                "coeffs must be a non-empty multiple of 5 ([b0,b1,b2,a1,a2] per section)"
+            )
+        self.coeffs = torch.nn.Parameter(c)
+
+    def forward(self, x: "torch.Tensor") -> "torch.Tensor":
+        return sos_filter(x, self.coeffs)
+
+    @classmethod
+    def from_chain(cls, chain, fs: int) -> "SosModule":
+        """Seed a trainable module from a designed pure-filter :class:`fluxion.Chain` at ``fs`` (via
+        ``chain.sos_coeffs(fs)``)."""
+        return cls(chain.sos_coeffs(fs))

@@ -6,10 +6,12 @@
 //! through fluxion's analytic VJPs.
 
 // PyO3 0.22's `#[pymethods]`/`#[pyfunction]` macros expand to `unsafe` calls in safe fns, which the
-// edition-2024 `unsafe_op_in_unsafe_fn` lint flags in the generated code. The macros are sound.
-#![allow(unsafe_op_in_unsafe_fn)]
+// edition-2024 `unsafe_op_in_unsafe_fn` lint flags in the generated code; they also expand a
+// same-type `PyErr` conversion that trips `clippy::useless_conversion`. Both are macro artifacts —
+// the macros are sound.
+#![allow(unsafe_op_in_unsafe_fn, clippy::useless_conversion, clippy::type_complexity)]
 
-use numpy::{IntoPyArray, PyArray1, PyArrayMethods};
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -19,7 +21,9 @@ use fluxion_ops::{Biquad, sos_filter, sos_input_grad, sos_vjp};
 
 fn make(kind: OpKind, params: Vec<f32>) -> PyResult<Chain> {
     let op = Op::new(kind, params).map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(Chain { graph: Graph::Op(op) })
+    Ok(Chain {
+        graph: Graph::Op(op),
+    })
 }
 
 /// Read any DLPack-capable tensor (numpy / torch / jax CPU array) or array-like as a contiguous 1-D
@@ -42,6 +46,42 @@ fn as_f32_1d<'py>(x: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyArray1<f32>>> 
         .map_err(|e| PyValueError::new_err(format!("expected a 1-D float32-compatible array: {e}")))
 }
 
+/// Read a 1-D `(T,)` or 2-D `(C, T)` (channels-first, last axis = time) DLPack tensor / array-like as
+/// `(channels, ndim)` — the input to a multichannel [`Signal`]. Same zero-copy contract as
+/// [`as_f32_1d`]. Anything other than 1-D/2-D is an error.
+fn as_channels(x: &Bound<'_, PyAny>) -> PyResult<(Vec<Vec<f32>>, usize)> {
+    let py = x.py();
+    let np = py.import_bound("numpy")?;
+    let arr = if x.hasattr("__dlpack__")? {
+        np.call_method1("from_dlpack", (x,))?
+    } else {
+        np.call_method1("asarray", (x,))?
+    };
+    let kwargs = PyDict::new_bound(py);
+    kwargs.set_item("dtype", "float32")?;
+    let arr = np.call_method("ascontiguousarray", (arr,), Some(&kwargs))?;
+    let ndim: usize = arr.getattr("ndim")?.extract()?;
+    match ndim {
+        1 => {
+            let a = arr
+                .downcast_into::<PyArray1<f32>>()
+                .map_err(|e| PyValueError::new_err(format!("1-D array expected: {e}")))?;
+            Ok((vec![a.readonly().as_slice()?.to_vec()], 1))
+        }
+        2 => {
+            let a = arr
+                .downcast_into::<PyArray2<f32>>()
+                .map_err(|e| PyValueError::new_err(format!("2-D array expected: {e}")))?;
+            let ro = a.readonly();
+            let view = ro.as_array();
+            Ok((view.outer_iter().map(|row| row.to_vec()).collect(), 2))
+        }
+        n => Err(PyValueError::new_err(format!(
+            "expected a 1-D (T,) or 2-D (C, T) array, got {n}-D"
+        ))),
+    }
+}
+
 fn to_sos(coeffs: &[f32]) -> PyResult<Vec<Biquad>> {
     if coeffs.is_empty() || coeffs.len() % 5 != 0 {
         return Err(PyValueError::new_err(
@@ -50,7 +90,13 @@ fn to_sos(coeffs: &[f32]) -> PyResult<Vec<Biquad>> {
     }
     Ok(coeffs
         .chunks_exact(5)
-        .map(|c| Biquad { b0: c[0], b1: c[1], b2: c[2], a1: c[3], a2: c[4] })
+        .map(|c| Biquad {
+            b0: c[0],
+            b1: c[1],
+            b2: c[2],
+            a1: c[3],
+            a2: c[4],
+        })
         .collect())
 }
 
@@ -63,29 +109,57 @@ struct Chain {
 
 #[pymethods]
 impl Chain {
-    /// Apply the chain to a 1-D array at sample rate `fs`, returning a new `float32` array. Accepts
-    /// any DLPack tensor (numpy / torch / jax CPU) or array-like; see [`as_f32_1d`].
+    /// Apply the chain at sample rate `fs`, returning a new `float32` array of the same shape.
+    /// Accepts a 1-D `(T,)` signal or a 2-D `(C, T)` multichannel signal (channels-first, last axis =
+    /// time) — any DLPack tensor (numpy / torch / jax CPU) or array-like. For a *batch* of independent
+    /// mono signals, iterate rows or use per-row `process` (parallel/cross-channel ops treat a 2-D
+    /// input as one multichannel signal).
     fn process<'py>(
         &self,
         py: Python<'py>,
         x: &Bound<'py, PyAny>,
         fs: u32,
-    ) -> PyResult<Bound<'py, PyArray1<f32>>> {
-        let arr = as_f32_1d(x)?;
-        let input = arr.readonly().as_slice()?.to_vec();
-        let out = fluxion_backend::process(&self.graph, &Signal::new(fs, vec![input]));
-        let ch = out.channels.into_iter().next().unwrap_or_default();
-        Ok(ch.into_pyarray_bound(py))
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let (channels, ndim) = as_channels(x)?;
+        let out = fluxion_backend::process(&self.graph, &Signal::new(fs, channels));
+        if ndim == 1 {
+            let ch = out.channels.into_iter().next().unwrap_or_default();
+            Ok(ch.into_pyarray_bound(py).into_any())
+        } else {
+            let arr = PyArray2::from_vec2_bound(py, &out.channels)
+                .map_err(|e| PyValueError::new_err(format!("output channels are ragged: {e}")))?;
+            Ok(arr.into_any())
+        }
+    }
+
+    /// The designed SOS coefficients as a flat `[b0,b1,b2,a1,a2]·n_sections` `float32` array for a
+    /// **pure-filter** chain at `fs` (used to seed a trainable `fluxion.torch.SosModule`). Errors if
+    /// the chain isn't a single cascade (contains gain / delay / reverb / a parallel branch / …).
+    fn sos_coeffs<'py>(&self, py: Python<'py>, fs: u32) -> PyResult<Bound<'py, PyArray1<f32>>> {
+        let sos = fluxion_backend::graph_to_sos(&self.graph, fs).ok_or_else(|| {
+            PyValueError::new_err(
+                "chain is not a single filter cascade (has gain/delay/parallel/…)",
+            )
+        })?;
+        let flat: Vec<f32> = sos
+            .iter()
+            .flat_map(|b| [b.b0, b.b1, b.b2, b.a1, b.a2])
+            .collect();
+        Ok(flat.into_pyarray_bound(py))
     }
 
     /// `self | other` — run `self`, then feed its output to `other` (series composition).
     fn __or__(&self, other: &Chain) -> Chain {
-        Chain { graph: self.graph.clone() | other.graph.clone() }
+        Chain {
+            graph: self.graph.clone() | other.graph.clone(),
+        }
     }
 
     /// `self + other` — run both on the same input and sum (parallel composition).
     fn __add__(&self, other: &Chain) -> Chain {
-        Chain { graph: self.graph.clone() + other.graph.clone() }
+        Chain {
+            graph: self.graph.clone() + other.graph.clone(),
+        }
     }
 
     fn __repr__(&self) -> String {
@@ -109,7 +183,10 @@ fn cheby1_lowpass(cutoff: f32, order: u32, ripple_db: f32) -> PyResult<Chain> {
 }
 #[pyfunction]
 fn cheby1_highpass(cutoff: f32, order: u32, ripple_db: f32) -> PyResult<Chain> {
-    make(OpKind::Cheby1Highpass, vec![cutoff, order as f32, ripple_db])
+    make(
+        OpKind::Cheby1Highpass,
+        vec![cutoff, order as f32, ripple_db],
+    )
 }
 #[pyfunction]
 fn cheby2_lowpass(cutoff: f32, order: u32, atten_db: f32) -> PyResult<Chain> {
@@ -162,6 +239,10 @@ fn delay(seconds: f32, mix: f32) -> PyResult<Chain> {
 #[pyfunction]
 fn echo(seconds: f32, feedback: f32, wet: f32) -> PyResult<Chain> {
     make(OpKind::Echo, vec![seconds, feedback, wet])
+}
+#[pyfunction]
+fn fir(taps: Vec<f32>) -> PyResult<Chain> {
+    make(OpKind::Fir, taps) // a trained/frozen FIR: y[n] = Σ_k taps[k]·x[n-k]
 }
 
 // --- differentiable SOS primitives (wrapped by the Python autograd adapter) -------------------
@@ -217,7 +298,9 @@ fn sos_filter_batch_gpu<'py>(
     let (x, coeffs) = (x.readonly(), coeffs.readonly());
     let sos = to_sos(coeffs.as_slice()?)?;
     if frames == 0 || x.as_slice()?.len() % frames != 0 {
-        return Err(PyValueError::new_err("len(x) must be a positive multiple of frames"));
+        return Err(PyValueError::new_err(
+            "len(x) must be a positive multiple of frames",
+        ));
     }
     let out = fluxion_backend::cuda::sos_filter_batch(x.as_slice()?, frames, &sos);
     Ok(out.into_pyarray_bound(py))
@@ -251,6 +334,7 @@ fn _fluxion(m: &Bound<'_, PyModule>) -> PyResult<()> {
         normalize,
         delay,
         echo,
+        fir,
         sos_forward,
         sos_backward,
     );
