@@ -27,7 +27,12 @@ struct Cli {
     #[arg(long)]
     force: bool,
 
-    /// `info <file>` | `compile <effect...> <out.fxg>` | `<in.wav> [effect...] <out.wav>`
+    /// `record`: capture duration in seconds.
+    #[arg(long, default_value_t = 5.0)]
+    secs: f32,
+
+    /// `info <file>` | `compile <effect...> <out.fxg>` | `play <in.wav> [effect...]` |
+    /// `record [effect...] <out.wav>` | `<in.wav> [effect...] <out.wav>`
     #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0..)]
     args: Vec<String>,
 }
@@ -48,6 +53,8 @@ fn run(cli: Cli) -> Result<(), String> {
         Some("info") | Some("soxi") => cmd_info(&cli.args[1..]),
         Some("compile") => cmd_compile(&cli.args[1..], cli.fs, cli.force),
         Some("batch") => cmd_batch(&cli.args[1..], cli.fs),
+        Some("play") => realtime::play(&cli.args[1..], cli.fs),
+        Some("record") => realtime::record(&cli.args[1..], cli.secs),
         _ => cmd_process(&cli.args, cli.fs),
     }
 }
@@ -250,6 +257,197 @@ fn parse_chain(tokens: &[String]) -> Result<Graph, String> {
         graph = if graph.is_empty() { node } else { graph | node };
     }
     Ok(graph)
+}
+
+// --- realtime `play` / `record` (feature `realtime`, CPAL) ------------------------------------
+
+#[cfg(not(feature = "realtime"))]
+mod realtime {
+    fn unavailable() -> Result<(), String> {
+        Err("realtime `play`/`record` need the `realtime` feature — \
+             build/install with `--features realtime`"
+            .into())
+    }
+    pub fn play(_: &[String], _: Option<u32>) -> Result<(), String> {
+        unavailable()
+    }
+    pub fn record(_: &[String], _: f32) -> Result<(), String> {
+        unavailable()
+    }
+}
+
+#[cfg(feature = "realtime")]
+mod realtime {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+    use std::time::{Duration, Instant};
+
+    use fluxion::{Signal, process};
+    use fluxion_rt::channel;
+    use fluxion_rt::cpal_backend::{
+        default_input_config, default_output_sample_rate, run_input, run_output,
+    };
+
+    use super::{load_input, parse_chain, write_output};
+
+    /// `fluxion play <in.wav> [effect...]` — process a file through the chain and play it live.
+    pub fn play(args: &[String], fs: Option<u32>) -> Result<(), String> {
+        let input = args
+            .first()
+            .ok_or("usage: fluxion play <in.wav> [effect...]")?;
+        let mut signal = load_input(input)?;
+        if let Some(fs) = fs {
+            signal.fs = fs;
+        }
+        let graph = parse_chain(&args[1..])?;
+        play_signal(&process(&graph, &signal))
+    }
+
+    fn play_signal(signal: &Signal) -> Result<(), String> {
+        if signal.channels.iter().all(|c| c.is_empty()) {
+            return Ok(());
+        }
+        let device_fs = default_output_sample_rate().map_err(|e| e.to_string())?;
+        // Resample each channel to the device rate so playback is at the correct speed.
+        let src: Arc<Vec<Vec<f32>>> = Arc::new(
+            signal
+                .channels
+                .iter()
+                .map(|c| resample_linear(c, signal.fs, device_fs))
+                .collect(),
+        );
+        let (nframes, nsrc) = (src.iter().map(Vec::len).max().unwrap_or(0), src.len());
+
+        let cursor = Arc::new(AtomicUsize::new(0));
+        let done = Arc::new(AtomicBool::new(false));
+        let (s_cb, cur_cb, done_cb) = (src.clone(), cursor.clone(), done.clone());
+
+        let stream = run_output(move |buf, ch| {
+            let mut pos = cur_cb.load(Relaxed);
+            for frame in buf.chunks_mut(ch) {
+                if pos >= nframes {
+                    frame.iter_mut().for_each(|s| *s = 0.0);
+                    done_cb.store(true, Relaxed);
+                    continue;
+                }
+                for (c, s) in frame.iter_mut().enumerate() {
+                    // Map device channel → source channel: mono replicates; extra device channels
+                    // reuse the last source channel.
+                    *s = s_cb[c.min(nsrc - 1)].get(pos).copied().unwrap_or(0.0);
+                }
+                pos += 1;
+            }
+            cur_cb.store(pos, Relaxed);
+        })
+        .map_err(|e| e.to_string())?;
+
+        eprintln!(
+            "fluxion: playing {:.1}s @ {device_fs} Hz",
+            nframes as f32 / device_fs as f32
+        );
+        while !done.load(Relaxed) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        std::thread::sleep(Duration::from_millis(120)); // let the final block flush
+        drop(stream);
+        Ok(())
+    }
+
+    /// `fluxion record [effect...] <out.wav>` — capture `--secs` from the default input, process it,
+    /// and write it. Capture crosses the audio thread through the lock-free ring.
+    pub fn record(args: &[String], secs: f32) -> Result<(), String> {
+        let out = args
+            .last()
+            .ok_or("usage: fluxion record [effect...] <out.wav> [--secs N]")?;
+        let graph = parse_chain(&args[..args.len() - 1])?;
+        let secs = secs.max(0.1);
+
+        let (dev_fs, channels) = default_input_config().map_err(|e| e.to_string())?;
+        let want = (secs * dev_fs as f32) as usize * channels;
+        // Ring holds ~1 s of slack beyond the target so a slow drain never overflows.
+        let (mut tx, mut rx) = channel::<f32>(want + dev_fs as usize * channels);
+        let stream = run_input(move |data, _| {
+            for &s in data {
+                let _ = tx.push(s); // drop on overflow (shouldn't happen with the slack above)
+            }
+        })
+        .map_err(|e| e.to_string())?;
+
+        eprintln!("fluxion: recording {secs:.1}s @ {dev_fs} Hz ({channels} ch)…");
+        let mut captured = Vec::with_capacity(want);
+        let start = Instant::now();
+        while captured.len() < want && start.elapsed().as_secs_f32() < secs + 1.0 {
+            while let Some(s) = rx.pop() {
+                captured.push(s);
+                if captured.len() >= want {
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        drop(stream);
+        captured.truncate(want);
+
+        // De-interleave into channels, then process + write at the capture rate.
+        let mut chans = vec![Vec::with_capacity(want / channels); channels];
+        for frame in captured.chunks_exact(channels) {
+            for (c, &s) in frame.iter().enumerate() {
+                chans[c].push(s);
+            }
+        }
+        write_output(out, &process(&graph, &Signal::new(dev_fs, chans)))
+    }
+
+    /// Linear-interpolation resample of one channel from `from_fs` to `to_fs`.
+    ///
+    /// ponytail: linear interpolation — fine for CLI playback; upgrade to polyphase/sinc SRC only if
+    /// high-fidelity conversion is needed.
+    fn resample_linear(x: &[f32], from_fs: u32, to_fs: u32) -> Vec<f32> {
+        if from_fs == to_fs || x.len() < 2 {
+            return x.to_vec();
+        }
+        let ratio = from_fs as f64 / to_fs as f64; // input samples per output sample
+        let n_out = ((x.len() as f64) / ratio).round() as usize;
+        (0..n_out)
+            .map(|i| {
+                let pos = i as f64 * ratio;
+                let j = pos.floor() as usize;
+                let frac = (pos - j as f64) as f32;
+                let a = x.get(j).copied().unwrap_or(0.0);
+                let b = x.get(j + 1).copied().unwrap_or(a);
+                a + (b - a) * frac
+            })
+            .collect()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::resample_linear;
+
+        #[test]
+        fn resample_identity_when_rates_match() {
+            let x = vec![0.1, -0.2, 0.3, 0.4];
+            assert_eq!(resample_linear(&x, 48_000, 48_000), x);
+        }
+
+        #[test]
+        fn resample_upsamples_a_ramp_linearly() {
+            // x = 0,1,2,3 at 1 Hz → 2 Hz reads at positions 0,0.5,1,…: 0,0.5,1,1.5,2,2.5,3,3.
+            let up = resample_linear(&[0.0, 1.0, 2.0, 3.0], 1, 2);
+            assert_eq!(up.len(), 8);
+            for (i, &v) in up.iter().enumerate() {
+                let want = (i as f32 * 0.5).min(3.0);
+                assert!((v - want).abs() < 1e-6, "at {i}: {v} vs {want}");
+            }
+        }
+
+        #[test]
+        fn resample_downsample_halves_length() {
+            let down = resample_linear(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0], 2, 1);
+            assert_eq!(down.len(), 3); // 6 input / 2 ≈ 3 output
+            assert!((down[0] - 0.0).abs() < 1e-6 && (down[1] - 2.0).abs() < 1e-6);
+        }
+    }
 }
 
 #[cfg(test)]

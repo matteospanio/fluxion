@@ -248,4 +248,6 @@ concurrently (ideally one contributor or one worktree per lane).
   - **E9** DONE: `learn_cutoff` example (Burn autograd end-to-end, converges 1200→3000 Hz).
   - **E8** DONE: reverb feedback now small-gain-certified (was a silent `_ => certified()`); `project_stable`/`project_stable_flat` clamp `(a1,a2)` into the Jury triangle for the in-loop projection — free-coefficient training (all 5 coeffs) stays strictly stable every iterate and converges.
   - **Epic E is complete.**
+  - **G7** DONE: realtime reverb — `RtGraph::Comb`/`Allpass` leaf nodes + `RtGraph::reverb` (Freeverb topology from the series/parallel/gain algebra, alloc-free) + an `op_rt` arm; streaming matches the offline reverb sample-for-sample. Reverb was offline-only (biggest realtime gap) — now playable.
+  - **I7** DONE: CLI `play <in.wav> [effect…]` (process → resample → CPAL output) and `record [effect…] <out.wav> --secs N` (CPAL capture via the lock-free ring → process → WAV), behind a `realtime` feature so the base CLI pulls no audio libs. Added `cpal_backend::run_input`/`default_input_config`/`default_output_sample_rate`; a CI `realtime CLI` job (ALSA) compile-checks + runs the resampler tests.
   - CI gap fixed: the Burn integration (behind an optional feature) was never exercised in CI; a new `autodiff (Burn CPU)` job now runs it plus the facade `--features autodiff`.

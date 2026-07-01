@@ -52,6 +52,20 @@ jobs:
       # The facade's whole-graph autodiff surface (diff_process) is behind its own feature.
       - run: cargo test -p fluxion --features autodiff --locked
 
+  realtime:
+    name: realtime CLI (CPAL)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      # play/record are behind the `realtime` feature (CPAL), so the default test/lint jobs skip them.
+      - run: cargo clippy -p fluxion-cli --features realtime --all-targets --locked -- -D warnings
+      - run: cargo test -p fluxion-cli --features realtime --locked
+
   deny:
     name: cargo-deny (licenses & advisories)
     runs-on: ubuntu-latest

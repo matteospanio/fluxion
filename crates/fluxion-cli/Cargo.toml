@@ -19,9 +19,14 @@ workspace = true
 name = "fluxion"
 path = "src/main.rs"
 
+[features]
+# `play` / `record` realtime verbs (CPAL). Off by default so the base CLI pulls no audio libraries.
+realtime = ["dep:fluxion-rt"]
+
 [dependencies]
 fluxion = { path = "../fluxion-facade" }
 fluxion-io = { path = "../fluxion-io" }
+fluxion-rt = { path = "../fluxion-rt", optional = true, features = ["cpal"] }
 clap = { version = "4", features = ["derive"] }
 glob = "0.3"
 
