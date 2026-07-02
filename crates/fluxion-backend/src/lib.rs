@@ -354,7 +354,7 @@ fn op_rt(op: &Op, fs: u32) -> Option<RtGraph> {
 
 /// Filter a flat batch of `rows.len() / frames` equal-length rows through an SOS cascade (CPU).
 ///
-/// The batch runs in row-groups of [`BATCH_GROUP`]: each group is transposed to a
+/// The batch runs in 16-row groups: each group is transposed to a
 /// channel-interleaved (frame-major) layout, filtered by the SIMD
 /// [`sos_filter_interleaved`](fluxion_ops::sos_filter_interleaved) kernel — the IIR recurrence
 /// can't vectorize over *time*, but it vectorizes across the *batch* — and transposed back; the
