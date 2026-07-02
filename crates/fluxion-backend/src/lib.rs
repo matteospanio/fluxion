@@ -17,6 +17,7 @@ use fluxion_ops::{
     small_gain_certify, sos_filter,
 };
 use fluxion_rt::RtGraph;
+use rayon::prelude::*;
 
 pub use fluxion_ops::{Certificate, Verdict};
 
@@ -145,9 +146,18 @@ pub struct Cpu;
 impl Backend for Cpu {
     type Buf = Vec<Vec<f32>>;
 
+    /// Channel-parallel (rayon) when the work amortizes the fork cost; sequential otherwise.
     fn filter(&self, mut x: Vec<Vec<f32>>, sos: &[Biquad]) -> Vec<Vec<f32>> {
-        for ch in &mut x {
-            *ch = sos_filter(ch, sos);
+        // ponytail: fixed cutoff (~64k filtered samples) — an autotuned per-machine threshold is
+        // follow-up work; below it the rayon fork/join overhead beats the win.
+        const PAR_MIN_WORK: usize = 1 << 16;
+        let work: usize = x.iter().map(Vec::len).sum::<usize>() * sos.len().max(1);
+        if x.len() > 1 && work >= PAR_MIN_WORK {
+            x.par_iter_mut().for_each(|ch| *ch = sos_filter(ch, sos));
+        } else {
+            for ch in &mut x {
+                *ch = sos_filter(ch, sos);
+            }
         }
         x
     }
@@ -344,27 +354,77 @@ fn op_rt(op: &Op, fs: u32) -> Option<RtGraph> {
 
 /// Filter a flat batch of `rows.len() / frames` equal-length rows through an SOS cascade (CPU).
 ///
+/// The batch runs in row-groups of [`BATCH_GROUP`]: each group is transposed to a
+/// channel-interleaved (frame-major) layout, filtered by the SIMD
+/// [`sos_filter_interleaved`](fluxion_ops::sos_filter_interleaved) kernel — the IIR recurrence
+/// can't vectorize over *time*, but it vectorizes across the *batch* — and transposed back; the
+/// independent groups run in parallel on rayon (plan tasks C3/C6). Per-row results are identical
+/// to [`sos_filter`].
+///
 /// The GPU kernel (`cuda::sos_filter_batch`, `cuda` feature) is far faster in raw **compute**
-/// (~59× on an RTX 3070), but a one-shot batch filter is dominated by host↔device transfer (~430 ms
-/// vs ~300 ms CPU for 67 Msamples), so the CPU is the right default here. The GPU pays off for
-/// **resident / repeated** workloads where the data stays on the device across many operations
-/// (e.g. a differentiable training loop) — call `cuda::sos_filter_batch` explicitly for those.
+/// (~59× on an RTX 3070), but a one-shot batch filter is dominated by host↔device transfer, so the
+/// CPU is the right default here. The GPU pays off for **resident / repeated** workloads where the
+/// data stays on the device (e.g. a differentiable training loop).
 pub fn sos_filter_batch(rows: &[f32], frames: usize, sos: &[Biquad]) -> Vec<f32> {
-    let mut out = vec![0.0f32; rows.len()];
-    for r in 0..rows.len() / frames {
-        let y = sos_filter(&rows[r * frames..(r + 1) * frames], sos);
-        out[r * frames..(r + 1) * frames].copy_from_slice(&y);
+    let n_rows = rows.len().checked_div(frames).unwrap_or(0);
+    if n_rows <= 1 || sos.is_empty() {
+        return sos_filter(rows, sos);
     }
+    let mut out = vec![0.0f32; rows.len()];
+    out.par_chunks_mut(BATCH_GROUP * frames)
+        .zip(rows.par_chunks(BATCH_GROUP * frames))
+        .for_each(|(out_group, in_group)| filter_group(in_group, out_group, frames, sos));
     out
 }
 
+/// Rows per SIMD group in [`sos_filter_batch`]: wide enough to fill AVX lanes with headroom for
+/// superscalar overlap, narrow enough that a time-block's working set stays cache-resident.
+const BATCH_GROUP: usize = 16;
+
+/// Frames per time-block inside a group. The interleave/deinterleave transposes only ever touch
+/// `BATCH_GROUP × BLOCK_FRAMES` floats (≈256 KB) of hot scratch, while the big planar buffers are
+/// read/written in sequential per-row runs — this avoids the power-of-two-stride cache-set aliasing
+/// that makes a whole-signal transpose memory-bound (rows sit exactly `frames·4` bytes apart).
+const BLOCK_FRAMES: usize = 4096;
+
+/// Filter one row-group: gather a time block into an interleaved hot buffer, run the SIMD cascade
+/// with carried per-channel state, scatter back — block by block.
+fn filter_group(in_group: &[f32], out_group: &mut [f32], frames: usize, sos: &[Biquad]) {
+    let group_rows = in_group.len() / frames;
+    let mut inter = vec![0.0f32; group_rows * BLOCK_FRAMES.min(frames)];
+    let mut state = vec![0.0f32; sos.len() * 2 * group_rows];
+
+    let mut t0 = 0usize;
+    while t0 < frames {
+        let block = BLOCK_FRAMES.min(frames - t0);
+        let inter = &mut inter[..group_rows * block];
+        // Gather, row-outer: sequential planar reads; the strided hot-buffer writes stay in L2.
+        // (Frame-outer would touch all 16 planar rows per frame — they sit exactly `frames·4`
+        // bytes apart, a power-of-two stride that aliases to one cache set and thrashes; measured
+        // ~35% slower.)
+        for (r, row) in in_group.chunks_exact(frames).enumerate() {
+            for (t, &x) in row[t0..t0 + block].iter().enumerate() {
+                inter[t * group_rows + r] = x;
+            }
+        }
+        fluxion_ops::sos_filter_interleaved_chunk(inter, group_rows, sos, &mut state);
+        // Scatter, row-outer: strided hot-buffer reads, sequential planar writes.
+        for (r, row) in out_group.chunks_exact_mut(frames).enumerate() {
+            for (t, y) in row[t0..t0 + block].iter_mut().enumerate() {
+                *y = inter[t * group_rows + r];
+            }
+        }
+        t0 += block;
+    }
+}
+
 /// Process a batch of signals. A pure-filter chain over equal-length **mono** signals is routed to
-/// the batched (GPU-when-`cuda`) path; anything else falls back to processing each signal on its own.
+/// the batched SIMD path; anything else processes each signal independently in parallel (rayon).
 pub fn process_batch(graph: &Graph, batch: &[Signal]) -> Vec<Signal> {
     if let Some(out) = try_batched_filter(graph, batch) {
         return out;
     }
-    batch.iter().map(|s| process(graph, s)).collect()
+    batch.par_iter().map(|s| process(graph, s)).collect()
 }
 
 fn try_batched_filter(graph: &Graph, batch: &[Signal]) -> Option<Vec<Signal>> {
@@ -397,7 +457,8 @@ fn try_batched_filter(graph: &Graph, batch: &[Signal]) -> Option<Vec<Signal>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        FrozenSos, certify_graph, freeze, graph_to_sos, process, process_batch, to_rt_graph,
+        FrozenSos, certify_graph, freeze, graph_to_sos, process, process_batch, sos_filter_batch,
+        to_rt_graph,
     };
     use fluxion_core::{Graph, OpKind, Signal};
 
@@ -592,6 +653,29 @@ mod tests {
             y2.iter().all(|v| v.is_finite() && v.abs() < 50.0),
             "feedback loop blew up"
         );
+    }
+
+    #[test]
+    fn sos_filter_batch_matches_per_row_scalar() {
+        // The SIMD group path (transpose → interleaved → transpose) must equal per-row sos_filter,
+        // including partial groups (rows % BATCH_GROUP ≠ 0) and partial transpose tiles
+        // (frames % 32 ≠ 0).
+        let sos = fluxion_ops::butterworth_lowpass(6, 3_000.0, 48_000);
+        for (rows, frames) in [(2usize, 100usize), (16, 333), (37, 1000), (5, 7)] {
+            let flat: Vec<f32> = (0..rows * frames)
+                .map(|i| ((i % 97) as f32 * 0.13).sin())
+                .collect();
+            let got = sos_filter_batch(&flat, frames, &sos);
+            for r in 0..rows {
+                let want = fluxion_ops::sos_filter(&flat[r * frames..(r + 1) * frames], &sos);
+                for (a, b) in got[r * frames..(r + 1) * frames].iter().zip(&want) {
+                    assert!(
+                        (a - b).abs() < 1e-5,
+                        "rows={rows} frames={frames}: {a} vs {b}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

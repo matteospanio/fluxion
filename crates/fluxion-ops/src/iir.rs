@@ -172,10 +172,21 @@ pub fn biquad_forward(input: &[f32], bq: &Biquad) -> Vec<f32> {
 }
 
 /// Filter one channel through a cascade of sections.
+///
+/// Fused in registers: one output buffer total, each section run in place with its
+/// Direct-Form-II-Transposed state pair — no per-section allocation (plan task C6). Sample-for-sample
+/// identical to chaining [`biquad_forward`] (same recurrence, same operation order).
 pub fn sos_filter(input: &[f32], sos: &[Biquad]) -> Vec<f32> {
     let mut data = input.to_vec();
     for bq in sos {
-        data = biquad_forward(&data, bq);
+        let (mut s1, mut s2) = (0.0f32, 0.0f32);
+        for x in data.iter_mut() {
+            let xi = *x;
+            let y = bq.b0 * xi + s1;
+            s1 = bq.b1 * xi - bq.a1 * y + s2;
+            s2 = bq.b2 * xi - bq.a2 * y;
+            *x = y;
+        }
     }
     data
 }
@@ -186,17 +197,53 @@ pub fn sos_filter(input: &[f32], sos: &[Biquad]) -> Vec<f32> {
 /// An IIR recurrence is sequential in time (each sample needs the previous), so it can't vectorize
 /// over time — but the channels are independent. With this frame-major layout the `channels` values
 /// at a frame are contiguous, so the inner per-channel loop is data-parallel and auto-vectorizes
-/// (SIMD) across the batch. That is the way to make a sequential filter fast on wide data; building
-/// with `-C target-cpu=native` lets the loop use the full AVX width. The per-channel result is
-/// identical to [`sos_filter`].
+/// (SIMD) across the batch. The per-channel result is identical to [`sos_filter`].
+///
+/// ISA dispatch is at **runtime** (plan task C3): on x86-64 an AVX2-compiled copy of the loop is
+/// selected when the CPU supports it, so a baseline (portable) build still runs 8-wide — no
+/// `-C target-cpu=native` needed. (AVX2 only, no FMA contraction, so results stay bit-identical to
+/// the scalar path. On aarch64, NEON is baseline and the plain build already vectorizes.)
 pub fn sos_filter_interleaved(data: &mut [f32], channels: usize, sos: &[Biquad]) {
-    assert!(channels > 0 && !data.is_empty() && data.len() % channels == 0);
-    // One Direct-Form-II-Transposed state pair per channel, reused across sections.
-    let mut s1 = vec![0.0f32; channels];
-    let mut s2 = vec![0.0f32; channels];
-    for bq in sos {
-        s1.iter_mut().for_each(|v| *v = 0.0);
-        s2.iter_mut().for_each(|v| *v = 0.0);
+    let mut state = vec![0.0f32; sos.len() * 2 * channels];
+    sos_filter_interleaved_chunk(data, channels, sos, &mut state);
+}
+
+/// Like [`sos_filter_interleaved`], but carrying per-(section, channel) filter state across calls —
+/// so a long batch can be processed in cache-sized **time chunks** (the strided transposes then stay
+/// in a small hot buffer instead of thrashing power-of-two-strided gigabuffers).
+///
+/// `state` is `[section-major] 2 × channels` Direct-Form-II-Transposed values,
+/// `len == sos.len() * 2 * channels`, zero-initialized for a fresh signal. Feeding consecutive
+/// chunks with the same `state` is sample-for-sample identical to one whole-signal call.
+pub fn sos_filter_interleaved_chunk(
+    data: &mut [f32],
+    channels: usize,
+    sos: &[Biquad],
+    state: &mut [f32],
+) {
+    assert!(channels > 0 && data.len() % channels == 0);
+    assert_eq!(
+        state.len(),
+        sos.len() * 2 * channels,
+        "state must be sos.len()*2*channels"
+    );
+    if data.is_empty() {
+        return;
+    }
+    #[cfg(target_arch = "x86_64")]
+    if std::arch::is_x86_feature_detected!("avx2") {
+        // SAFETY: AVX2 support was just verified at runtime.
+        unsafe { interleaved_avx2(data, channels, sos, state) };
+        return;
+    }
+    interleaved_impl(data, channels, sos, state);
+}
+
+/// The interleaved cascade loop, monomorphized per ISA by the wrappers below.
+#[inline(always)]
+fn interleaved_impl(data: &mut [f32], channels: usize, sos: &[Biquad], state: &mut [f32]) {
+    for (bq, st) in sos.iter().zip(state.chunks_exact_mut(2 * channels)) {
+        let (s1, s2) = st.split_at_mut(channels);
         let (b0, b1, b2, a1, a2) = (bq.b0, bq.b1, bq.b2, bq.a1, bq.a2);
         for frame in data.chunks_exact_mut(channels) {
             // Independent across channels → vectorizes. `s1`/`s2` don't alias `data`.
@@ -209,6 +256,16 @@ pub fn sos_filter_interleaved(data: &mut [f32], channels: usize, sos: &[Biquad])
             }
         }
     }
+}
+
+/// AVX2 monomorphization of [`interleaved_impl`] — LLVM re-vectorizes the inlined loop 8-wide.
+///
+/// # Safety
+/// The caller must have verified AVX2 support (`is_x86_feature_detected!("avx2")`).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn interleaved_avx2(data: &mut [f32], channels: usize, sos: &[Biquad], state: &mut [f32]) {
+    interleaved_impl(data, channels, sos, state);
 }
 
 /// All-pole filter `w[n] = x[n] - a1·w[n-1] - a2·w[n-2]` (i.e. `1/A(z)`), zero initial state.

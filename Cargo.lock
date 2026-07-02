@@ -2413,6 +2413,7 @@ dependencies = [
  "fluxion-core",
  "fluxion-ops",
  "fluxion-rt",
+ "rayon",
 ]
 
 [[package]]

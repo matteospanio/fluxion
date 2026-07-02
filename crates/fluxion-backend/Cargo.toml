@@ -23,4 +23,5 @@ cuda = ["dep:cubecl"]
 fluxion-core = { path = "../fluxion-core" }
 fluxion-ops = { path = "../fluxion-ops" }
 fluxion-rt = { path = "../fluxion-rt" }
+rayon = "1"
 cubecl = { version = "0.10", features = ["cuda"], optional = true }
