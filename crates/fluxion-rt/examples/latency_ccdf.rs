@@ -19,9 +19,21 @@ fn main() {
     for depth in [2usize, 5, 10] {
         for buffer in [128usize, 256, 512] {
             // Cascade of `depth` sections (order 2·depth Butterworth), as in the prior study.
-            let sos = butterworth_lowpass(2 * depth, 4_000.0, FS);
-            let alt = butterworth_lowpass(2 * depth, 2_000.0, FS); // automation target
-            let mut g = RtGraph::filter(sos.clone());
+            // A SetCoeffs command carries at most 8 sections, so deeper cascades split into two
+            // series filter nodes; automation swaps node 0 (the crossfade path is identical).
+            let (sos, alt, mut g) = if depth <= 8 {
+                let sos = butterworth_lowpass(2 * depth, 4_000.0, FS);
+                let alt = butterworth_lowpass(2 * depth, 2_000.0, FS);
+                let g = RtGraph::filter(sos.clone());
+                (sos, alt, g)
+            } else {
+                let half = depth / 2;
+                let sos = butterworth_lowpass(2 * half, 4_000.0, FS);
+                let alt = butterworth_lowpass(2 * half, 2_000.0, FS);
+                let rest = butterworth_lowpass(2 * (depth - half), 6_000.0, FS);
+                let g = RtGraph::series(RtGraph::filter(sos.clone()), RtGraph::filter(rest));
+                (sos, alt, g)
+            };
             g.prepare(buffer);
 
             let (mut tx, mut rx) = channel::<SetCoeffs>(64);
