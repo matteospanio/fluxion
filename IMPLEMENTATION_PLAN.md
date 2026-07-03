@@ -304,13 +304,18 @@ concurrently (ideally one contributor or one worktree per lane).
     whole-file read for WAV and the FLAC fixture.
   - **H4** DONE: columnar dataset IO behind the optional `parquet` feature —
     `fluxion_io::arrow::{signals_to_batch, batch_to_signals, write_parquet, read_parquet}` (one row
-    per `Signal`; `fs`/`channels`/interleaved-`audio` schema), exact batch + Parquet round-trips.
-    arrow/parquet stay out of the default build (placeholder-deps rule); a CI `batch IO` lane and
-    `cargo deny` cover the new tree.
+    per `Signal`; `fs`/`channels`/interleaved-`audio` schema; `snap`/`zstd` codecs), exact batch +
+    Parquet round-trips. arrow/parquet stay out of the default build (placeholder-deps rule); a CI
+    `batch IO` lane and `cargo deny` cover the new tree.
+  - **H4 Python binding** DONE: `fluxion.dataset` (pure Python + `pyarrow`, extra `fluxion[dataset]`)
+    reads/writes the **same Parquet schema** as `fluxion_io::arrow`, so files interoperate both
+    ways (verified bidirectionally across snappy + zstd). `write_parquet`/`read_parquet`/
+    `iter_parquet` stream (a generator in, a generator out), so augmenting a whole dataset is
+    bounded-memory and composes with `augment`/`process`. Wheel stays numpy-only by default —
+    pyarrow is opt-in.
   - **Still open for 1.0:** C5 (device dispatch / `--device`), B4 (CSE pass, P2), D10 (filterbank,
     P2), E5-reverb VJP (P2), F1/F3-remainder/F4/F5/F6 (GPU generic backend + cross-vendor
-    validation — needs Apple/AMD hardware), a Python binding for the Parquet dataset path (pairs
-    with J9/J12), L1 (published benchmarks), L2 (coverage gate), L3 (mdBook), L4-remainder (semver
-    audit), L5/L6 (release + sign-off). SoX features consciously deferred: `tempo`/`pitch`
-    (WSOLA/phase vocoder), `spectrogram` (imaging dep), noise reduction, legacy niches
-    (`oops`/`riaa`/`earwax`).
+    validation — needs Apple/AMD hardware), L1 (published benchmarks), L2 (coverage gate), L3
+    (mdBook), L4-remainder (semver audit), L5/L6 (release + sign-off). SoX features consciously
+    deferred: `tempo`/`pitch` (WSOLA/phase vocoder), `spectrogram` (imaging dep), noise reduction,
+    legacy niches (`oops`/`riaa`/`earwax`).

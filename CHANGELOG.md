@@ -59,8 +59,10 @@ All notable changes to fluxion are documented here. The format is based on
 - **Python bindings** — torchaudio-style eager `Chain` API accepting 1-D `(T,)` and 2-D `(C, T)`
   input plus a batched `Chain.process_batch((B, T))`, zero-copy DLPack interop with NumPy /
   PyTorch / JAX, Array-API consumer conformance, `fluxion.augment` (`Compose`, `RandomChain`)
-  for stochastic data augmentation, and `fluxion.interop.load_flamo_sos` for importing
-  FLAMO-style SISO biquad checkpoints (`safetensors`).
+  for stochastic data augmentation, `fluxion.dataset` (Parquet audio-dataset IO — the same schema
+  as the Rust side, streaming both ways; extra `fluxion[dataset]`), and
+  `fluxion.interop.load_flamo_sos` for importing FLAMO-style SISO biquad checkpoints
+  (`safetensors`).
 - **C ABI (`fluxion-ffi`)** — a minimal panic-safe C surface (`fx_graph_load_fxg`, `fx_process`
   interleaved in-place, `fx_last_error`) with a checked-in `include/fluxion.h` and a C smoke test.
 - **Quality gates** — SciPy/RBJ golden-vector oracle tests pinning every filter design's impulse

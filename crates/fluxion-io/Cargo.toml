@@ -26,6 +26,12 @@ fluxion-core = { path = "../fluxion-core", version = "0.0.0" }
 hound = "3.5"
 symphonia = { version = "0.5", features = ["all-codecs", "all-formats"] }
 # Batch IO (feature `parquet`). default-features off keeps the transitive tree to the array/schema
-# core plus the parquet↔arrow bridge; no csv/json/ipc.
+# core plus the parquet↔arrow bridge; no csv/json/ipc. `snap`/`zstd` are the compression codecs
+# real-world Parquet (and pyarrow's default output) uses — needed so files interoperate with the
+# Python `fluxion.dataset` writer and the wider ecosystem.
 arrow = { version = "56", optional = true, default-features = false }
-parquet = { version = "56", optional = true, default-features = false, features = ["arrow"] }
+parquet = { version = "56", optional = true, default-features = false, features = [
+    "arrow",
+    "snap",
+    "zstd",
+] }

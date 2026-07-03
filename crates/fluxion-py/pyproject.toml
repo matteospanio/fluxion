@@ -40,7 +40,8 @@ Repository = "https://github.com/matteospanio/fluxion"
 torch = ["torch>=2.0"]
 jax = ["jax>=0.4"]
 interop = ["safetensors>=0.4"]  # load_flamo_sos from a .safetensors checkpoint
-test = ["pytest>=7", "scipy", "array_api_strict", "array-api-compat"]
+dataset = ["pyarrow>=14"]  # fluxion.dataset: Parquet audio-dataset IO (augmentation pipeline)
+test = ["pytest>=7", "scipy", "array_api_strict", "array-api-compat", "pyarrow>=14"]
 
 [tool.maturin]
 # Mixed layout: the Rust extension is `fluxion._fluxion`; the Python package lives in python/fluxion/

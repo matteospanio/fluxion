@@ -14,6 +14,7 @@ pip install fluxion               # CPU wheel (numpy only)
 pip install 'fluxion[torch]'      # + the torch.autograd adapter
 pip install 'fluxion[jax]'        # + the jax.custom_vjp adapter
 pip install 'fluxion[interop]'    # + safetensors, for load_flamo_sos
+pip install 'fluxion[dataset]'    # + pyarrow, for the Parquet dataset IO
 ```
 
 The default wheel is CPU-only. A CUDA build (the "GPU wheel", extra batch kernels behind
@@ -55,6 +56,15 @@ aug = Compose([
     fluxion.gain(0.9),
 ])
 y = aug(np.random.default_rng(0).standard_normal(1000).astype(np.float32), fs=48_000)
+```
+
+**Dataset IO** — Parquet audio datasets (extra `fluxion[dataset]`), the same on-disk schema as the
+Rust `fluxion_io::arrow` side, so files interoperate. Streams both ways, so augmenting a whole
+dataset is bounded-memory:
+
+```python
+from fluxion.dataset import iter_parquet, write_parquet
+write_parquet("out.parquet", ((aug(x, fs), fs) for x, fs in iter_parquet("in.parquet")))
 ```
 
 Import a FLAMO/DDSP biquad checkpoint into fluxion's SOS path with

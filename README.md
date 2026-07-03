@@ -32,7 +32,7 @@ cargo install fluxion-cli                          # file processing, no audio-d
 cargo install fluxion-cli --features realtime      # + play/record via CPAL
 
 # Python (wheels: Linux x86_64/aarch64, macOS Intel/AS, Windows; numpy is the only hard dep)
-pip install fluxion               # extras: [torch] [jax] [interop] (safetensors import)
+pip install fluxion               # extras: [torch] [jax] [interop] (safetensors) [dataset] (parquet)
 ```
 
 Dependencies are deliberately thin: the default build is pure Rust and compiles offline; heavy
@@ -122,6 +122,11 @@ ys = chain.process_batch(batch, fs=48_000)            # (B, T) batched
 # Data augmentation: stochastic chains, seeded.
 aug = Compose([RandomChain(fluxion.lowpass, cutoff=(2_000, 16_000), p=0.8)])
 x_aug = aug(x, fs=48_000)
+
+# Dataset IO (extra: fluxion[dataset]) — Parquet, same schema as the Rust side, streamed.
+from fluxion.dataset import iter_parquet, write_parquet
+write_parquet("out.parquet",                                   # augment a whole dataset, lazily
+              ((aug(x, fs), fs) for x, fs in iter_parquet("in.parquet")))
 
 # Training: coefficients as nn.Parameter, analytic backward under torch autograd.
 from fluxion.torch import SosModule

@@ -385,3 +385,82 @@ def test_interop_safetensors_path(tmp_path):
     sos = load_flamo_sos(str(path))
     assert sos.shape == (1, 6)
     np.testing.assert_allclose(sos[0], [0.3, 0.5, 0.2, 1.0, -0.2, 0.05], atol=1e-6)
+
+
+def test_dataset_parquet_roundtrip(tmp_path):
+    pa = pytest.importorskip("pyarrow")
+    from fluxion import dataset
+
+    items = [
+        (np.array([[0.0, 0.5, -0.5, 1.0], [0.1, -0.1, 0.2, -0.2]], dtype=np.float32), 48_000),
+        (np.array([0.25, -0.25, 0.75], dtype=np.float32), 16_000),  # mono (T,)
+    ]
+    path = tmp_path / "ds.parquet"
+    n = dataset.write_parquet(str(path), items)
+    assert n == 2
+
+    # Schema must match the Rust fluxion_io::arrow contract (uint32 / uint16 / list<float32>).
+    schema = pa.parquet.read_schema(str(path))
+    assert schema.field("fs").type == pa.uint32()
+    assert schema.field("channels").type == pa.uint16()
+    assert schema.field("audio").type == pa.list_(pa.float32())
+
+    back = dataset.read_parquet(str(path))
+    assert len(back) == 2
+    # Stereo comes back (2, T) verbatim; mono (T,) comes back (1, T).
+    np.testing.assert_array_equal(back[0][0], items[0][0])
+    assert back[0][1] == 48_000
+    np.testing.assert_array_equal(back[1][0], items[1][0][None, :])
+    assert back[1][1] == 16_000
+
+
+def test_dataset_streaming_is_bounded_and_lazy(tmp_path):
+    pytest.importorskip("pyarrow")
+    from fluxion import dataset
+
+    # A generator in, a generator out: write 500 clips in small row groups, stream them back.
+    rng = np.random.default_rng(0)
+    src = ((rng.standard_normal((1, 64)).astype(np.float32), 8_000) for _ in range(500))
+    path = tmp_path / "big.parquet"
+    n = dataset.write_parquet(str(path), src, row_group_size=32)
+    assert n == 500
+
+    seen = 0
+    for audio, fs in dataset.iter_parquet(str(path), batch_size=32):
+        assert audio.shape == (1, 64)
+        assert fs == 8_000
+        seen += 1
+    assert seen == 500
+
+
+def test_dataset_augment_pipeline_composes(tmp_path):
+    pytest.importorskip("pyarrow")
+    import fluxion
+    from fluxion import dataset
+
+    rng = np.random.default_rng(1)
+    items = [(rng.standard_normal((1, 128)).astype(np.float32), 48_000) for _ in range(4)]
+    in_path, out_path = tmp_path / "in.parquet", tmp_path / "out.parquet"
+    dataset.write_parquet(str(in_path), items)
+
+    # End-to-end streaming augmentation: read -> gain(0.5) -> write, all lazy.
+    g = fluxion.gain(0.5)
+    dataset.write_parquet(
+        str(out_path),
+        ((g.process(x, fs), fs) for x, fs in dataset.iter_parquet(str(in_path))),
+    )
+    back = dataset.read_parquet(str(out_path))
+    assert len(back) == 4
+    for (orig, _), (aug, _) in zip(items, back):
+        np.testing.assert_allclose(aug, orig * 0.5, atol=1e-6)
+
+
+def test_dataset_empty_writes_valid_file(tmp_path):
+    pa = pytest.importorskip("pyarrow")
+    from fluxion import dataset
+
+    path = tmp_path / "empty.parquet"
+    assert dataset.write_parquet(str(path), []) == 0
+    assert dataset.read_parquet(str(path)) == []
+    # Still a schema-carrying, readable Parquet file.
+    assert pa.parquet.read_schema(str(path)).field("fs").type == pa.uint32()
