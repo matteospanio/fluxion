@@ -38,3 +38,11 @@ cubecl = { version = "0.10", features = ["cuda"], optional = true }
 [[example]]
 name = "learn_cutoff"
 required-features = ["burn"]
+
+[[example]]
+name = "eq_inversion"
+required-features = ["burn"]
+
+[[example]]
+name = "train_step_bench"
+required-features = ["burn"]
