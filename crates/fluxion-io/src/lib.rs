@@ -4,7 +4,12 @@
 //! Symphonia — both to/from the planar [`fluxion_core::Signal`] buffer the DSP engine works in.
 //! Pure Rust, no libsndfile/ffmpeg. Writing defaults to 32-bit float ([`write_wav`]); integer PCM
 //! (16/24/32-bit, with TPDF dither) is selectable via [`WavEncoding`] and [`write_wav_encoded`].
-//! Arrow/Parquet batch IO lands later (see `PROJECT.md` §7).
+//! For large files, [`read_wav_blocks`] / [`decode_blocks`] stream fixed-size [`Signal`] chunks
+//! with bounded memory. Columnar dataset IO ([`Signal`] ↔ Arrow/Parquet) is behind the optional
+//! `parquet` feature (the `arrow` module).
+
+#[cfg(feature = "parquet")]
+pub mod arrow;
 
 use std::io::{Cursor, Read, Write};
 use std::path::Path;
@@ -415,11 +420,248 @@ pub fn decode(path: impl AsRef<Path>) -> Result<Signal, SymphoniaError> {
     Ok(Signal::new(fs.max(1), planar))
 }
 
+// --- streaming / chunked readers (plan task H5) ----------------------------------------------
+//
+// `read_wav` / `decode` buffer the whole file into one `Signal` — a 1-hour stereo file at 48 kHz
+// is ~1.4 GB in RAM. The block readers below yield fixed-size `Signal` chunks so peak memory is
+// bounded by `block_frames` regardless of file length (dataset preprocessing, the goal-3
+// augmentation path). Each yields the file's frames in order; the final block may be shorter.
+
+/// De-interleave a frame-major slice into planar channels (the last frame may be partial).
+fn planar_from_interleaved(interleaved: &[f32], channels: usize) -> Vec<Vec<f32>> {
+    let n = channels.max(1);
+    let mut planar = vec![Vec::with_capacity(interleaved.len() / n + 1); n];
+    for (i, &s) in interleaved.iter().enumerate() {
+        planar[i % n].push(s);
+    }
+    planar
+}
+
+/// A bounded-memory iterator over a WAV file, yielding [`Signal`] blocks of `block_frames` frames
+/// (the last block may be shorter). See [`read_wav_blocks`].
+pub struct WavBlocks<R: Read> {
+    reader: WavReader<R>,
+    fs: u32,
+    channels: usize,
+    is_float: bool,
+    int_scale: f32,
+    block_samples: usize,
+}
+
+impl<R: Read> Iterator for WavBlocks<R> {
+    type Item = Result<Signal, hound::Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // hound reads sequentially, so each `samples()` call continues from the current position.
+        let taken: Result<Vec<f32>, hound::Error> = if self.is_float {
+            self.reader
+                .samples::<f32>()
+                .take(self.block_samples)
+                .collect()
+        } else {
+            let scale = self.int_scale;
+            self.reader
+                .samples::<i32>()
+                .take(self.block_samples)
+                .map(|r| r.map(|s| s as f32 / scale))
+                .collect()
+        };
+        match taken {
+            Ok(v) if v.is_empty() => None, // EOF
+            Ok(v) => Some(Ok(Signal::new(
+                self.fs,
+                planar_from_interleaved(&v, self.channels),
+            ))),
+            Err(e) => Some(Err(e)),
+        }
+    }
+}
+
+/// Stream a WAV file as [`Signal`] blocks of `block_frames` frames each (bounded memory).
+///
+/// The returned iterator yields the file in order; the last block may be shorter. `block_frames`
+/// is clamped to at least 1.
+///
+/// ```no_run
+/// # fn main() -> Result<(), hound::Error> {
+/// for block in fluxion_io::read_wav_blocks("big.wav", 65_536)? {
+///     let sig = block?; // at most 65_536 frames in memory at once
+///     // …process sig…
+/// }
+/// # Ok(()) }
+/// ```
+pub fn read_wav_blocks(
+    path: impl AsRef<Path>,
+    block_frames: usize,
+) -> Result<WavBlocks<std::io::BufReader<std::fs::File>>, hound::Error> {
+    read_wav_blocks_from(
+        std::io::BufReader::new(std::fs::File::open(path)?),
+        block_frames,
+    )
+}
+
+/// Stream WAV blocks from any reader (e.g. stdin). See [`read_wav_blocks`].
+pub fn read_wav_blocks_from<R: Read>(
+    reader: R,
+    block_frames: usize,
+) -> Result<WavBlocks<R>, hound::Error> {
+    let reader = WavReader::new(reader)?;
+    let spec = reader.spec();
+    let channels = (spec.channels as usize).max(1);
+    let bits = spec.bits_per_sample.clamp(1, 64);
+    Ok(WavBlocks {
+        fs: spec.sample_rate,
+        channels,
+        is_float: spec.sample_format == SampleFormat::Float,
+        int_scale: (1u64 << (bits - 1)) as f32,
+        block_samples: block_frames.max(1) * channels,
+        reader,
+    })
+}
+
+/// A bounded-memory iterator over any Symphonia-decodable file (FLAC/MP3/OGG/AAC/WAV/…), yielding
+/// [`Signal`] blocks of `block_frames` frames. See [`decode_blocks`].
+pub struct AudioBlocks {
+    format: Box<dyn symphonia::core::formats::FormatReader>,
+    decoder: Box<dyn symphonia::core::codecs::Decoder>,
+    track_id: u32,
+    fs: u32,
+    channels: usize,
+    block_frames: usize,
+    pending: Vec<Vec<f32>>, // planar accumulator, drained in block_frames-sized chunks
+    sbuf: Option<SampleBuffer<f32>>,
+    done: bool,
+}
+
+impl AudioBlocks {
+    /// Frames currently buffered (the shortest channel bounds a whole-frame count).
+    fn pending_frames(&self) -> usize {
+        self.pending.iter().map(Vec::len).min().unwrap_or(0)
+    }
+
+    /// Drain the first `n` frames off the planar accumulator into a [`Signal`].
+    fn take_block(&mut self, n: usize) -> Signal {
+        let channels: Vec<Vec<f32>> = self
+            .pending
+            .iter_mut()
+            .map(|ch| ch.drain(..n.min(ch.len())).collect())
+            .collect();
+        Signal::new(self.fs, channels)
+    }
+}
+
+impl Iterator for AudioBlocks {
+    type Item = Result<Signal, SymphoniaError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while !self.done && self.pending_frames() < self.block_frames {
+            let packet = match self.format.next_packet() {
+                Ok(p) => p,
+                Err(SymphoniaError::IoError(e))
+                    if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+                {
+                    self.done = true;
+                    break;
+                }
+                Err(SymphoniaError::ResetRequired) => {
+                    self.done = true;
+                    break;
+                }
+                Err(e) => {
+                    self.done = true;
+                    return Some(Err(e));
+                }
+            };
+            if packet.track_id() != self.track_id {
+                continue;
+            }
+            match self.decoder.decode(&packet) {
+                Ok(decoded) => {
+                    let spec = *decoded.spec();
+                    let ch = spec.channels.count().max(1);
+                    if self.fs == 0 {
+                        self.fs = spec.rate;
+                    }
+                    if self.pending.is_empty() {
+                        self.pending = vec![Vec::new(); ch];
+                        self.channels = ch;
+                    }
+                    if self.sbuf.is_none() {
+                        self.sbuf = Some(SampleBuffer::<f32>::new(decoded.capacity() as u64, spec));
+                    }
+                    let sb = self.sbuf.as_mut().unwrap();
+                    sb.copy_interleaved_ref(decoded);
+                    for (i, &s) in sb.samples().iter().enumerate() {
+                        self.pending[i % ch].push(s);
+                    }
+                }
+                Err(SymphoniaError::DecodeError(_)) => continue, // skip a corrupt packet
+                Err(e) => {
+                    self.done = true;
+                    return Some(Err(e));
+                }
+            }
+        }
+
+        let avail = self.pending_frames();
+        if avail == 0 {
+            return None; // fully drained
+        }
+        let take = avail.min(self.block_frames);
+        Some(Ok(self.take_block(take)))
+    }
+}
+
+/// Stream any Symphonia-decodable file as [`Signal`] blocks of `block_frames` frames (bounded
+/// memory) — the streaming counterpart to [`decode`]. `block_frames` is clamped to at least 1.
+pub fn decode_blocks(
+    path: impl AsRef<Path>,
+    block_frames: usize,
+) -> Result<AudioBlocks, SymphoniaError> {
+    let path = path.as_ref();
+    let file = std::fs::File::open(path).map_err(SymphoniaError::IoError)?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+    let probed = symphonia::default::get_probe().format(
+        &hint,
+        mss,
+        &FormatOptions::default(),
+        &MetadataOptions::default(),
+    )?;
+    let format = probed.format;
+
+    let track = format
+        .tracks()
+        .iter()
+        .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+        .ok_or(SymphoniaError::Unsupported("no decodable audio track"))?;
+    let track_id = track.id;
+    let fs = track.codec_params.sample_rate.unwrap_or(0);
+    let decoder =
+        symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default())?;
+
+    Ok(AudioBlocks {
+        format,
+        decoder,
+        track_id,
+        fs,
+        channels: 0,
+        block_frames: block_frames.max(1),
+        pending: Vec::new(),
+        sbuf: None,
+        done: false,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        AudioInfo, WavEncoding, decode, probe, probe_wav, read_wav, read_wav_from, write_wav,
-        write_wav_encoded, write_wav_to,
+        AudioInfo, WavEncoding, decode, decode_blocks, probe, probe_wav, read_wav, read_wav_blocks,
+        read_wav_from, write_wav, write_wav_encoded, write_wav_to,
     };
     use fluxion_core::Signal;
     use std::io::Cursor;
@@ -696,5 +938,89 @@ mod tests {
         assert_eq!(info.codec, "flac");
         assert_eq!(info.frames, Some(240));
         assert!((info.seconds().unwrap() - 0.03).abs() < 1e-9);
+    }
+
+    #[test]
+    fn wav_blocks_reassemble_the_whole_signal() {
+        // Streaming in 100-frame blocks must reconstruct exactly what read_wav returns whole.
+        let original = Signal::new(
+            16_000,
+            vec![
+                (0..250).map(|i| (i as f32 / 250.0) - 0.5).collect(),
+                (0..250).map(|i| 0.4 * (i as f32 * 0.05).sin()).collect(),
+            ],
+        );
+        let path = tmp_path("wav_blocks");
+        write_wav_encoded(
+            &path,
+            &original,
+            WavEncoding {
+                bits: 24,
+                float: false,
+                dither: false,
+            },
+        )
+        .expect("write");
+
+        let whole = read_wav(&path).expect("read whole");
+        let mut blocks = Vec::new();
+        for block in read_wav_blocks(&path, 100).expect("open blocks") {
+            blocks.push(block.expect("block"));
+        }
+        let _ = std::fs::remove_file(&path);
+
+        // 250 frames / 100 → blocks of 100, 100, 50.
+        assert_eq!(
+            blocks.iter().map(Signal::frames).collect::<Vec<_>>(),
+            vec![100, 100, 50]
+        );
+        assert!(blocks.iter().all(|b| b.channel_count() == 2));
+
+        let rebuilt = concat_blocks(&blocks);
+        assert_eq!(rebuilt.frames(), 250);
+        for ch in 0..2 {
+            assert_eq!(rebuilt.channels[ch], whole.channels[ch]);
+        }
+    }
+
+    /// Concatenate streamed blocks back into one [`Signal`] (test helper).
+    fn concat_blocks(blocks: &[Signal]) -> Signal {
+        let fs = blocks.first().map(|b| b.fs).unwrap_or(0);
+        let nch = blocks.first().map(Signal::channel_count).unwrap_or(0);
+        let mut channels = vec![Vec::new(); nch];
+        for b in blocks {
+            for (c, ch) in b.channels.iter().enumerate() {
+                channels[c].extend_from_slice(ch);
+            }
+        }
+        Signal::new(fs, channels)
+    }
+
+    #[test]
+    fn decode_blocks_reassemble_the_flac_fixture() {
+        // The streaming decoder must yield the same 240 frames as decode(), in 64-frame blocks.
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/data/sine_1k_8000_mono.flac"
+        );
+        let whole = decode(path).expect("decode whole");
+
+        let mut blocks = Vec::new();
+        for block in decode_blocks(path, 64).expect("open blocks") {
+            blocks.push(block.expect("block"));
+        }
+        let rebuilt = concat_blocks(&blocks);
+
+        assert_eq!(rebuilt.fs, whole.fs);
+        assert_eq!(rebuilt.frames(), whole.frames());
+        assert!(
+            blocks
+                .iter()
+                .take(blocks.len() - 1)
+                .all(|b| b.frames() == 64)
+        );
+        for ch in 0..whole.channel_count() {
+            assert_eq!(rebuilt.channels[ch], whole.channels[ch]);
+        }
     }
 }

@@ -52,7 +52,10 @@ All notable changes to fluxion are documented here. The format is based on
   (feature `realtime`).
 - **Audio IO** — WAV read/write via hound with output encoding options (16/24/32-bit integer PCM
   with TPDF dither on by default, or 32-bit float) and decode + header-only `probe` of
-  FLAC/MP3/OGG/AAC/… via Symphonia (pure Rust, no libsndfile/ffmpeg).
+  FLAC/MP3/OGG/AAC/… via Symphonia (pure Rust, no libsndfile/ffmpeg). Bounded-memory streaming
+  readers (`read_wav_blocks` / `decode_blocks`) yield fixed-size `Signal` chunks for large files,
+  and columnar dataset IO (`Signal` ↔ Arrow `RecordBatch` ↔ Parquet) sits behind an optional
+  `parquet` feature for the augmentation workflow.
 - **Python bindings** — torchaudio-style eager `Chain` API accepting 1-D `(T,)` and 2-D `(C, T)`
   input plus a batched `Chain.process_batch((B, T))`, zero-copy DLPack interop with NumPy /
   PyTorch / JAX, Array-API consumer conformance, `fluxion.augment` (`Compose`, `RandomChain`)

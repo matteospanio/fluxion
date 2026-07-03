@@ -141,7 +141,7 @@ coeffs = fluxion.interop.load_flamo_sos("checkpoint.safetensors")
 | `fluxion-backend` | CPU executor (SIMD batch path), graph lowering, stability certification, CUDA kernels (feature `cuda`) | **working + tested** |
 | `fluxion-autodiff` | Burn `Autodiff` integration: whole-graph `diff_process`, trainable coeffs/design params | **working + tested** (feature-gated) |
 | `fluxion-rt` | Realtime engine: lock-free SPSC ring, alloc-free executor, CPAL backend (feature `cpal`) | **working + tested** (alloc-asserted) |
-| `fluxion-io` | WAV read/write (16/24/32-bit, TPDF dither) + Symphonia decode/probe (FLAC/MP3/OGG/AAC/…) | **working + tested** |
+| `fluxion-io` | WAV read/write (16/24/32-bit, TPDF dither) + Symphonia decode/probe (FLAC/MP3/OGG/AAC/…), bounded-memory streaming readers, Arrow/Parquet dataset IO (feature `parquet`) | **working + tested** |
 | `fluxion-cli` | The `fluxion` binary (feature `realtime` for play/record) | **working + tested** |
 | `fluxion-py` | PyO3/maturin package `fluxion` (abi3, numpy-only hard dep; extras: torch/jax/interop) | **working + tested** |
 | `fluxion-ffi` | C ABI (`include/fluxion.h`, cbindgen), panic-safe | minimal, tested; `publish = false` |

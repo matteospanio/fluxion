@@ -15,8 +15,17 @@ categories.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Columnar dataset IO (Signal <-> Arrow RecordBatch / Parquet). Off by default — arrow/parquet are
+# heavy, so only dataset consumers pay for them (the augmentation goal). Kept out of the default
+# build per the placeholder-deps rule.
+parquet = ["dep:arrow", "dep:parquet"]
+
 [dependencies]
 fluxion-core = { path = "../fluxion-core", version = "0.0.0" }
 hound = "3.5"
 symphonia = { version = "0.5", features = ["all-codecs", "all-formats"] }
-# Added later: arrow + parquet (batch IO).
+# Batch IO (feature `parquet`). default-features off keeps the transitive tree to the array/schema
+# core plus the parquet↔arrow bridge; no csv/json/ipc.
+arrow = { version = "56", optional = true, default-features = false }
+parquet = { version = "56", optional = true, default-features = false, features = ["arrow"] }

@@ -79,6 +79,19 @@ jobs:
       - run: cargo clippy -p fluxion-cli --features realtime --all-targets --locked -- -D warnings
       - run: cargo test -p fluxion-cli --features realtime --locked
 
+  parquet:
+    name: batch IO (Arrow/Parquet)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # Columnar dataset IO pulls arrow/parquet, off the default build — exercise it explicitly.
+      - run: cargo clippy -p fluxion-io --features parquet --all-targets --locked -- -D warnings
+      - run: cargo test -p fluxion-io --features parquet --locked
+
   deny:
     name: cargo-deny (licenses & advisories)
     runs-on: ubuntu-latest

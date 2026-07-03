@@ -148,8 +148,8 @@ parallelizable around it.
 | H1 | WAV read/write (`hound`). | P0 | S | — | ✓ |
 | H2 | Symphonia decode (flac/mp3/ogg/aac → samples + fs). | P1 | M | — | ✓ |
 | H3 | Encoders for output formats (WAV P0; others P2). | P1 | M | H1 | ✓ |
-| H4 | Arrow/Parquet batch IO (dataset → record batches). **Review (2026-06-28):** this is the dataset half of the data-augmentation use case (pairs with J9/J12); sequence ahead of fancier effects if goal 3 is prioritized. Keep the `arrow`/`parquet` deps out until then (placeholder-deps rule). | P2 | M | — | ✓ |
-| H5 | Streaming/chunked reader for large files. | P1 | M | H2 | — |
+| H4 | Arrow/Parquet batch IO (dataset → record batches). **DONE (2026-07-03):** `fluxion_io::arrow` behind the optional `parquet` feature — `signals_to_batch`/`batch_to_signals` (one row per `Signal`: `fs`/`channels`/interleaved-`audio` schema) + `write_parquet`/`read_parquet`; exact batch + Parquet round-trips. arrow/parquet stay out of the default build (placeholder-deps rule); CI `batch IO` lane + `cargo deny` cover the tree. Python binding for this path is a follow-up (pairs with J9/J12). | P2 | M | — | ✓ |
+| H5 | Streaming/chunked reader for large files. **DONE (2026-07-03):** `read_wav_blocks` (hound) + `decode_blocks` (Symphonia) yield fixed-size `Signal` blocks with memory bounded by the block size; tests prove reassembled blocks == the whole-file read (WAV + FLAC fixture). | P1 | M | H2 | — |
 
 ## Epic I — CLI  *(crate: `fluxion-cli`)*
 
@@ -299,9 +299,18 @@ concurrently (ideally one contributor or one worktree per lane).
     closing the "realtime unreachable from the facade" review finding. `cpal_backend` renamed
     `sample_rate`→`fs` (convention). README rewritten to the real state; AGENTS.md Lo/Hi naming
     rule replaced by the implemented full-word convention.
+  - **H5** DONE: bounded-memory streaming readers `read_wav_blocks` (hound) + `decode_blocks`
+    (Symphonia) yield fixed-size `Signal` blocks; tests prove the reassembled blocks equal the
+    whole-file read for WAV and the FLAC fixture.
+  - **H4** DONE: columnar dataset IO behind the optional `parquet` feature —
+    `fluxion_io::arrow::{signals_to_batch, batch_to_signals, write_parquet, read_parquet}` (one row
+    per `Signal`; `fs`/`channels`/interleaved-`audio` schema), exact batch + Parquet round-trips.
+    arrow/parquet stay out of the default build (placeholder-deps rule); a CI `batch IO` lane and
+    `cargo deny` cover the new tree.
   - **Still open for 1.0:** C5 (device dispatch / `--device`), B4 (CSE pass, P2), D10 (filterbank,
     P2), E5-reverb VJP (P2), F1/F3-remainder/F4/F5/F6 (GPU generic backend + cross-vendor
-    validation — needs Apple/AMD hardware), H4 (Arrow/Parquet), H5 (streaming reader),
-    L1 (published benchmarks), L2 (coverage gate), L3 (mdBook), L4-remainder (semver audit),
-    L5/L6 (release + sign-off). SoX features consciously deferred: `tempo`/`pitch` (WSOLA/phase
-    vocoder), `spectrogram` (imaging dep), noise reduction, legacy niches (`oops`/`riaa`/`earwax`).
+    validation — needs Apple/AMD hardware), a Python binding for the Parquet dataset path (pairs
+    with J9/J12), L1 (published benchmarks), L2 (coverage gate), L3 (mdBook), L4-remainder (semver
+    audit), L5/L6 (release + sign-off). SoX features consciously deferred: `tempo`/`pitch`
+    (WSOLA/phase vocoder), `spectrogram` (imaging dep), noise reduction, legacy niches
+    (`oops`/`riaa`/`earwax`).
