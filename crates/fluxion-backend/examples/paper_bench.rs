@@ -87,11 +87,17 @@ fn main() {
         );
     }
 
-    // E1 `cascade`: 1 mono x 60 s, K in {4, 8, 16} sections (order 2K Butterworth).
+    // E1 `cascade`: 1 mono x 60 s, K in {4, 8, 16} sections. The order param caps at 16
+    // (8 sections), so deeper cascades chain ops — same executor path either way.
     for k in [4usize, 8, 16] {
         let frames = 60 * fs as usize;
         let sig = Signal::new(fs, vec![signal(frames, 42)]);
-        let g = Graph::op(OpKind::Lowpass, [2_000.0, (2 * k) as f32]);
+        let g = if k <= 8 {
+            Graph::op(OpKind::Lowpass, [2_000.0, (2 * k) as f32])
+        } else {
+            Graph::op(OpKind::Lowpass, [2_000.0, 16.0])
+                | Graph::op(OpKind::Lowpass, [2_500.0, 16.0])
+        };
         let ms = frames as f64 / 1e6;
         let s = median_secs(
             || {
