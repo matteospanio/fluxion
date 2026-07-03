@@ -103,9 +103,22 @@ fn main() {
         high_shelf(8_000.0 * (1.0 + jit(5)), 5.0 * (1.0 + jit(6)), 0.9, FS),
     ];
 
-    // Training signal: colored noise in, original out (waveform MSE — inversion in the time domain).
+    // Training signal: colored noise in, original out (waveform MSE — inversion in the time
+    // domain). The excitation is pink-weighted (white noise blended with its one-pole low-pass):
+    // white noise puts almost no energy below ~150 Hz, so a low-shelf band would see a vanishing
+    // gradient — pink excitation is standard practice for EQ estimation.
     let n = 8_192usize;
-    let clean = pseudo_noise(n, 0x1234_5678);
+    let white = pseudo_noise(n, 0x1234_5678);
+    let clean: Vec<f32> = {
+        let mut lp = 0.0f32;
+        white
+            .iter()
+            .map(|&x| {
+                lp = 0.98 * lp + 0.02 * x; // one-pole low-pass ≈ low-frequency emphasis
+                0.35 * x + 12.0 * lp
+            })
+            .collect()
+    };
     let colored = sos_filter(&clean, &color);
     let x = Tensor::<B, 1>::from_floats(colored.as_slice(), &device);
     let target = Tensor::<B, 1>::from_floats(clean.as_slice(), &device);
