@@ -245,3 +245,143 @@ def test_torch_sos_module_is_trainable():
     x = torch.randn(256, requires_grad=True)
     m(x).pow(2).sum().backward()
     assert m.coeffs.grad is not None and x.grad is not None
+
+
+# --- J9: batched CPU path ------------------------------------------------------------------------
+
+
+def test_process_batch_matches_per_row():
+    """Chain.process_batch on a (B, T) array == stacking per-row Chain.process (the batch contract)."""
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal((8, 500)).astype(np.float32)
+    chain = fluxion.lowpass(1500.0, 6) | fluxion.highpass(200.0, 2)  # pure filter → SIMD batch path
+    y = chain.process_batch(x, FS)
+    assert y.shape == x.shape and y.dtype == np.float32
+    for r in range(x.shape[0]):
+        np.testing.assert_allclose(y[r], chain.process(x[r], FS), atol=1e-5)
+
+
+def test_process_batch_fallback_nonfilter():
+    """A non-filter chain (gain) still batches correctly via the per-signal fallback."""
+    x = np.array([[1.0, 10.0], [2.0, 3.0]], dtype=np.float32)
+    y = fluxion.gain(2.0).process_batch(x, FS)
+    np.testing.assert_allclose(y, 2.0 * x, atol=1e-6)
+
+
+def test_process_batch_rejects_1d():
+    with pytest.raises(ValueError):
+        fluxion.gain(1.0).process_batch(np.zeros(10, dtype=np.float32), FS)
+
+
+# --- J12: augmentation ---------------------------------------------------------------------------
+
+
+def test_augment_determinism_and_range():
+    from fluxion.augment import Compose, RandomChain
+
+    # Two identically-seeded pipelines produce bit-identical output (reproducibility).
+    x = np.random.default_rng(0).standard_normal(1000).astype(np.float32)
+    make = lambda: Compose(
+        [RandomChain(fluxion.lowpass, cutoff=(200.0, 8000.0), order=4, p=1.0, rng=42)]
+    )
+    np.testing.assert_array_equal(make()(x, FS), make()(x, FS))
+
+    # Sampled params land in the requested range; the fixed param stays fixed.
+    rc = RandomChain(fluxion.lowpass, cutoff=(200.0, 8000.0), order=4, rng=7)
+    for _ in range(200):
+        p = rc.sample()
+        assert 200.0 <= p["cutoff"] < 8000.0
+        assert p["order"] == 4
+
+
+def test_augment_p_zero_is_identity():
+    from fluxion.augment import RandomChain
+
+    x = np.arange(16, dtype=np.float32)
+    rc = RandomChain(fluxion.gain, value=(0.1, 0.9), p=0.0, rng=1)
+    np.testing.assert_array_equal(rc(x, FS), x)  # never applied → untouched
+
+
+def test_augment_integer_range_samples_ints():
+    from fluxion.augment import RandomChain
+
+    rc = RandomChain(fluxion.lowpass, cutoff=1000.0, order=(2, 8), rng=3)
+    for _ in range(50):
+        o = rc.sample()["order"]
+        assert isinstance(o, int) and 2 <= o <= 8
+
+
+# --- J13: FLAMO/DDSP checkpoint import ------------------------------------------------------------
+
+
+def test_interop_coeff_layout_feeds_sos_forward():
+    from fluxion.interop import load_flamo_sos
+
+    # Fake FLAMO checkpoint: two biquad sections as (N, 3) numerator/denominator (a0 != 1).
+    b = np.array([[0.3, 0.5, 0.2], [1.0, -1.5, 0.7]], dtype=np.float64)
+    a = np.array([[2.0, -0.4, 0.1], [1.0, -0.2, 0.05]], dtype=np.float64)  # first row a0 = 2
+    sos6 = load_flamo_sos({"filters.0.b": b, "filters.0.a": a})
+    assert sos6.shape == (2, 6) and sos6.dtype == np.float32
+    np.testing.assert_allclose(sos6[:, 3], [1.0, 1.0], atol=1e-6)  # a0 normalised to 1
+    np.testing.assert_allclose(sos6[0, :3], b[0] / 2.0, atol=1e-6)  # b row scaled by 1/a0
+
+    # (N, 5) fluxion layout feeds sos_forward directly.
+    coeffs = load_flamo_sos({"b": b, "a": a}, layout="fluxion").ravel()
+    assert coeffs.shape == (10,)
+    impulse = np.zeros(8, dtype=np.float32)
+    impulse[0] = 1.0
+    y = fluxion.sos_forward(impulse, coeffs)
+    assert y.shape == (8,) and np.isfinite(y).all()
+
+
+def test_interop_rbj_peaking_matches_hand_math():
+    from fluxion.interop import load_flamo_sos
+
+    freq, gain_db, q, fs = 1000.0, 6.0, 0.707, 48_000.0
+    sd = {
+        "freq": np.array([freq]),
+        "gain_db": np.array([gain_db]),
+        "Q": np.array([q]),
+        "fs": fs,
+    }
+    sos = load_flamo_sos(sd)
+    # Recompute the RBJ peaking biquad by hand and compare.
+    amp = 10.0 ** (gain_db / 40.0)
+    w0 = 2 * np.pi * freq / fs
+    alpha = np.sin(w0) / (2 * q)
+    a0 = 1 + alpha / amp
+    expect = (
+        np.array(
+            [1 + alpha * amp, -2 * np.cos(w0), 1 - alpha * amp, a0, -2 * np.cos(w0), 1 - alpha / amp]
+        )
+        / a0
+    )
+    np.testing.assert_allclose(sos[0], expect, rtol=1e-5)
+
+
+def test_interop_svf_raises_clear_error():
+    from fluxion.interop import load_flamo_sos
+
+    with pytest.raises(ValueError, match="SVF"):
+        load_flamo_sos({"m_lp": np.zeros(2), "m_bp": np.zeros(2), "m_hp": np.zeros(2)})
+
+
+def test_interop_unknown_layout_raises():
+    from fluxion.interop import load_flamo_sos
+
+    with pytest.raises(ValueError, match="unrecognised"):
+        load_flamo_sos({"weight": np.zeros((2, 2))})
+
+
+def test_interop_safetensors_path(tmp_path):
+    """A .safetensors path loads via the lazy safetensors import (the 'interop' extra)."""
+    st = pytest.importorskip("safetensors.numpy")
+    b = np.array([[0.3, 0.5, 0.2]], dtype=np.float32)
+    a = np.array([[1.0, -0.2, 0.05]], dtype=np.float32)
+    path = tmp_path / "cascade.safetensors"
+    st.save_file({"b": b, "a": a}, str(path))
+    from fluxion.interop import load_flamo_sos
+
+    sos = load_flamo_sos(str(path))
+    assert sos.shape == (1, 6)
+    np.testing.assert_allclose(sos[0], [0.3, 0.5, 0.2, 1.0, -0.2, 0.05], atol=1e-6)

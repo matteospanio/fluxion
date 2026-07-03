@@ -9,7 +9,11 @@
 // edition-2024 `unsafe_op_in_unsafe_fn` lint flags in the generated code; they also expand a
 // same-type `PyErr` conversion that trips `clippy::useless_conversion`. Both are macro artifacts —
 // the macros are sound.
-#![allow(unsafe_op_in_unsafe_fn, clippy::useless_conversion, clippy::type_complexity)]
+#![allow(
+    unsafe_op_in_unsafe_fn,
+    clippy::useless_conversion,
+    clippy::type_complexity
+)]
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods};
 use pyo3::exceptions::PyValueError;
@@ -130,6 +134,37 @@ impl Chain {
                 .map_err(|e| PyValueError::new_err(format!("output channels are ragged: {e}")))?;
             Ok(arr.into_any())
         }
+    }
+
+    /// Apply the chain to a **batch** of independent mono signals: a 2-D `(B, T)` array (each row is
+    /// one signal) at sample rate `fs`, returning a new `(B, T)` `float32` array. Every row is
+    /// filtered independently — the result is identical to calling [`process`](Self::process) on each
+    /// row on its own, but a pure-filter chain over equal-length rows is routed through the batched
+    /// SIMD kernel (the IIR recurrence vectorizes *across the batch*), so this is the fast path for
+    /// many equal-length mono clips (data augmentation, training minibatches). Same zero-copy DLPack
+    /// input contract as [`process`]. This is the CPU batch path; the GPU variant is
+    /// [`sos_filter_batch_gpu`], available only in the CUDA-built wheel.
+    fn process_batch<'py>(
+        &self,
+        py: Python<'py>,
+        x: &Bound<'py, PyAny>,
+        fs: u32,
+    ) -> PyResult<Bound<'py, PyArray2<f32>>> {
+        let (rows, ndim) = as_channels(x)?;
+        if ndim != 2 {
+            return Err(PyValueError::new_err(
+                "process_batch expects a 2-D (B, T) array (each row is one mono signal)",
+            ));
+        }
+        let batch: Vec<Signal> = rows.into_iter().map(|r| Signal::new(fs, vec![r])).collect();
+        let out = fluxion_backend::process_batch(&self.graph, &batch);
+        // Each output signal is one row: take its (mono) first channel, matching per-row `process`.
+        let out_rows: Vec<Vec<f32>> = out
+            .into_iter()
+            .map(|s| s.channels.into_iter().next().unwrap_or_default())
+            .collect();
+        PyArray2::from_vec2_bound(py, &out_rows)
+            .map_err(|e| PyValueError::new_err(format!("batch output rows are ragged: {e}")))
     }
 
     /// The designed SOS coefficients as a flat `[b0,b1,b2,a1,a2]·n_sections` `float32` array for a

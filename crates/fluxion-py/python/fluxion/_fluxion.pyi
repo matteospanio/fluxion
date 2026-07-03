@@ -11,6 +11,14 @@ class Chain:
     def process(self, x: F32, fs: int) -> F32:
         """Apply the chain at ``fs`` to a 1-D ``(T,)`` or 2-D ``(C, T)`` float32 array (same shape out)."""
         ...
+    def process_batch(self, x: F32, fs: int) -> F32:
+        """Filter a 2-D ``(B, T)`` batch of independent mono signals at ``fs`` → ``(B, T)`` float32.
+
+        Identical to :meth:`process` per row, but routes a pure-filter chain through the batched
+        SIMD kernel (rows vectorize across the batch). The CPU batch path; the GPU one is
+        ``sos_filter_batch_gpu`` (CUDA wheel only).
+        """
+        ...
     def sos_coeffs(self, fs: int) -> F32:
         """Flat ``[b0,b1,b2,a1,a2]·n`` designed coefficients for a pure-filter chain at ``fs``."""
         ...
@@ -38,3 +46,11 @@ def echo(seconds: float, feedback: float, wet: float) -> Chain: ...
 def fir(taps: list[float]) -> Chain: ...
 def sos_forward(x: F32, coeffs: F32) -> F32: ...
 def sos_backward(grad_out: F32, x: F32, coeffs: F32) -> tuple[F32, F32]: ...
+
+# True in the CUDA-built ("GPU") wheel, False in the default ("CPU") wheel.
+__cuda__: bool
+
+# Defined only in the CUDA-built ("GPU") wheel (guarded by ``if __cuda__`` in ``__init__``); absent
+# from the default CPU wheel. Filters a flat ``len(x)/frames``-row batch through an SOS cascade on
+# the GPU (bit-accurate vs the CPU path). ``coeffs`` is flat ``[b0,b1,b2,a1,a2]·n_sections``.
+def sos_filter_batch_gpu(x: F32, frames: int, coeffs: F32) -> F32: ...

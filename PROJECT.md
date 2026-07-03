@@ -62,6 +62,17 @@ Plus two cross-cutting constraints: **framework-agnostic** (integrable into "pot
 framework via a functional API) and **hardware-agnostic** (NVIDIA / AMD-ROCm / Apple Silicon /
 CPU, ideally WASM/WebGPU).
 
+### Two further goals (added 2026-07)
+
+5. **ML data augmentation.** The batched CPU/GPU path doubles as an augmentation engine for
+   dataset pipelines: stochastic effect chains (randomly sampled parameters, apply-probability)
+   over `(B, T)` batches, exposed in Python (`fluxion.augment`) and from the CLI (`batch`).
+6. **Import DDSP modules trained in other frameworks.** Fluxion is not only integrable *into*
+   host frameworks — it also *consumes* their artifacts: a checkpoint trained elsewhere (named
+   target: **FLAMO** SISO biquad/SVF cascades, via `safetensors` state-dicts) is replayed into
+   SOS coefficients (`fluxion.interop`) and from there frozen/played like any native graph.
+   MIMO banks and frequency-sampled FIRs are out of the first slice.
+
 ### The central tension (and its resolution)
 
 "Differentiable" is *exactly* the thing a framework gives you for free. Resolving "differentiable
@@ -343,31 +354,44 @@ y = eq(x); loss = mse(y, target); loss.backward()   # grads flow into params
 The Python layer conforms to the **Array API** (`array-api-compat`), so the same code runs over
 NumPy / CuPy / PyTorch / JAX arrays; DLPack handles the device handoff.
 
-### 8.4 CLI — the SoX replacement
+### 8.4 CLI — the SoX substitute
 
-Compatible *command surface* with SoX (so muscle memory and scripts port), but modern subcommands
-with long `--flags`, explicit Hz units, and per-command `--help`.
+SoX's *jobs*, not SoX's interface: named effects with long `--flags`, explicit units (Hz, seconds,
+dB), SI suffixes (`1k`), and a self-describing catalog (`fluxion effects [name]` prints every
+parameter, unit, and default). Adjacent effects fuse into one filter pass; geometry stages
+(`trim`, `pad`, `rate`, `speed`, `repeat`, `silence`, `channels`, `remix`) change frame/channel
+count or fs and run between passes.
 
 ```bash
-# Effect chain on one file (SoX-style positional pipeline).
+# Effect chain on one file (SoX-style positional pipeline; --db converts at parse time).
 fluxion in.wav  lowpass --cutoff 800 --order 4  reverb --mix 0.4  gain --db -3  out.wav
 
-# Inspect metadata (soxi-style).
-fluxion info in.wav
+# The convert jobs: trim + resample + bit-depth reduction (TPDF-dithered by default).
+fluxion --bits 16 in.flac  trim --start 0.25 --len 30  rate --fs 44100  out.wav
 
-# Read from stdin, write to stdout — a Unix filter (like AudioNoise/SoX).
-cat in.raw | fluxion - lowpass --cutoff 1k - > out.raw
+# Multiple inputs: concatenate (default) or sum with --mix.
+fluxion --mix a.wav b.wav mixed.wav
 
-# Batch over a glob on the GPU; one effect chain applied to each file.
-fluxion --device cuda 'data/*.wav' --each 'highpass --cutoff 80 | normalize' -o out/
+# Inspect / analyze (WAV via hound; FLAC/MP3/OGG/… via Symphonia probe).
+fluxion info in.mp3          # alias: soxi
+fluxion stat in.wav          # peak/RMS dBFS, DC offset, crest factor, …
 
-# Realtime monitoring through the CPU realtime engine (frozen coeffs, no GPU).
+# Unix filter on stdin/stdout; -n null sink; glob batch; tone generator.
+cat in.wav | fluxion - lowpass --cutoff 1k - > out.wav
+fluxion batch out/ 'data/*.wav' highpass --cutoff 80
+fluxion synth --wave sine --freq 440 --secs 1 tone.wav
+
+# Realtime monitoring through the CPU realtime engine (feature `realtime`; frozen coeffs, no GPU).
 fluxion play in.wav  lowpass --cutoff 800
-fluxion record  --effects 'gain --db 6 | reverb --mix 0.2'  rec.wav
+fluxion record --secs 5  gain --db 6  rec.wav
 
-# Export a graph to a portable artifact (frozen coeffs) for the realtime engine / a plugin.
-fluxion compile 'lowpass --cutoff 800 | reverb --mix 0.4' --fs 48000 --block 128 -o chain.fxg
+# Export a graph to a portable artifact (frozen coeffs, stability-certified) and reuse it.
+fluxion compile lowpass --cutoff 800 reverb --mix 0.4  chain.fxg
+fluxion in.wav chain.fxg out.wav
 ```
+
+Planned, not yet implemented: `--device cuda` batch dispatch (waits on backend device selection,
+plan C5) and time-stretch/pitch-shift stages (`tempo`/`pitch`, plan roadmap).
 
 ### 8.5 Rust — realtime engine (allocation-free)
 
@@ -525,4 +549,4 @@ fx_graph_free(g);
 ### Comparable libraries (in-repo references / prior art)
 - Spotify pedalboard (C++/JUCE + pybind11, CPU-only): https://github.com/spotify/pedalboard
 - GRAFX (PyTorch audio processing graphs): prior art to stay clear of by name.
-- FLAMO (differentiable frequency-domain LTI): see `references/flamo/`.
+- FLAMO (differentiable frequency-domain LTI): https://github.com/gdalsanto/flamo

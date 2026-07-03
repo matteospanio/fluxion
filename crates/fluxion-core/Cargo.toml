@@ -1,6 +1,7 @@
 [package]
 name = "fluxion-core"
 description = "Fluxion: functional DSP graph algebra and intermediate representation."
+readme = "../../README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

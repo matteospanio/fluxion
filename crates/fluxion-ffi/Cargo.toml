@@ -1,6 +1,8 @@
 [package]
 name = "fluxion-ffi"
 description = "Fluxion: stable C ABI surface (cbindgen header + DLPack tensor interop)."
+# Ships a C artifact (staticlib/cdylib + generated header), not a crates.io Rust library — never published.
+publish = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -19,5 +21,6 @@ workspace = true
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-fluxion-core = { path = "../fluxion-core" }
-# Added when the surface grows: a DLPack binding crate / generated cbindgen header.
+fluxion-core = { path = "../fluxion-core", version = "0.0.0" }
+fluxion-backend = { path = "../fluxion-backend", version = "0.0.0" }
+# Added when the surface grows: a DLPack binding crate for zero-copy GPU tensor handoff.

@@ -18,8 +18,14 @@ workspace = true
 # Whole-graph differentiation via Burn's autograd (plan tasks E12 + C1). Pulls in Burn; the default
 # facade stays pure-Rust and offline.
 autodiff = ["dep:fluxion-autodiff", "fluxion-autodiff/burn"]
+# The real-time engine: re-exports RtGraph / RtEngine / SosStream / SmoothedValue and the freeze /
+# to_rt_graph lowering + FrozenSos plan. Pure-Rust (no extra system deps unless you also enable
+# fluxion-rt's own `cpal` feature); off by default so the base facade surface stays minimal.
+realtime = ["dep:fluxion-rt"]
 
 [dependencies]
 fluxion-core = { path = "../fluxion-core" }
+fluxion-ops = { path = "../fluxion-ops" }
 fluxion-backend = { path = "../fluxion-backend" }
 fluxion-autodiff = { path = "../fluxion-autodiff", optional = true }
+fluxion-rt = { path = "../fluxion-rt", optional = true }

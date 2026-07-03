@@ -7,8 +7,10 @@ lives in [PROJECT.md](PROJECT.md), the crate layout in [README.md](README.md).
 
 **Fluxion** — a differentiable, cross-vendor, framework-agnostic audio DSP library with a functional
 graph API, a SoX-replacement CLI, and a hard-real-time engine. Rust core, bound to anything
-(Python / C / JS / WASM). **Status: scaffold.** `PROJECT.md` is the source of truth for design and
-roadmap; only `fluxion-core` has real logic today (the graph algebra).
+(Python / C / JS / WASM). **Status: pre-1.0, substantially implemented** — graph IR, DSP ops with
+analytic VJPs, Burn autodiff, CPU SIMD + CUDA batch kernels, the realtime engine, audio IO, the CLI,
+and the Python wheel are real and tested. `PROJECT.md` is the source of truth for design;
+`IMPLEMENTATION_PLAN.md` tracks what remains for 1.0.
 
 ## Commands
 
@@ -25,8 +27,8 @@ cargo doc --no-deps          # API docs
 
 Cargo workspace, members under `crates/*`, shared metadata via `[workspace.package]`, edition 2024,
 MSRV 1.85. Package `fluxion` (dir `crates/fluxion-facade`) is the facade users depend on;
-`fluxion-cli` builds the binary named `fluxion`. The other crates are placeholders — see the table
-in `README.md`.
+`fluxion-cli` builds the binary named `fluxion`. See the crate table in `README.md` for each
+crate's role and state.
 
 ## Conventions — don't break these
 
@@ -42,8 +44,9 @@ in `README.md`.
 - **Heavy deps are wired per-crate, only when that crate is implemented.** The backbone builds
   offline; do not add `burn` / `cubecl` / `pyo3` / `clap` / `symphonia` to placeholder crates until
   you implement them. Keep placeholder `[dependencies]` empty.
-- **Naming:** `Lo`/`Hi` prefix for low/high-pass variants (e.g. `LoButterworth`); base types
-  unprefixed. Frequencies in Hz; sample rate is `fs`, never `sample_rate`.
+- **Naming:** full-word low/high-pass names with the filter family where it matters (e.g.
+  `Lowpass`, `cheby1_lowpass`); base types unprefixed. Frequencies in Hz; sample rate is `fs`,
+  never `sample_rate`.
 - **Style:** keep `cargo clippy` and `cargo fmt` clean. Mark deliberate shortcuts with a
   `// ponytail:` comment that names the ceiling and the upgrade path.
 - **Tests:** non-trivial logic leaves one runnable check (`#[test]` or a doctest); use exact

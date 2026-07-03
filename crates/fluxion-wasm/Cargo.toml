@@ -1,6 +1,8 @@
 [package]
 name = "fluxion-wasm"
 description = "Fluxion: WebAssembly bindings (wasm-bindgen) for the CPU + WebGPU path."
+# A wasm-bindgen cdylib for the browser, not a crates.io library — never published.
+publish = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

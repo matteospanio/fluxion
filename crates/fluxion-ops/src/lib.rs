@@ -17,25 +17,32 @@
 pub mod chebyshev;
 pub mod delay;
 pub mod design;
+pub mod dynamics;
 pub mod effect;
 pub mod fir;
 pub mod iir;
+pub mod modulation;
 pub mod rbj;
 pub mod reverb;
 pub mod stability;
+pub mod transform;
 
 pub use chebyshev::{
     chebyshev1_highpass, chebyshev1_lowpass, chebyshev2_highpass, chebyshev2_lowpass,
 };
-pub use delay::{delay, delay_vjp, echo, echo_vjp};
+pub use delay::{delay, delay_frac, delay_vjp, echo, echo_vjp};
 pub use design::design_param_grad;
-pub use effect::{gain, gain_vjp, normalize_peak, normalize_vjp};
+pub use dynamics::{CompandCoeffs, compand};
+pub use effect::{
+    FadeShape, fade, gain, gain_vjp, normalize_peak, normalize_vjp, overdrive, reverse, tremolo,
+};
 pub use fir::{fft_convolve, fir_filter, fir_vjp};
 pub use iir::{
     Biquad, BiquadGrad, Sos, biquad_forward, biquad_vjp, butterworth_highpass, butterworth_lowpass,
     sos_filter, sos_filter_interleaved, sos_filter_interleaved_chunk, sos_input_grad,
     sos_is_stable, sos_magnitude, sos_vjp,
 };
+pub use modulation::{chorus, flanger, phaser};
 pub use rbj::{allpass, bandpass, high_shelf, low_shelf, notch, peaking};
 pub use reverb::reverb;
 pub use stability::{

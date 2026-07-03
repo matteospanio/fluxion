@@ -55,6 +55,19 @@ mod tests {
     }
 
     #[test]
+    fn json_roundtrip_preserves_new_effect_ops() {
+        // The compand / overdrive / biquad / reverse / chorus family (incl. the zero-param Reverse)
+        // survive an envelope round-trip like every other op.
+        let g = Graph::op(OpKind::Compand, [0.01, 0.1, -20.0, 4.0, 6.0, 0.0])
+            | Graph::op(OpKind::Overdrive, [20.0, 0.2])
+            | Graph::op(OpKind::Biquad, [0.5, -0.2, 0.1, -0.3, 0.05])
+            | Graph::op(OpKind::Reverse, [])
+            | (Graph::op(OpKind::Chorus, [1.5, 0.002, 0.025, 0.5])
+                + Graph::op(OpKind::Flanger, [0.5, 0.002, 0.001, 0.5, 0.5]));
+        assert_eq!(from_json(&to_json(&g)).unwrap(), g);
+    }
+
+    #[test]
     fn rejects_future_version_wrong_kind_and_pre_envelope() {
         use crate::envelope::{EnvelopeError, LoadError};
 

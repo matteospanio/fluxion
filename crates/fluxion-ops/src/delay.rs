@@ -3,8 +3,8 @@
 //! Both are length-preserving (the feedback tail beyond the input is truncated), which matches the
 //! realtime engine's chunk-length-preserving contract.
 //!
-//! ponytail: integer-sample delay for now; fractional (linear-interpolated) delay is a follow-up
-//! when pitch/chorus-style modulation needs it.
+//! [`delay_frac`] adds a linearly-interpolated fractional-sample tap (plan task D6), matching the
+//! realtime `RtGraph::DelayFrac` node sample-for-sample, for pitch/chorus-style sub-sample delays.
 
 /// The wet signal of a feedback delay line: `w[n] = x[n-d] + feedback·w[n-d]`.
 fn feedback_delay(input: &[f32], d: usize, feedback: f32) -> Vec<f32> {
@@ -18,11 +18,37 @@ fn feedback_delay(input: &[f32], d: usize, feedback: f32) -> Vec<f32> {
 
 /// Single delayed tap crossfaded with the dry signal: `(1-mix)·x[n] + mix·x[n-d]`.
 pub fn delay(input: &[f32], delay_samples: usize, mix: f32) -> Vec<f32> {
+    // A 0-sample tap is the identity ((1-mix)·x + mix·x = x); feedback_delay's `d.max(1)` guard
+    // exists for echo's feedback recursion and would wrongly shift the pure tap by one sample.
+    if delay_samples == 0 {
+        return input.to_vec();
+    }
     let w = feedback_delay(input, delay_samples, 0.0); // w[n] = x[n-d]
     input
         .iter()
         .zip(&w)
         .map(|(&x, &xd)| (1.0 - mix) * x + mix * xd)
+        .collect()
+}
+
+/// Single **fractional** delayed tap crossfaded with the dry signal: `(1-mix)·x[n] + mix·x[n-D]`,
+/// where `D = delay` may be non-integer and `x[n-D]` is linearly interpolated between the two nearest
+/// integer taps (`x[n-i]` and `x[n-i-1]` for `i = ⌊D⌋`). Length-preserving; identical to [`delay`]
+/// when `D` is a whole number, and identical to the realtime `RtGraph::DelayFrac` node.
+///
+/// ponytail: the VJP stays integer-only ([`delay_vjp`] on `⌊D⌋`) — a differentiable fractional delay
+/// (grad through the interpolation weights) is a follow-up; fractional delay isn't an autograd op today.
+pub fn delay_frac(input: &[f32], delay: f32, mix: f32) -> Vec<f32> {
+    let delay = delay.max(0.0);
+    let i = delay.floor() as usize;
+    let frac = delay - i as f32;
+    (0..input.len())
+        .map(|n| {
+            let a = if n >= i { input[n - i] } else { 0.0 };
+            let b = if n > i { input[n - i - 1] } else { 0.0 };
+            let xd = (1.0 - frac) * a + frac * b;
+            (1.0 - mix) * input[n] + mix * xd
+        })
         .collect()
 }
 
@@ -109,12 +135,33 @@ pub fn echo_vjp(
 
 #[cfg(test)]
 mod tests {
-    use super::{delay, delay_vjp, echo, echo_vjp};
+    use super::{delay, delay_frac, delay_vjp, echo, echo_vjp};
 
     fn impulse(n: usize) -> Vec<f32> {
         let mut x = vec![0.0f32; n];
         x[0] = 1.0;
         x
+    }
+
+    #[test]
+    fn delay_frac_matches_integer_delay() {
+        // Whole-number D reduces exactly to the integer delay.
+        let x: Vec<f32> = (0..64).map(|i| (0.2 * i as f32).sin()).collect();
+        let a = delay_frac(&x, 8.0, 0.5);
+        let b = delay(&x, 8, 0.5);
+        for (p, q) in a.iter().zip(&b) {
+            assert!((p - q).abs() < 1e-6, "{p} vs {q}");
+        }
+    }
+
+    #[test]
+    fn delay_frac_interpolates_half_sample() {
+        // mix=1, D=0.5 -> y[n] = 0.5·x[n] + 0.5·x[n-1] (average of the two nearest taps).
+        let x = impulse(8);
+        let y = delay_frac(&x, 0.5, 1.0);
+        assert!((y[0] - 0.5).abs() < 1e-6); // 0.5·x[0]
+        assert!((y[1] - 0.5).abs() < 1e-6); // 0.5·x[0] (the interpolated half-sample tap)
+        assert!(y[2..].iter().all(|&v| v.abs() < 1e-6));
     }
 
     #[test]

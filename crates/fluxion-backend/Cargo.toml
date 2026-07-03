@@ -1,6 +1,7 @@
 [package]
 name = "fluxion-backend"
 description = "Fluxion: lowering of the DSP graph to CubeCL (CUDA/HIP/Metal/Vulkan/WGSL) and CPU SIMD."
+readme = "../../README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -20,8 +21,16 @@ workspace = true
 cuda = ["dep:cubecl"]
 
 [dependencies]
-fluxion-core = { path = "../fluxion-core" }
-fluxion-ops = { path = "../fluxion-ops" }
-fluxion-rt = { path = "../fluxion-rt" }
+fluxion-core = { path = "../fluxion-core", version = "0.0.0" }
+fluxion-ops = { path = "../fluxion-ops", version = "0.0.0" }
+fluxion-rt = { path = "../fluxion-rt", version = "0.0.0" }
 rayon = "1"
 cubecl = { version = "0.10", features = ["cuda"], optional = true }
+
+[dev-dependencies]
+# Bench harness only (A4); see fluxion-ops for the default-features rationale.
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "batch"
+harness = false

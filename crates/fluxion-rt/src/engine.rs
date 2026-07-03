@@ -54,6 +54,15 @@ impl RtEngine {
     /// `SetGain`s collapse to the **last** one (its ramp starts from the current gain). Send at most
     /// one gain update per block when you want each target's ramp to be heard.
     pub fn process_block(&mut self, input: &[f32], output: &mut [f32]) {
+        // Length-contract guard. `debug_assert!` (not `assert!`): a panic here would unwind *through*
+        // the CPAL/audio callback, which is UB across the C ABI and blows the RT thread — the classic
+        // panic-in-callback footgun. Debug builds catch a mismatched host wiring; release stays a
+        // branchless MAC loop and the host owns the invariant.
+        debug_assert_eq!(
+            input.len(),
+            output.len(),
+            "process_block: input/output length mismatch (panicking on the audio thread is UB)"
+        );
         while let Some(cmd) = self.rx.pop() {
             match cmd {
                 Command::SetGain {

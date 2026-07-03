@@ -11,10 +11,11 @@ pub mod cuda;
 
 use fluxion_core::{FrozenSos, Graph, Op, OpKind, Signal};
 use fluxion_ops::{
-    Biquad, Sos, allpass, bandpass, butterworth_highpass, butterworth_lowpass, certify_sos,
-    chebyshev1_highpass, chebyshev1_lowpass, chebyshev2_highpass, chebyshev2_lowpass, delay, echo,
-    fir_filter, gain, high_shelf, low_shelf, normalize_peak, notch, peaking, reverb,
-    small_gain_certify, sos_filter,
+    Biquad, FadeShape, Sos, allpass, bandpass, butterworth_highpass, butterworth_lowpass,
+    certify_sos, chebyshev1_highpass, chebyshev1_lowpass, chebyshev2_highpass, chebyshev2_lowpass,
+    chorus, compand, delay, echo, fade, fir_filter, flanger, gain, high_shelf, low_shelf,
+    normalize_peak, notch, overdrive, peaking, phaser, reverb, reverse, small_gain_certify,
+    sos_filter, tremolo,
 };
 use fluxion_rt::RtGraph;
 use rayon::prelude::*;
@@ -49,6 +50,14 @@ fn op_sos(op: &Op, fs: u32) -> Option<Sos> {
         OpKind::Notch => vec![notch(p[0], p[1], fs)],
         OpKind::Bandpass => vec![bandpass(p[0], p[1], fs)],
         OpKind::Allpass => vec![allpass(p[0], p[1], fs)],
+        // Raw section from explicit coefficients — reuses the whole biquad/SOS machinery.
+        OpKind::Biquad => vec![Biquad {
+            b0: p[0],
+            b1: p[1],
+            b2: p[2],
+            a1: p[3],
+            a2: p[4],
+        }],
         _ => return None,
     })
 }
@@ -78,6 +87,83 @@ pub trait Backend {
     fn normalize(&self, x: Self::Buf, peak: f32) -> Self::Buf;
     /// Schroeder–Moorer reverb.
     fn reverb(&self, x: Self::Buf, room: f32, damping: f32, mix: f32) -> Self::Buf;
+
+    // --- Nonlinear / whole-signal effects ---
+    //
+    // These are CPU-only, non-differentiable ops. They are **defaulted** to `unimplemented!` so a
+    // backend that can't express them (e.g. the autodiff Burn backend) need not implement them —
+    // they never reach these ops, being rejected up front by [`is_differentiable`].
+
+    /// Amplitude fade over `fade_in` / `fade_out` samples with a `shape` curve (0/1/2).
+    fn fade(&self, _x: Self::Buf, _fade_in: usize, _fade_out: usize, _shape: f32) -> Self::Buf {
+        unimplemented!("fade is a CPU-only effect — guard with is_differentiable")
+    }
+    /// Tremolo: amplitude LFO at `rate_hz`, dipping by `depth`.
+    fn tremolo(&self, _x: Self::Buf, _rate_hz: f32, _depth: f32, _fs: u32) -> Self::Buf {
+        unimplemented!("tremolo is a CPU-only effect — guard with is_differentiable")
+    }
+    /// Overdrive: `gain_db` of drive through a `tanh` soft-clipper with `colour` bias.
+    fn overdrive(&self, _x: Self::Buf, _gain_db: f32, _colour: f32) -> Self::Buf {
+        unimplemented!("overdrive is a CPU-only nonlinear effect — guard with is_differentiable")
+    }
+    /// Feed-forward compressor / expander (compand).
+    #[allow(clippy::too_many_arguments)]
+    fn compand(
+        &self,
+        _x: Self::Buf,
+        _attack_s: f32,
+        _release_s: f32,
+        _threshold_db: f32,
+        _ratio: f32,
+        _knee_db: f32,
+        _makeup_db: f32,
+        _fs: u32,
+    ) -> Self::Buf {
+        unimplemented!("compand is a CPU-only effect — guard with is_differentiable")
+    }
+    /// Per-channel time reversal.
+    fn reverse(&self, _x: Self::Buf) -> Self::Buf {
+        unimplemented!("reverse is a whole-signal effect — guard with is_differentiable")
+    }
+    /// Chorus: one LFO-modulated fractional-delay voice blended by `mix`.
+    fn chorus(
+        &self,
+        _x: Self::Buf,
+        _rate_hz: f32,
+        _depth_s: f32,
+        _delay_s: f32,
+        _mix: f32,
+        _fs: u32,
+    ) -> Self::Buf {
+        unimplemented!("chorus is a CPU-only effect — guard with is_differentiable")
+    }
+    /// Flanger: a short LFO-modulated delay with `feedback`, blended by `mix`.
+    #[allow(clippy::too_many_arguments)]
+    fn flanger(
+        &self,
+        _x: Self::Buf,
+        _rate_hz: f32,
+        _depth_s: f32,
+        _delay_s: f32,
+        _feedback: f32,
+        _mix: f32,
+        _fs: u32,
+    ) -> Self::Buf {
+        unimplemented!("flanger is a CPU-only effect — guard with is_differentiable")
+    }
+    /// Phaser: an LFO-swept all-pass cascade with `feedback`, blended by `mix`.
+    fn phaser(
+        &self,
+        _x: Self::Buf,
+        _rate_hz: f32,
+        _depth: f32,
+        _feedback: f32,
+        _mix: f32,
+        _fs: u32,
+    ) -> Self::Buf {
+        unimplemented!("phaser is a CPU-only effect — guard with is_differentiable")
+    }
+
     /// Sum two buffers (the `+` parallel combine).
     fn add(&self, a: Self::Buf, b: Self::Buf) -> Self::Buf;
     /// A feedback loop (the `~` operator): `y[n] = forward(x[n] + feedback(y)[n-1])`. A backend that
@@ -116,6 +202,14 @@ fn eval_op<B: Backend>(b: &B, op: &Op, x: B::Buf, fs: u32) -> B::Buf {
         OpKind::Echo => b.echo(x, samples(p[0]), p[1], p[2]),
         OpKind::Reverb => b.reverb(x, p[0], p[1], p[2]),
         OpKind::Fir => b.fir(x, p), // params ARE the taps (variadic op)
+        OpKind::Fade => b.fade(x, samples(p[0]), samples(p[1]), p[2]),
+        OpKind::Tremolo => b.tremolo(x, p[0], p[1], fs),
+        OpKind::Overdrive => b.overdrive(x, p[0], p[1]),
+        OpKind::Compand => b.compand(x, p[0], p[1], p[2], p[3], p[4], p[5], fs),
+        OpKind::Reverse => b.reverse(x),
+        OpKind::Chorus => b.chorus(x, p[0], p[1], p[2], p[3], fs),
+        OpKind::Flanger => b.flanger(x, p[0], p[1], p[2], p[3], p[4], fs),
+        OpKind::Phaser => b.phaser(x, p[0], p[1], p[2], p[3], fs),
         // `OpKind` is `#[non_exhaustive]`; future ops must be added (here or in `op_sos`) before use.
         kind => panic!("fluxion-backend: op '{}' is not implemented", kind.name()),
     }
@@ -192,6 +286,105 @@ impl Backend for Cpu {
     fn reverb(&self, mut x: Vec<Vec<f32>>, room: f32, damping: f32, mix: f32) -> Vec<Vec<f32>> {
         for ch in &mut x {
             *ch = reverb(ch, room, damping, mix);
+        }
+        x
+    }
+    fn fade(
+        &self,
+        mut x: Vec<Vec<f32>>,
+        fade_in: usize,
+        fade_out: usize,
+        shape: f32,
+    ) -> Vec<Vec<f32>> {
+        let shape = FadeShape::from_param(shape);
+        for ch in &mut x {
+            fade(ch, fade_in, fade_out, shape);
+        }
+        x
+    }
+    fn tremolo(&self, mut x: Vec<Vec<f32>>, rate_hz: f32, depth: f32, fs: u32) -> Vec<Vec<f32>> {
+        for ch in &mut x {
+            tremolo(ch, rate_hz, depth, fs);
+        }
+        x
+    }
+    fn overdrive(&self, mut x: Vec<Vec<f32>>, gain_db: f32, colour: f32) -> Vec<Vec<f32>> {
+        for ch in &mut x {
+            overdrive(ch, gain_db, colour);
+        }
+        x
+    }
+    fn compand(
+        &self,
+        mut x: Vec<Vec<f32>>,
+        attack_s: f32,
+        release_s: f32,
+        threshold_db: f32,
+        ratio: f32,
+        knee_db: f32,
+        makeup_db: f32,
+        fs: u32,
+    ) -> Vec<Vec<f32>> {
+        for ch in &mut x {
+            *ch = compand(
+                ch,
+                attack_s,
+                release_s,
+                threshold_db,
+                ratio,
+                knee_db,
+                makeup_db,
+                fs,
+            );
+        }
+        x
+    }
+    fn reverse(&self, mut x: Vec<Vec<f32>>) -> Vec<Vec<f32>> {
+        for ch in &mut x {
+            *ch = reverse(ch);
+        }
+        x
+    }
+    fn chorus(
+        &self,
+        mut x: Vec<Vec<f32>>,
+        rate_hz: f32,
+        depth_s: f32,
+        delay_s: f32,
+        mix: f32,
+        fs: u32,
+    ) -> Vec<Vec<f32>> {
+        for ch in &mut x {
+            *ch = chorus(ch, rate_hz, depth_s, delay_s, mix, fs);
+        }
+        x
+    }
+    fn flanger(
+        &self,
+        mut x: Vec<Vec<f32>>,
+        rate_hz: f32,
+        depth_s: f32,
+        delay_s: f32,
+        feedback: f32,
+        mix: f32,
+        fs: u32,
+    ) -> Vec<Vec<f32>> {
+        for ch in &mut x {
+            *ch = flanger(ch, rate_hz, depth_s, delay_s, feedback, mix, fs);
+        }
+        x
+    }
+    fn phaser(
+        &self,
+        mut x: Vec<Vec<f32>>,
+        rate_hz: f32,
+        depth: f32,
+        feedback: f32,
+        mix: f32,
+        fs: u32,
+    ) -> Vec<Vec<f32>> {
+        for ch in &mut x {
+            *ch = phaser(ch, rate_hz, depth, feedback, mix, fs);
         }
         x
     }
@@ -275,17 +468,41 @@ pub fn certify_graph(graph: &Graph, fs: u32) -> Certificate {
 }
 
 fn certify_op(op: &Op, fs: u32) -> Certificate {
+    // Filters — designed or a raw `Biquad` — certify from their poles.
     if let Some(sos) = op_sos(op, fs) {
         return certify_sos(&sos);
     }
+    let p = &op.params;
     match op.kind {
+        // Feedback ops certify via a small-gain bound on their loop coefficient.
+        //
         // Echo is a feedback op: its loop gain is the (frequency-flat) feedback coefficient.
-        OpKind::Echo => small_gain_certify(|_| op.params[1].abs(), 1),
+        OpKind::Echo => small_gain_certify(|_| p[1].abs(), 1),
         // Reverb is parallel damped-feedback combs; each comb's loop gain is the room-size feedback
         // (the one-pole damping only attenuates), clamped < 1 in the design → BIBO-stable.
-        OpKind::Reverb => small_gain_certify(|_| op.params[0].clamp(0.0, 0.98), 1),
-        // Gain / Normalize / Delay are feedforward and unconditionally stable.
-        _ => Certificate::certified(),
+        OpKind::Reverb => small_gain_certify(|_| p[0].clamp(0.0, 0.98), 1),
+        // Flanger recirculates its delayed tap; the loop gain is the feedback coefficient.
+        OpKind::Flanger => small_gain_certify(|_| p[3].abs(), 1),
+        // Phaser recirculates the all-pass cascade (unity magnitude), so the loop gain is |feedback|.
+        OpKind::Phaser => small_gain_certify(|_| p[2].abs(), 1),
+        // Feed-forward / bounded-gain ops are unconditionally BIBO-stable. Enumerated explicitly (no
+        // silent `_ => certified()`): a new op must be classified here or reach the panic below.
+        OpKind::Gain
+        | OpKind::Normalize
+        | OpKind::Delay
+        | OpKind::Fir
+        | OpKind::Fade
+        | OpKind::Tremolo
+        | OpKind::Overdrive
+        | OpKind::Compand
+        | OpKind::Reverse
+        | OpKind::Chorus => Certificate::certified(),
+        // `OpKind` is `#[non_exhaustive]`; a new op must be classified above (or in `op_sos`) rather
+        // than silently blessed as stable.
+        kind => panic!(
+            "fluxion-backend: op '{}' has no stability certification",
+            kind.name()
+        ),
     }
 }
 
@@ -348,7 +565,13 @@ fn op_rt(op: &Op, fs: u32) -> Option<RtGraph> {
         OpKind::Echo => Some(RtGraph::echo(to_samples(p[0]), p[1], p[2])),
         OpKind::Reverb => Some(RtGraph::reverb(p[0], p[1], p[2])),
         OpKind::Fir => Some(RtGraph::fir(p.clone())), // taps ARE the params (G8 realtime FIR)
-        _ => None, // Normalize (whole-signal) and any future non-realtime op
+        // Compand is chunk-local (per-sample envelope follower) → realtime-playable.
+        OpKind::Compand => Some(RtGraph::compand(p[0], p[1], p[2], p[3], p[4], p[5], fs)),
+        // Not chunk-local or not-yet-wired for realtime:
+        //  - Normalize / Fade / Reverse need the whole signal (global peak / total length / order).
+        //  - Tremolo / Overdrive / Chorus / Flanger / Phaser are memoryless or modulated; a realtime
+        //    LFO / modulated-delay node is a follow-up (ponytail).
+        _ => None,
     }
 }
 
@@ -457,13 +680,121 @@ fn try_batched_filter(graph: &Graph, batch: &[Signal]) -> Option<Vec<Signal>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        FrozenSos, certify_graph, freeze, graph_to_sos, process, process_batch, sos_filter_batch,
-        to_rt_graph,
+        FrozenSos, certify_graph, freeze, graph_to_sos, is_differentiable, process, process_batch,
+        sos_filter_batch, to_rt_graph,
     };
-    use fluxion_core::{Graph, OpKind, Signal};
+    use fluxion_core::{Graph, Op, OpKind, Signal};
 
     fn sig(samples: Vec<f32>) -> Signal {
         Signal::new(48_000, vec![samples])
+    }
+
+    /// Build a graph from an op kind and its default parameter vector.
+    fn op_default(kind: OpKind) -> Graph {
+        Graph::Op(Op::new(kind, kind.defaults()).unwrap())
+    }
+
+    #[test]
+    fn biquad_op_is_a_filter_freezes_and_lowers() {
+        // A raw one-pole low-pass biquad: y[n] = 0.2·x[n] + 0.8·y[n-1], DC gain 0.2/(1-0.8) = 1.
+        let g = Graph::op(OpKind::Biquad, [0.2, 0.0, 0.0, -0.8, 0.0]);
+        let fs = 48_000;
+        assert!(is_differentiable(&g, fs)); // a biquad IS differentiable (reuses the SOS VJP)
+        assert_eq!(graph_to_sos(&g, fs).unwrap().len(), 1);
+        assert!(freeze(&g, fs).is_some());
+        assert!(certify_graph(&g, fs).verdict.is_shippable());
+
+        // DC passes at unity, and streaming matches the offline process.
+        let x: Vec<f32> = (0..1_000).map(|i| (0.05 * i as f32).sin()).collect();
+        let batch = process(&g, &Signal::new(fs, vec![x.clone()]))
+            .channels
+            .remove(0);
+        assert!((process(&g, &sig(vec![1.0; 500])).channels[0][499] - 1.0).abs() < 1e-3);
+
+        let mut rt = to_rt_graph(&g, fs).unwrap();
+        rt.prepare(64);
+        let mut o = vec![0.0f32; 64];
+        let mut streamed = Vec::new();
+        for chunk in x.chunks(64) {
+            let o = &mut o[..chunk.len()];
+            rt.process(chunk, o);
+            streamed.extend_from_slice(o);
+        }
+        for (a, b) in streamed.iter().zip(&batch) {
+            assert!((a - b).abs() < 1e-4, "{a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn nonlinear_ops_process_on_cpu_but_arent_realtime_or_differentiable() {
+        let fs = 48_000;
+        // Overdrive is a CPU waveshaper: hard drive saturates, silence stays silent.
+        let od = process(
+            &Graph::op(OpKind::Overdrive, [40.0, 0.0]),
+            &sig(vec![0.0, 5.0, -5.0]),
+        );
+        assert!(od.channels[0][0].abs() < 1e-6 && od.channels[0][1] > 0.9);
+        // Reverse flips the channel in time.
+        assert_eq!(
+            process(&op_default(OpKind::Reverse), &sig(vec![1.0, 2.0, 3.0])).channels[0],
+            vec![3.0, 2.0, 1.0]
+        );
+        // These are neither differentiable nor realtime-lowerable (whole-signal or modulated).
+        for kind in [
+            OpKind::Fade,
+            OpKind::Tremolo,
+            OpKind::Overdrive,
+            OpKind::Reverse,
+            OpKind::Chorus,
+            OpKind::Flanger,
+            OpKind::Phaser,
+        ] {
+            let g = op_default(kind);
+            assert!(
+                !is_differentiable(&g, fs),
+                "{} should not differentiate",
+                kind.name()
+            );
+            assert!(
+                to_rt_graph(&g, fs).is_none(),
+                "{} should not be realtime",
+                kind.name()
+            );
+        }
+    }
+
+    #[test]
+    fn compand_lowers_to_realtime_and_certifies() {
+        let g = Graph::op(OpKind::Compand, [0.005, 0.05, -20.0, 4.0, 6.0, 0.0]);
+        let fs = 48_000;
+        assert!(certify_graph(&g, fs).verdict.is_shippable()); // feed-forward, unconditionally stable
+        let x: Vec<f32> = (0..3_000).map(|i| 0.8 * (0.05 * i as f32).sin()).collect();
+        let batch = process(&g, &Signal::new(fs, vec![x.clone()]))
+            .channels
+            .remove(0);
+        let mut rt = to_rt_graph(&g, fs).unwrap();
+        rt.prepare(128);
+        let mut o = vec![0.0f32; 128];
+        let mut streamed = Vec::new();
+        for chunk in x.chunks(128) {
+            let o = &mut o[..chunk.len()];
+            rt.process(chunk, o);
+            streamed.extend_from_slice(o);
+        }
+        for (a, b) in streamed.iter().zip(&batch) {
+            assert!((a - b).abs() < 1e-4, "{a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn certify_op_classifies_every_op_kind() {
+        // Every op must be explicitly classified in `certify_op` (filter / feedback / feed-forward) —
+        // an unclassified op reaches the panic arm and fails this test rather than being silently
+        // blessed by a catch-all.
+        for &kind in OpKind::all() {
+            let c = certify_graph(&op_default(kind), 48_000);
+            assert!(c.margin.is_nan() || c.margin.is_finite(), "{}", kind.name());
+        }
     }
 
     #[test]

@@ -1,0 +1,23 @@
+# cbindgen configuration for fluxion-ffi — the stable C ABI header.
+#
+# Regenerate the checked-in header (requires `cargo install cbindgen`):
+#   cbindgen --config cbindgen.toml --crate fluxion-ffi --output include/fluxion.h
+#
+# The header is committed so C / C++ / Swift / JS consumers (and the CI smoke step) build against the
+# staticlib with no Rust toolchain in the loop. Keep it in sync when the ABI changes.
+
+language = "C"
+include_guard = "FLUXION_H"
+cpp_compat = true          # wrap in `extern "C"` for C++ consumers
+tab_width = 4
+style = "type"
+documentation = true
+documentation_style = "doxy"
+
+header = "/* Fluxion C ABI. Generated from crates/fluxion-ffi by cbindgen — do not edit by hand. */"
+
+[parse]
+parse_deps = false         # only export symbols defined in fluxion-ffi itself
+
+[export]
+item_types = ["constants", "structs", "functions", "opaque"]

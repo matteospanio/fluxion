@@ -12,6 +12,8 @@ Array-API-compliant (and a DLPack producer, so frameworks consume it zero-copy).
 Array-API *namespace provider*: it's a transform library, not a general array library.
 """
 
+from . import augment, interop
+from .augment import Compose, RandomChain
 from ._fluxion import __cuda__
 from ._fluxion import (
     Chain,
@@ -60,6 +62,10 @@ __all__ = [
     "sos_forward",
     "sos_backward",
     "cuda_available",
+    "augment",
+    "interop",
+    "Compose",
+    "RandomChain",
 ]
 
 

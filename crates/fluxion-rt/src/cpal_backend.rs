@@ -15,7 +15,7 @@
 //!     }
 //! })
 //! .expect("open output");
-//! let _fs = stream.sample_rate; // design filters for this rate
+//! let _fs = stream.fs; // design filters for this rate
 //! // keep `stream` alive; drop it to stop audio.
 //! ```
 
@@ -70,7 +70,7 @@ impl From<cpal::PlayStreamError> for BackendError {
 pub struct OutputStream {
     _stream: cpal::Stream,
     /// Sample rate (Hz) the device is running at — design filters for this rate.
-    pub sample_rate: u32,
+    pub fs: u32,
     /// Interleaved channel count of the render buffer.
     pub channels: usize,
 }
@@ -90,7 +90,7 @@ where
         .default_output_device()
         .ok_or(BackendError::NoOutputDevice)?;
     let supported = device.default_output_config()?;
-    let sample_rate = supported.sample_rate().0;
+    let fs = supported.sample_rate().0;
     let channels = supported.channels() as usize;
     let config: cpal::StreamConfig = supported.config();
 
@@ -104,14 +104,14 @@ where
 
     Ok(OutputStream {
         _stream: stream,
-        sample_rate,
+        fs,
         channels,
     })
 }
 
 /// The default output device's sample rate, without opening a stream — so a file can be resampled to
 /// the device rate before playback.
-pub fn default_output_sample_rate() -> Result<u32, BackendError> {
+pub fn default_output_fs() -> Result<u32, BackendError> {
     let host = cpal::default_host();
     let device = host
         .default_output_device()
@@ -134,7 +134,7 @@ pub fn default_input_config() -> Result<(u32, usize), BackendError> {
 pub struct InputStream {
     _stream: cpal::Stream,
     /// Sample rate (Hz) the input device is running at.
-    pub sample_rate: u32,
+    pub fs: u32,
     /// Interleaved channel count of the capture buffer.
     pub channels: usize,
 }
@@ -154,7 +154,7 @@ where
         .default_input_device()
         .ok_or(BackendError::NoInputDevice)?;
     let supported = device.default_input_config()?;
-    let sample_rate = supported.sample_rate().0;
+    let fs = supported.sample_rate().0;
     let channels = supported.channels() as usize;
     let config: cpal::StreamConfig = supported.config();
 
@@ -168,7 +168,7 @@ where
 
     Ok(InputStream {
         _stream: stream,
-        sample_rate,
+        fs,
         channels,
     })
 }

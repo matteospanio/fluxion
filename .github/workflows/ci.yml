@@ -105,3 +105,45 @@ jobs:
       - run: maturin build --release -m crates/fluxion-py/Cargo.toml --out dist
       - run: pip install dist/*.whl
       - run: pytest crates/fluxion-py/tests/ -v
+
+  benches:
+    name: benches (compile-check only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Compile the Criterion harnesses so they can't rot; --no-run means we never spend CI time
+      # actually measuring (benches are a local tool, this is just a build tripwire).
+      - run: cargo bench --no-run -p fluxion-ops -p fluxion-backend --locked
+
+  ffi:
+    name: C ABI (staticlib + smoke.c)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p fluxion-ffi --locked
+      - run: cargo build -p fluxion-ffi --locked
+      # Prove the C ABI links and round-trips from actual C: compile the smoke test against the
+      # checked-in header and the staticlib (-l:libfluxion_ffi.a forces static, not the .so), then run it.
+      - name: compile & run the C smoke test
+        run: |
+          cc crates/fluxion-ffi/examples/smoke.c \
+            -I crates/fluxion-ffi/include \
+            -L target/debug -l:libfluxion_ffi.a \
+            -lpthread -lm -ldl -o smoke
+          ./smoke
+
+  cuda:
+    name: cuda check (API drift, no GPU)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # cubecl/cudarc load CUDA at *runtime*, so the CUDA code paths compile with no nvcc or GPU
+      # present. Check only (never run) — this just catches API drift in the otherwise-untested
+      # `cuda`-feature code.
+      - run: cargo check -p fluxion-backend -p fluxion-autodiff --features cuda --locked

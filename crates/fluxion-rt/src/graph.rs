@@ -10,7 +10,7 @@
 //! `fluxion_core::Graph` (designing each op's coefficients) to an `RtGraph` is
 //! `fluxion_backend::to_rt_graph` (like `freeze`); here are the runtime building blocks.
 
-use fluxion_ops::Biquad;
+use fluxion_ops::{Biquad, CompandCoeffs};
 
 use crate::stream::SosStream;
 
@@ -113,6 +113,15 @@ pub enum RtGraph {
         ring: Vec<f32>,
         /// Write cursor into `ring`.
         idx: usize,
+    },
+    /// Feed-forward compressor / expander (compand): a one-pole peak-envelope follower driving a
+    /// soft-knee gain computer. `coeffs` are the design-stage coefficients; `env` is the follower
+    /// state. Streaming matches the offline [`fluxion_ops::compand`] sample-for-sample.
+    Compand {
+        /// Designed attack/release/gain-computer coefficients.
+        coeffs: CompandCoeffs,
+        /// Envelope-follower state (peak level).
+        env: f32,
     },
 }
 
@@ -219,6 +228,33 @@ impl RtGraph {
         }
     }
 
+    /// A feed-forward compressor / expander (compand) leaf — the realtime form of
+    /// [`fluxion_ops::compand`]. Coefficients are designed here (off the audio thread); the per-sample
+    /// state is a single envelope value, so [`process`](Self::process) stays alloc-free.
+    #[allow(clippy::too_many_arguments)]
+    pub fn compand(
+        attack_s: f32,
+        release_s: f32,
+        threshold_db: f32,
+        ratio: f32,
+        knee_db: f32,
+        makeup_db: f32,
+        fs: u32,
+    ) -> Self {
+        RtGraph::Compand {
+            coeffs: CompandCoeffs::design(
+                attack_s,
+                release_s,
+                threshold_db,
+                ratio,
+                knee_db,
+                makeup_db,
+                fs,
+            ),
+            env: 0.0,
+        }
+    }
+
     /// A realtime Schroeder–Moorer reverb, built from the same Freeverb topology as the offline
     /// [`fluxion_ops::reverb()`]: four parallel damped combs, averaged, then two series all-passes, wet/
     /// dry-blended by `mix`. `room_size` sets the comb feedback (clamped `< 1` for BIBO stability),
@@ -262,7 +298,8 @@ impl RtGraph {
             | RtGraph::DelayFrac { .. }
             | RtGraph::Comb { .. }
             | RtGraph::Allpass { .. }
-            | RtGraph::Fir { .. } => {}
+            | RtGraph::Fir { .. }
+            | RtGraph::Compand { .. } => {}
             RtGraph::Series {
                 first,
                 second,
@@ -426,6 +463,13 @@ impl RtGraph {
                     }
                 }
             }
+            RtGraph::Compand { coeffs, env } => {
+                for (o, &x) in output.iter_mut().zip(input) {
+                    let (e, y) = coeffs.step(*env, x);
+                    *env = e;
+                    *o = y;
+                }
+            }
         }
     }
 
@@ -472,6 +516,9 @@ impl RtGraph {
             RtGraph::Fir { ring, idx, .. } => {
                 ring.iter_mut().for_each(|s| *s = 0.0);
                 *idx = 0;
+            }
+            RtGraph::Compand { env, .. } => {
+                *env = 0.0;
             }
         }
     }
@@ -573,7 +620,8 @@ impl SetCoeffs {
 mod tests {
     use super::RtGraph;
     use fluxion_ops::{
-        butterworth_highpass, butterworth_lowpass, delay, echo, fir_filter, reverb, sos_filter,
+        butterworth_highpass, butterworth_lowpass, compand, delay, echo, fir_filter, reverb,
+        sos_filter,
     };
 
     fn stream_chunks(g: &mut RtGraph, x: &[f32], block: usize) -> Vec<f32> {
@@ -779,6 +827,23 @@ mod tests {
             let streamed = stream_chunks(&mut g, &x, block);
             for (a, b) in streamed.iter().zip(&want) {
                 assert!((a - b).abs() < 1e-5, "block {block}: {a} vs {b}");
+            }
+        }
+    }
+
+    #[test]
+    fn compand_node_matches_batch() {
+        // Streaming the compand node must equal the offline compand sample-for-sample, across blocks.
+        let x = signal(4_000);
+        let (a, r, thr, ratio, knee, makeup) =
+            (0.005f32, 0.05f32, -20.0f32, 4.0f32, 6.0f32, 0.0f32);
+        let want = compand(&x, a, r, thr, ratio, knee, makeup, 48_000);
+        for block in [1, 50, 512] {
+            let mut g = RtGraph::compand(a, r, thr, ratio, knee, makeup, 48_000);
+            let streamed = stream_chunks(&mut g, &x, block);
+            assert_eq!(streamed.len(), want.len());
+            for (i, (p, q)) in streamed.iter().zip(&want).enumerate() {
+                assert!((p - q).abs() < 1e-5, "block {block} at {i}: {p} vs {q}");
             }
         }
     }

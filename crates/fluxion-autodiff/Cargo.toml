@@ -1,6 +1,7 @@
 [package]
 name = "fluxion-autodiff"
 description = "Fluxion: Burn Autodiff integration and per-framework (torch/jax) VJP adapters."
+readme = "../../README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -23,9 +24,9 @@ burn = ["dep:burn", "dep:fluxion-ops", "dep:fluxion-core", "dep:fluxion-backend"
 cuda = ["burn", "burn/cuda", "dep:burn-cubecl", "dep:cubecl"]
 
 [dependencies]
-fluxion-ops = { path = "../fluxion-ops", optional = true }
-fluxion-core = { path = "../fluxion-core", optional = true }
-fluxion-backend = { path = "../fluxion-backend", optional = true }
+fluxion-ops = { path = "../fluxion-ops", version = "0.0.0", optional = true }
+fluxion-core = { path = "../fluxion-core", version = "0.0.0", optional = true }
+fluxion-backend = { path = "../fluxion-backend", version = "0.0.0", optional = true }
 burn = { version = "0.21", default-features = false, features = [
     "std",
     "autodiff",

@@ -1,8 +1,9 @@
 name: wheels
 
 # Build distributable wheels. CPU wheels (the default build) are built here for every platform on a
-# version tag or manual dispatch. GPU wheels need a CUDA toolkit at build time and so are built
-# separately on a CUDA-equipped host — see the `gpu-wheel` note below.
+# version tag or manual dispatch, and published to PyPI (Trusted Publishing) on a tag. GPU wheels
+# need a CUDA toolkit at build time and so are built separately on a CUDA-equipped host — see the
+# `gpu-wheel` note below. They are NOT published to PyPI (see the `publish` job).
 
 on:
   push:
@@ -11,11 +12,22 @@ on:
 
 jobs:
   cpu-wheels:
-    name: CPU wheel (${{ matrix.os }})
+    name: CPU wheel (${{ matrix.os }} ${{ matrix.target }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest      # Linux x86_64 (manylinux)
+            target: x86_64
+          - os: ubuntu-latest      # Linux aarch64, cross-built in the manylinux_2_28 container
+            target: aarch64
+            manylinux: "2_28"
+          - os: macos-latest       # macOS Apple Silicon (arm64)
+            target: aarch64
+          - os: macos-13           # macOS Intel (x86_64)
+            target: x86_64
+          - os: windows-latest     # Windows x64
+            target: x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -27,11 +39,12 @@ jobs:
       - uses: PyO3/maturin-action@v1
         with:
           command: build
+          target: ${{ matrix.target }}
           args: --release -m crates/fluxion-py/Cargo.toml --out dist --interpreter 3.12
-          manylinux: auto
+          manylinux: ${{ matrix.manylinux || 'auto' }}
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-cpu-${{ matrix.os }}
+          name: wheels-cpu-${{ matrix.os }}-${{ matrix.target }}
           path: dist
 
   sdist:
@@ -52,6 +65,8 @@ jobs:
   # (label `cuda`); GitHub-hosted runners have no CUDA toolkit. maturin-action's manylinux container
   # also lacks CUDA, so we build directly on the runner. The wheel carries a `+cu12` local version so
   # it's distinguishable from the CPU wheel (`pip install fluxion==0.0.0+cu12` for the GPU build).
+  # It is a GitHub artifact ONLY — PEP 440 local versions can't be uploaded to PyPI, so the `publish`
+  # job below deliberately excludes it (and does not depend on this job).
   gpu-wheel:
     name: GPU wheel (CUDA)
     runs-on: [self-hosted, cuda]
@@ -61,7 +76,9 @@ jobs:
         run: |
           source "$HOME/.cargo/env"
           export CUDA_PATH=/usr/local/cuda PATH=/usr/local/cuda/bin:$PATH
-          sed -i 's/^version = "0.0.0"/version = "0.0.0+cu12"/' crates/fluxion-py/pyproject.toml
+          # Version is single-sourced from Cargo.toml (pyproject uses dynamic version); tag the +cu12
+          # local version there so maturin stamps the GPU wheel with it.
+          sed -i 's/^version = "0.0.0"/version = "0.0.0+cu12"/' crates/fluxion-py/Cargo.toml
           python3 -m venv /tmp/gpuwheel-venv
           /tmp/gpuwheel-venv/bin/pip install -q --upgrade pip "maturin>=1.5,<2"
           /tmp/gpuwheel-venv/bin/maturin build --release --features cuda \
@@ -70,3 +87,29 @@ jobs:
         with:
           name: wheels-gpu
           path: dist
+
+  # Publish CPU wheels + sdist to PyPI on a version tag, via Trusted Publishing (OIDC — no API token).
+  # Deliberately depends ONLY on the CPU wheel + sdist jobs, never on `gpu-wheel`: a CUDA-runner
+  # failure (or its absence) must never block a release. The `+cu12` GPU wheel is excluded from the
+  # upload entirely (PyPI rejects PEP 440 local versions); it stays a GitHub artifact.
+  publish:
+    name: Publish to PyPI
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [cpu-wheels, sdist]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write          # OIDC token for PyPI Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-cpu-*   # every CPU wheel; NOT wheels-gpu
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist

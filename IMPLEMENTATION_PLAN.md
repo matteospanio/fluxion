@@ -261,3 +261,47 @@ concurrently (ideally one contributor or one worktree per lane).
   - **B8** DONE: settled the IR before 1.0. **Node identity** — `Graph::Named { name, node }` (transparent to execution, addressable via `Graph::find_named`), the basis for per-node automation (§8.5) and named-module import (J13). **Feedback `~`** — `Graph::Feedback { forward, feedback }`, the third construct a series/parallel *tree* can't encode (it needs a cycle); semantics `y[n] = forward(x[n] + feedback(y)[n-1])` (one-sample delay breaks the loop). Both wired through the shared `eval`/lowering surface: Named is transparent everywhere; Feedback *executes on the CPU* (`process` — sample-by-sample over stateful RtGraphs, so a filter-in-the-loop works and a first-order IIR matches `0.5ⁿ` exactly), while the realtime and autodiff engines reject it cleanly (`to_rt_graph`→None, `is_differentiable`→false) and it certifies as `NotCertified` (a general loop's small-gain check is a follow-up). eval_ref + Display + serde round-trip covered. (`~` is exposed as `.feedback()` since Rust has no `~` binary operator.)
   - **G9** DONE: per-node parameter automation on `RtGraph` — `filter_count()` + index-addressed `set_coeffs(node, sos, fade)` with an alloc-free **equal-power crossfade** in `SosStream` (pre-sized by `prepare`; adopts the new cascade by pointer-swap), so a filter's coefficients swap click-free. `SetCoeffs` is a `Copy`, fixed-capacity (≤8 sections) command that rides the existing lock-free ring — closing the "RtGraph has no command queue" gap with no new dependency. Verified click-free (DC lp→hp slides smoothly 1→0) and via a ring round-trip.
   - CI gap fixed: the Burn integration (behind an optional feature) was never exercised in CI; a new `autodiff (Burn CPU)` job now runs it plus the facade `--features autodiff`.
+- **Progress (2026-07-03) — SoX-substitute CLI + distribution readiness (multi-agent wave).**
+  - **SoX-parity op batch (beyond the original plan):** 9 new `OpKind`s wired end-to-end
+    (op table → kernel → `eval_op` → `op_rt` → certify → facade/Python constructors → `.fxg`):
+    `fade`, `tremolo`, `overdrive`, `compand` (feed-forward compressor, **realtime-playable**),
+    `reverse`, raw-coefficient `biquad` (differentiable/freezable via the SOS path), `chorus`,
+    `flanger`, `phaser`. `certify_op`'s silent `_ => certified()` catch-all is gone (explicit arms).
+  - **Geometry transforms** (`fluxion_ops::transform`, re-exported as `fluxion::transform`):
+    `trim`/`pad`/`repeat`/`silence_trim`/`resample` (windowed-sinc, anti-aliased — the SoX `rate`)/
+    `speed`/`remix`/`channels`/`concat`/`mix`. Deliberately not OpKinds (they change geometry).
+  - **CLI rebuilt as a stage pipeline** (main.rs split into `chain`/`verbs`/`realtime` modules):
+    geometry stages between fused filter passes; multi-input concat + `--mix` (with `--rate`
+    alignment); `gain --db`/`normalize --db` + SI suffixes (`1k`) at parse time; output encoding
+    `--bits 16|24|32`/`--float`/`--no-dither`; `fir --taps a,b,c`; `info` covers non-WAV via
+    Symphonia `probe()`; new verbs `effects` (catalog from the ParamSpec tables), `stat`, `synth`.
+    `play` resampling now uses the real SRC. **I9 (sox shims) + I-epic effectively complete.**
+  - **D6** DONE (`delay_frac` in ops, matching `RtGraph`); **D12** DONE — SciPy/RBJ golden-vector
+    oracle (32 cases, impulse-response comparison, embedded constants; `scripts/gen_golden.py`
+    regenerates); **A4** DONE (Criterion benches + CI compile-check); **A7** DONE (CONTRIBUTING +
+    templates); **G10** DONE (`debug_assert` block contract + cache-line-padded ring indices);
+    **K1–K3** DONE minimally (panic-safe C ABI: `fx_graph_load_fxg`/`fx_process`/`fx_last_error`,
+    checked-in `include/fluxion.h`, C smoke test in CI).
+  - **H3 (partial):** WAV output encoding 16/24/32-bit int PCM (TPDF dither, on by default) +
+    32-bit float via `WavEncoding`/`write_wav_encoded`; non-WAV *encoders* remain 1.x. New
+    header-only `probe()` (`AudioInfo`) for FLAC/MP3/OGG/AAC. FLAC decode fixture test added.
+  - **J9** DONE (`Chain.process_batch((B,T))`); **J12** DONE (`fluxion.augment`: `Compose`,
+    `RandomChain`, seeded); **J13** DONE first slice (`fluxion.interop.load_flamo_sos`: b/a +
+    RBJ-peaking layouts, `safetensors` via the `interop` extra; SVF/MIMO rejected with clear
+    errors). Both goals now documented in PROJECT.md §2.
+  - **Distribution:** every publishable crate has `readme` + versioned path deps (`cargo publish`
+    ready in dependency order); `fluxion-ffi`/`fluxion-wasm` are `publish = false`. Python:
+    pyproject metadata complete (readme/classifiers/urls/SPDX license/license-files, `dynamic`
+    version single-sourced from Cargo.toml, `jax`/`interop` extras), wheels matrix widened
+    (Linux x86_64+aarch64, macOS Intel+AS, Windows) + tag-gated **PyPI Trusted Publishing** job
+    (GPU `+cu12` wheel stays a GitHub artifact). Facade gained the **`realtime` feature**
+    (re-exports `RtGraph`/`RtEngine`/`SosStream`/`SmoothedValue`/`freeze`/`to_rt_graph`/`FrozenSos`)
+    closing the "realtime unreachable from the facade" review finding. `cpal_backend` renamed
+    `sample_rate`→`fs` (convention). README rewritten to the real state; AGENTS.md Lo/Hi naming
+    rule replaced by the implemented full-word convention.
+  - **Still open for 1.0:** C5 (device dispatch / `--device`), B4 (CSE pass, P2), D10 (filterbank,
+    P2), E5-reverb VJP (P2), F1/F3-remainder/F4/F5/F6 (GPU generic backend + cross-vendor
+    validation — needs Apple/AMD hardware), H4 (Arrow/Parquet), H5 (streaming reader),
+    L1 (published benchmarks), L2 (coverage gate), L3 (mdBook), L4-remainder (semver audit),
+    L5/L6 (release + sign-off). SoX features consciously deferred: `tempo`/`pitch` (WSOLA/phase
+    vocoder), `spectrogram` (imaging dep), noise reduction, legacy niches (`oops`/`riaa`/`earwax`).

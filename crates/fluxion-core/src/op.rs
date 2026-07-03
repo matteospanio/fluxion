@@ -16,9 +16,9 @@ use crate::param::{ParamSpec, Unit};
 pub enum OpKind {
     /// Linear gain, `y = x * gain`.
     Gain,
-    /// Butterworth low-pass filter (`cutoff` Hz, integer `order`). Exposed as the `Lo` variant.
+    /// Butterworth low-pass filter (`cutoff` Hz, integer `order`). The `lowpass`/`lowpass_n` node.
     Lowpass,
-    /// Butterworth high-pass filter (`cutoff` Hz, integer `order`). Exposed as the `Hi` variant.
+    /// Butterworth high-pass filter (`cutoff` Hz, integer `order`). The `highpass`/`highpass_n` node.
     Highpass,
     /// Peak normalization to a target linear `peak`.
     Normalize,
@@ -51,6 +51,34 @@ pub enum OpKind {
     /// Direct-form FIR filter: `y[n] = Σ_k taps[k]·x[n-k]`. **Variadic** — its parameters are the tap
     /// vector itself (≥ 1), the realtime/graph form of a trained/frozen FIR (see [`OpKind::is_variadic`]).
     Fir,
+    /// Amplitude fade: `fadein` seconds ramping in, `fadeout` seconds ramping out, with a `shape`
+    /// curve (0 = linear, 1 = quarter-sine [the SoX default], 2 = half-sine). Length-preserving.
+    Fade,
+    /// Tremolo: amplitude LFO at `rate` Hz dipping by `depth` (0..1). Length-preserving.
+    Tremolo,
+    /// Overdrive: `gain` dB of drive through a `tanh` soft-clipper with a `colour` asymmetry bias.
+    /// Nonlinear (not differentiable here).
+    Overdrive,
+    /// Feed-forward compressor / expander (compand): one-pole peak-envelope follower (`attack`,
+    /// `release` s) driving a soft-knee gain computer (`threshold` dBFS, `ratio`, `knee` dB, `makeup`
+    /// dB). Stateful per-channel — realtime-playable.
+    Compand,
+    /// Per-channel time reversal (no parameters). Length-preserving, but **not** realtime (it needs
+    /// the whole signal).
+    Reverse,
+    /// A raw second-order section from explicit coefficients `b0 b1 b2 a1 a2` (`a0` normalized to 1).
+    /// Reuses the biquad/SOS machinery, so it is differentiable / freezable / realtime like the
+    /// designed filters.
+    Biquad,
+    /// Chorus: an LFO-modulated fractional-delay voice (`rate` Hz, `depth` s, `delay` s) blended by
+    /// `mix`. Feed-forward (no feedback). Length-preserving.
+    Chorus,
+    /// Flanger: a short LFO-modulated delay (`rate` Hz, `depth` s, `delay` s) with `feedback`, blended
+    /// by `mix`. Length-preserving.
+    Flanger,
+    /// Phaser: an LFO-swept cascade of first-order all-pass stages (`rate` Hz, `depth`) with
+    /// `feedback`, blended by `mix`. Length-preserving.
+    Phaser,
 }
 
 // Static parameter tables — one per kind.
@@ -122,6 +150,57 @@ static FIR_PARAMS: [ParamSpec; 1] = [ParamSpec::new(
     f32::NEG_INFINITY,
     f32::INFINITY,
 )];
+static FADE_PARAMS: [ParamSpec; 3] = [
+    ParamSpec::new("fadein", Unit::Seconds, 0.0, 0.0, 3600.0),
+    ParamSpec::new("fadeout", Unit::Seconds, 0.0, 0.0, 3600.0),
+    // 0 = linear, 1 = quarter-sine (SoX default), 2 = half-sine.
+    ParamSpec::new("shape", Unit::Linear, 1.0, 0.0, 2.0),
+];
+static TREMOLO_PARAMS: [ParamSpec; 2] = [
+    ParamSpec::new("rate", Unit::Hz, 5.0, 0.0, 20_000.0),
+    ParamSpec::new("depth", Unit::Linear, 0.5, 0.0, 1.0),
+];
+static OVERDRIVE_PARAMS: [ParamSpec; 2] = [
+    ParamSpec::new("gain", Unit::Db, 20.0, 0.0, 100.0),
+    ParamSpec::new("colour", Unit::Linear, 0.2, 0.0, 1.0),
+];
+static COMPAND_PARAMS: [ParamSpec; 6] = [
+    ParamSpec::new("attack", Unit::Seconds, 0.01, 0.0, 10.0),
+    ParamSpec::new("release", Unit::Seconds, 0.1, 0.0, 10.0),
+    ParamSpec::new("threshold", Unit::Db, -20.0, -120.0, 0.0),
+    ParamSpec::new("ratio", Unit::Linear, 4.0, 1.0, 100.0),
+    ParamSpec::new("knee", Unit::Db, 6.0, 0.0, 48.0),
+    ParamSpec::new("makeup", Unit::Db, 0.0, -48.0, 48.0),
+];
+// Reverse takes no parameters.
+static NO_PARAMS: [ParamSpec; 0] = [];
+// Raw biquad section: five coefficients, any finite value (`a0` is normalized to 1).
+static BIQUAD_PARAMS: [ParamSpec; 5] = [
+    ParamSpec::new("b0", Unit::Linear, 1.0, f32::NEG_INFINITY, f32::INFINITY),
+    ParamSpec::new("b1", Unit::Linear, 0.0, f32::NEG_INFINITY, f32::INFINITY),
+    ParamSpec::new("b2", Unit::Linear, 0.0, f32::NEG_INFINITY, f32::INFINITY),
+    ParamSpec::new("a1", Unit::Linear, 0.0, f32::NEG_INFINITY, f32::INFINITY),
+    ParamSpec::new("a2", Unit::Linear, 0.0, f32::NEG_INFINITY, f32::INFINITY),
+];
+static CHORUS_PARAMS: [ParamSpec; 4] = [
+    ParamSpec::new("rate", Unit::Hz, 1.5, 0.0, 100.0),
+    ParamSpec::new("depth", Unit::Seconds, 0.002, 0.0, 1.0),
+    ParamSpec::new("delay", Unit::Seconds, 0.025, 0.0, 1.0),
+    ParamSpec::new("mix", Unit::Linear, 0.5, 0.0, 1.0),
+];
+static FLANGER_PARAMS: [ParamSpec; 5] = [
+    ParamSpec::new("rate", Unit::Hz, 0.5, 0.0, 100.0),
+    ParamSpec::new("depth", Unit::Seconds, 0.002, 0.0, 1.0),
+    ParamSpec::new("delay", Unit::Seconds, 0.001, 0.0, 1.0),
+    ParamSpec::new("feedback", Unit::Linear, 0.5, -0.95, 0.95),
+    ParamSpec::new("mix", Unit::Linear, 0.5, 0.0, 1.0),
+];
+static PHASER_PARAMS: [ParamSpec; 4] = [
+    ParamSpec::new("rate", Unit::Hz, 0.5, 0.0, 100.0),
+    ParamSpec::new("depth", Unit::Linear, 0.5, 0.0, 1.0),
+    ParamSpec::new("feedback", Unit::Linear, 0.5, -0.95, 0.95),
+    ParamSpec::new("mix", Unit::Linear, 0.5, 0.0, 1.0),
+];
 
 impl OpKind {
     /// Stable identifier used in the DSL / CLI / `.fxg`, e.g. `"lowpass"`.
@@ -145,6 +224,15 @@ impl OpKind {
             OpKind::Cheby2Highpass => "cheby2high",
             OpKind::Reverb => "reverb",
             OpKind::Fir => "fir",
+            OpKind::Fade => "fade",
+            OpKind::Tremolo => "tremolo",
+            OpKind::Overdrive => "overdrive",
+            OpKind::Compand => "compand",
+            OpKind::Reverse => "reverse",
+            OpKind::Biquad => "biquad",
+            OpKind::Chorus => "chorus",
+            OpKind::Flanger => "flanger",
+            OpKind::Phaser => "phaser",
         }
     }
 
@@ -171,6 +259,15 @@ impl OpKind {
             OpKind::Cheby2Lowpass | OpKind::Cheby2Highpass => &CHEBY2_PARAMS,
             OpKind::Reverb => &REVERB_PARAMS,
             OpKind::Fir => &FIR_PARAMS,
+            OpKind::Fade => &FADE_PARAMS,
+            OpKind::Tremolo => &TREMOLO_PARAMS,
+            OpKind::Overdrive => &OVERDRIVE_PARAMS,
+            OpKind::Compand => &COMPAND_PARAMS,
+            OpKind::Reverse => &NO_PARAMS,
+            OpKind::Biquad => &BIQUAD_PARAMS,
+            OpKind::Chorus => &CHORUS_PARAMS,
+            OpKind::Flanger => &FLANGER_PARAMS,
+            OpKind::Phaser => &PHASER_PARAMS,
         }
     }
 
@@ -200,6 +297,15 @@ impl OpKind {
             OpKind::Cheby2Highpass,
             OpKind::Reverb,
             OpKind::Fir,
+            OpKind::Fade,
+            OpKind::Tremolo,
+            OpKind::Overdrive,
+            OpKind::Compand,
+            OpKind::Reverse,
+            OpKind::Biquad,
+            OpKind::Chorus,
+            OpKind::Flanger,
+            OpKind::Phaser,
         ]
     }
 
@@ -360,6 +466,33 @@ mod tests {
         assert!(Op::new(OpKind::Lowpass, [-5.0, 2.0]).is_err());
         assert!(Op::new(OpKind::Lowpass, [1000.0, f32::NAN]).is_err());
         assert!(Op::new(OpKind::Peaking, [1000.0, 6.0, 0.0]).is_err()); // q below min
+    }
+
+    #[test]
+    fn new_effect_ops_validate() {
+        // Reverse is the zero-parameter op.
+        assert_eq!(OpKind::Reverse.defaults(), Vec::<f32>::new());
+        assert!(Op::new(OpKind::Reverse, []).is_ok());
+        assert!(Op::new(OpKind::Reverse, [1.0]).is_err()); // no params allowed
+
+        // Fade: three params, shape bounded 0..2.
+        assert_eq!(OpKind::Fade.defaults(), vec![0.0, 0.0, 1.0]);
+        assert!(Op::new(OpKind::Fade, [0.1, 0.2, 1.0]).is_ok());
+        assert!(Op::new(OpKind::Fade, [0.1, 0.2, 3.0]).is_err()); // shape out of range
+
+        // Compand: six params; ratio must be >= 1.
+        assert_eq!(OpKind::Compand.defaults().len(), 6);
+        assert!(Op::new(OpKind::Compand, [0.01, 0.1, -20.0, 4.0, 6.0, 0.0]).is_ok());
+        assert!(Op::new(OpKind::Compand, [0.01, 0.1, -20.0, 0.5, 6.0, 0.0]).is_err());
+
+        // Biquad: five raw coefficients, any finite value.
+        assert_eq!(OpKind::Biquad.defaults(), vec![1.0, 0.0, 0.0, 0.0, 0.0]);
+        assert!(Op::new(OpKind::Biquad, [0.5, -0.2, 0.1, -0.3, 0.05]).is_ok());
+        assert!(Op::new(OpKind::Biquad, [0.5, 0.0, 0.0, 0.0, f32::NAN]).is_err());
+
+        // Flanger feedback is bounded for BIBO stability.
+        assert!(Op::new(OpKind::Flanger, [0.5, 0.002, 0.001, 0.5, 0.5]).is_ok());
+        assert!(Op::new(OpKind::Flanger, [0.5, 0.002, 0.001, 1.5, 0.5]).is_err());
     }
 
     #[test]

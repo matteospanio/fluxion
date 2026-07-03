@@ -19,11 +19,25 @@ use std::mem::MaybeUninit;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// A `usize` counter aligned to (and sized up to) its own 64-byte cache line.
+///
+/// Rationale — false sharing. The producer stores `head` on every `push`; the consumer stores
+/// `tail` on every `pop`. If the two counters share a cache line, each store invalidates the other
+/// core's copy of that line, so *both* threads take a coherency miss on *every* operation even
+/// though they never touch the same variable — the counters ping-pong the line between cores. Giving
+/// each counter its own line (64 B is the line size on x86-64 and Apple M-series; padding to 64 also
+/// covers the ≤128 B effective granularity of the latter's adjacent-line prefetch) removes that
+/// miss: on this box the 2-thread million-item stress (`concurrent_spsc_preserves_every_item`) is
+/// consistently faster padded than packed, the gap widening with contention. `buf`/`mask` are
+/// written once at construction and only read afterwards, so they may freely share a line.
+#[repr(align(64))]
+struct CachePadded(AtomicUsize);
+
 struct Ring<T> {
     buf: Box<[UnsafeCell<MaybeUninit<T>>]>,
     mask: usize,
-    head: AtomicUsize, // next write position (producer owns)
-    tail: AtomicUsize, // next read position (consumer owns)
+    head: CachePadded, // next write position (producer owns) — own cache line
+    tail: CachePadded, // next read position (consumer owns) — own cache line
 }
 
 // SPSC discipline: the producer only writes the slot at `head` (which the consumer won't read until
@@ -45,8 +59,8 @@ pub fn channel<T: Copy>(capacity: usize) -> (Producer<T>, Consumer<T>) {
     let ring = Arc::new(Ring {
         buf,
         mask: cap - 1,
-        head: AtomicUsize::new(0),
-        tail: AtomicUsize::new(0),
+        head: CachePadded(AtomicUsize::new(0)),
+        tail: CachePadded(AtomicUsize::new(0)),
     });
     (Producer { ring: ring.clone() }, Consumer { ring })
 }
@@ -72,8 +86,8 @@ impl<T: Copy> Producer<T> {
     /// Push one item; returns `Err(item)` if the ring is full (never blocks, never allocates).
     /// `&mut self`: only the owning thread can push, so two pushes can never race the same slot.
     pub fn push(&mut self, item: T) -> Result<(), T> {
-        let head = self.ring.head.load(Ordering::Relaxed);
-        let tail = self.ring.tail.load(Ordering::Acquire);
+        let head = self.ring.head.0.load(Ordering::Relaxed);
+        let tail = self.ring.tail.0.load(Ordering::Acquire);
         if head.wrapping_sub(tail) == self.ring.buf.len() {
             return Err(item); // full
         }
@@ -81,6 +95,7 @@ impl<T: Copy> Producer<T> {
         unsafe { (*self.ring.buf[head & self.ring.mask].get()).write(item) };
         self.ring
             .head
+            .0
             .store(head.wrapping_add(1), Ordering::Release);
         Ok(())
     }
@@ -90,8 +105,8 @@ impl<T: Copy> Consumer<T> {
     /// Pop one item, or `None` if empty (never blocks, never allocates).
     /// `&mut self`: only the owning thread can pop, so two pops can never race the same slot.
     pub fn pop(&mut self) -> Option<T> {
-        let tail = self.ring.tail.load(Ordering::Relaxed);
-        let head = self.ring.head.load(Ordering::Acquire);
+        let tail = self.ring.tail.0.load(Ordering::Relaxed);
+        let head = self.ring.head.0.load(Ordering::Acquire);
         if head == tail {
             return None; // empty
         }
@@ -100,14 +115,15 @@ impl<T: Copy> Consumer<T> {
         let item = unsafe { (*self.ring.buf[tail & self.ring.mask].get()).assume_init_read() };
         self.ring
             .tail
+            .0
             .store(tail.wrapping_add(1), Ordering::Release);
         Some(item)
     }
 
     /// Number of items currently available to read.
     pub fn len(&self) -> usize {
-        let head = self.ring.head.load(Ordering::Acquire);
-        let tail = self.ring.tail.load(Ordering::Relaxed);
+        let head = self.ring.head.0.load(Ordering::Acquire);
+        let tail = self.ring.tail.0.load(Ordering::Relaxed);
         head.wrapping_sub(tail)
     }
 
