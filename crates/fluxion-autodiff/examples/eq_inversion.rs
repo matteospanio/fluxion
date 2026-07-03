@@ -127,7 +127,7 @@ fn main() {
     // Rprop per parameter: sign-based steps, no learning-rate tuning across heterogeneous units.
     let mut params: Vec<f32> = vec![300.0, 0.0, 0.9, 1_000.0, 0.0, 1.0, 6_000.0, 0.0, 0.9];
     let mut coeffs = eq_design(&params, FS); // raw modes train this directly
-    let (mut steps, mut prev): (Vec<f32>, Vec<f32>) = match mode.as_str() {
+    let (init_steps, mut prev): (Vec<f32>, Vec<f32>) = match mode.as_str() {
         "design" => (
             vec![50.0, 1.0, 0.05, 100.0, 1.0, 0.05, 200.0, 1.0, 0.05],
             vec![0.0; 9],
@@ -135,6 +135,7 @@ fn main() {
         _ => (vec![1e-3; coeffs.len()], vec![0.0; coeffs.len()]),
     };
 
+    let mut steps = init_steps.clone();
     let iters: usize = std::env::var("ITERS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -180,13 +181,15 @@ fn main() {
         for i in 0..vars.len() {
             let g = grads[i];
             if g != 0.0 {
-                steps[i] = if prev[i] * g < 0.0 {
-                    steps[i] * 0.5
+                if prev[i] * g < 0.0 {
+                    // iRprop-: on a sign flip, shrink the step and skip the move this iterate.
+                    steps[i] = (steps[i] * 0.5).max(init_steps[i] * 1e-3);
+                    prev[i] = 0.0;
                 } else {
-                    steps[i] * 1.2
-                };
-                vars[i] -= g.signum() * steps[i];
-                prev[i] = g;
+                    steps[i] = (steps[i] * 1.2).min(init_steps[i] * 100.0);
+                    vars[i] -= g.signum() * steps[i];
+                    prev[i] = g;
+                }
             }
         }
         if mode == "design" {

@@ -37,7 +37,11 @@ pub fn design_param_grad(
     let mut grad = vec![0.0f32; params.len()];
     let mut p = params.to_vec();
     for i in 0..params.len() {
-        let h = (params[i].abs() * 1e-3).max(1e-5);
+        // Floor h at 1e-3: designs return f32-cast coefficients, so a smaller step (e.g. for a
+        // parameter near 0, like an EQ gain initialised at 0 dB) pushes the coefficient delta down
+        // to f32 rounding noise and the FD gradient's *sign* becomes garbage. Designs are smooth
+        // closed forms, so truncation error at h = 1e-3 is negligible.
+        let h = (params[i].abs() * 1e-3).max(1e-3);
         p[i] = params[i] + h;
         let plus = design(&p);
         p[i] = params[i] - h;
