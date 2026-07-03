@@ -81,7 +81,7 @@ fn main() {
         );
         emit(
             "multichannel",
-            &format!("\"channels\":8,\"seconds\":60,\"order\":4"),
+            "\"channels\":8,\"seconds\":60,\"order\":4",
             ms,
             s,
         );
