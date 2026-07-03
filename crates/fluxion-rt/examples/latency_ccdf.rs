@@ -61,6 +61,17 @@ fn main() {
 
             lat_us.sort_by(f64::total_cmp);
             let q = |p: f64| lat_us[((lat_us.len() as f64 - 1.0) * p) as usize];
+            // CCDF curve: ~64 points geometric in the tail probability (1-p), for Fig 4.
+            let mut curve = Vec::new();
+            let mut tail = 0.5f64;
+            while tail * BLOCKS as f64 >= 1.0 {
+                curve.push(format!("[{:.6},{:.2}]", tail, q(1.0 - tail)));
+                tail *= 0.8;
+            }
+            println!(
+                "{{\"curve\":true,\"depth\":{depth},\"buffer\":{buffer},\"points\":[{}]}}",
+                curve.join(",")
+            );
             let deadline_us = buffer as f64 / FS as f64 * 1e6;
             println!(
                 "{{\"depth\":{depth},\"buffer\":{buffer},\"deadline_us\":{deadline_us:.1},\
