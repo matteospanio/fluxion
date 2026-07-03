@@ -122,7 +122,10 @@ fn main() {
         _ => (vec![1e-3; coeffs.len()], vec![0.0; coeffs.len()]),
     };
 
-    let iters = 400usize;
+    let iters: usize = std::env::var("ITERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(400);
     for it in 0..iters {
         let (loss_v, grads) = match mode.as_str() {
             "design" => {
