@@ -7,6 +7,11 @@
 use std::hint::black_box;
 use std::time::Instant;
 
+// Same role as torch's caching allocator in the comparator benches: retain and
+// reuse large buffers instead of paying mmap/munmap page faults per call.
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use fluxion_backend::{process, sos_filter_batch};
 use fluxion_core::{Graph, OpKind, Signal};
 use fluxion_ops::butterworth_lowpass;

@@ -742,16 +742,19 @@ mod avx2_group {
     ) {
         debug_assert_eq!(in_group.len(), 8 * frames);
         debug_assert_eq!(out_group.len(), 8 * frames);
-        match sos.len() {
-            1 => run::<1>(in_group, out_group, frames, sos),
-            2 => run::<2>(in_group, out_group, frames, sos),
-            3 => run::<3>(in_group, out_group, frames, sos),
-            4 => run::<4>(in_group, out_group, frames, sos),
-            5 => run::<5>(in_group, out_group, frames, sos),
-            6 => run::<6>(in_group, out_group, frames, sos),
-            7 => run::<7>(in_group, out_group, frames, sos),
-            8 => run::<8>(in_group, out_group, frames, sos),
-            _ => unreachable!("dispatch_group only routes sos.len() <= 8 here"),
+        // SAFETY: forwarding the caller's contract (AVX2 verified, exact 8-row group).
+        unsafe {
+            match sos.len() {
+                1 => run::<1>(in_group, out_group, frames, sos),
+                2 => run::<2>(in_group, out_group, frames, sos),
+                3 => run::<3>(in_group, out_group, frames, sos),
+                4 => run::<4>(in_group, out_group, frames, sos),
+                5 => run::<5>(in_group, out_group, frames, sos),
+                6 => run::<6>(in_group, out_group, frames, sos),
+                7 => run::<7>(in_group, out_group, frames, sos),
+                8 => run::<8>(in_group, out_group, frames, sos),
+                _ => unreachable!("dispatch_group only routes sos.len() <= 8 here"),
+            }
         }
     }
 
@@ -773,22 +776,25 @@ mod avx2_group {
             // SAFETY: rows r in 0..8, frames t..t+8 are in bounds (t + 8 <= full <= frames).
             let mut v: [__m256; 8] =
                 core::array::from_fn(|r| unsafe { _mm256_loadu_ps(src.add(r * frames + t)) });
-            transpose8x8(&mut v);
-            for vi in v.iter_mut() {
-                let mut x = *vi;
-                for k in 0..K {
-                    // y = b0*x + s1; s1 = (b1*x - a1*y) + s2; s2 = b2*x - a2*y
-                    let y = _mm256_add_ps(_mm256_mul_ps(b0[k], x), s1[k]);
-                    s1[k] = _mm256_add_ps(
-                        _mm256_sub_ps(_mm256_mul_ps(b1[k], x), _mm256_mul_ps(a1[k], y)),
-                        s2[k],
-                    );
-                    s2[k] = _mm256_sub_ps(_mm256_mul_ps(b2[k], x), _mm256_mul_ps(a2[k], y));
-                    x = y;
+            // SAFETY: AVX2 verified by the caller; arithmetic intrinsics are register-only.
+            unsafe {
+                transpose8x8(&mut v);
+                for vi in v.iter_mut() {
+                    let mut x = *vi;
+                    for k in 0..K {
+                        // y = b0*x + s1; s1 = (b1*x - a1*y) + s2; s2 = b2*x - a2*y
+                        let y = _mm256_add_ps(_mm256_mul_ps(b0[k], x), s1[k]);
+                        s1[k] = _mm256_add_ps(
+                            _mm256_sub_ps(_mm256_mul_ps(b1[k], x), _mm256_mul_ps(a1[k], y)),
+                            s2[k],
+                        );
+                        s2[k] = _mm256_sub_ps(_mm256_mul_ps(b2[k], x), _mm256_mul_ps(a2[k], y));
+                        x = y;
+                    }
+                    *vi = x;
                 }
-                *vi = x;
+                transpose8x8(&mut v);
             }
-            transpose8x8(&mut v);
             for (r, vi) in v.iter().enumerate() {
                 // SAFETY: same bounds as the loads above.
                 unsafe { _mm256_storeu_ps(dst.add(r * frames + t), *vi) };
@@ -826,6 +832,8 @@ mod avx2_group {
     /// Canonical AVX2 8×8 f32 in-register transpose (unpack / shuffle / permute2f128).
     #[inline(always)]
     unsafe fn transpose8x8(v: &mut [__m256; 8]) {
+        // SAFETY: register-only shuffles; AVX2 verified by the caller chain.
+        unsafe {
         let t0 = _mm256_unpacklo_ps(v[0], v[1]);
         let t1 = _mm256_unpackhi_ps(v[0], v[1]);
         let t2 = _mm256_unpacklo_ps(v[2], v[3]);
@@ -850,6 +858,7 @@ mod avx2_group {
         v[5] = _mm256_permute2f128_ps(u1, u5, 0x31);
         v[6] = _mm256_permute2f128_ps(u2, u6, 0x31);
         v[7] = _mm256_permute2f128_ps(u3, u7, 0x31);
+        }
     }
 }
 

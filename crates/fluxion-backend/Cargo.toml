@@ -30,6 +30,11 @@ cubecl = { version = "0.10", features = ["cuda"], optional = true }
 [dev-dependencies]
 # Bench harness only (A4); see fluxion-ops for the default-features rationale.
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+# Benchmarks allocate/free large buffers per call; the system allocator returns
+# them to the OS (mmap/munmap) and every iteration pays page faults. mimalloc
+# retains and reuses the pages - the same role torch's caching allocator plays
+# in the comparator benches.
+mimalloc = "0.1"
 
 [[bench]]
 name = "batch"
