@@ -75,16 +75,21 @@ impl SosStream {
     /// The Direct-Form-II-Transposed cascade inner loop over one block, carrying `state`.
     fn run(sos: &[Biquad], state: &mut [[f32; 2]], input: &[f32], output: &mut [f32]) {
         output.copy_from_slice(input);
-        for (bq, st) in sos.iter().zip(state.iter_mut()) {
-            let (mut s1, mut s2) = (st[0], st[1]);
-            for y in output.iter_mut() {
-                let x = *y;
-                let out = bq.b0 * x + s1; // Direct Form II Transposed
-                s1 = bq.b1 * x - bq.a1 * out + s2;
-                s2 = bq.b2 * x - bq.a2 * out;
-                *y = out;
+        // Fused cascade: sample-outer, section-inner (Direct Form II Transposed).
+        // The K independent per-section dependency chains pipeline in the
+        // out-of-order core instead of paying each chain's latency per pass, and
+        // the block is read once instead of K times. Per-(section, sample)
+        // arithmetic is unchanged, so results are bit-identical to the
+        // section-outer formulation (and to `fluxion_ops::sos_filter`).
+        for y in output.iter_mut() {
+            let mut v = *y;
+            for (bq, st) in sos.iter().zip(state.iter_mut()) {
+                let out = bq.b0 * v + st[0];
+                st[0] = bq.b1 * v - bq.a1 * out + st[1];
+                st[1] = bq.b2 * v - bq.a2 * out;
+                v = out;
             }
-            *st = [s1, s2];
+            *y = v;
         }
     }
 
