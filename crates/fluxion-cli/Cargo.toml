@@ -25,7 +25,7 @@ path = "src/main.rs"
 realtime = ["dep:fluxion-rt"]
 
 [dependencies]
-fluxion = { path = "../fluxion-facade", version = "0.0.0" }
+fluxion = { path = "../fluxion-facade", version = "0.0.0", features = ["realtime"] }
 fluxion-io = { path = "../fluxion-io", version = "0.0.0" }
 fluxion-rt = { path = "../fluxion-rt", version = "0.0.0", optional = true, features = ["cpal"] }
 clap = { version = "4", features = ["derive"] }

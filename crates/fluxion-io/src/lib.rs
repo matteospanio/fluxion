@@ -200,6 +200,25 @@ impl XorShift {
     }
 }
 
+/// Quantize one `[-1, 1]` sample to signed integer PCM per `enc` (clamp, optional TPDF
+/// dither, round). The single source of truth for both the whole-file and streaming writers.
+#[inline]
+fn quantize_pcm(x: f32, enc: WavEncoding, rng: &mut XorShift) -> i32 {
+    // Signed N-bit PCM spans [-2^(N-1), 2^(N-1) - 1]; full-scale is 2^(N-1).
+    let full_scale = (1u64 << (enc.bits - 1)) as f32;
+    let max_code = (1i64 << (enc.bits - 1)) - 1;
+    let min_code = -(1i64 << (enc.bits - 1));
+    // Clamp to [-1, 1] first (documented clipping), then scale to code units.
+    let mut v = x.clamp(-1.0, 1.0) * full_scale;
+    // ponytail: the f32 pipeline caps 32-bit int PCM at ~24 significant bits and makes
+    // 1-LSB dither a no-op there, so skip it; an f64 encode path is the upgrade if
+    // true 32-bit int resolution is ever needed.
+    if enc.dither && enc.bits < 32 {
+        v += rng.tpdf();
+    }
+    (v.round() as i64).clamp(min_code, max_code) as i32
+}
+
 /// Shared WAV encode body: interleave channels (zero-padding short ones), quantize per `enc`, and
 /// finalize.
 fn encode_wav<W: Write + std::io::Seek>(
@@ -215,28 +234,83 @@ fn encode_wav<W: Write + std::io::Seek>(
             }
         }
     } else {
-        // Signed N-bit PCM spans [-2^(N-1), 2^(N-1) - 1]; full-scale is 2^(N-1).
-        let full_scale = (1u64 << (enc.bits - 1)) as f32;
-        let max_code = (1i64 << (enc.bits - 1)) - 1;
-        let min_code = -(1i64 << (enc.bits - 1));
         let mut rng = XorShift(DITHER_SEED);
         for f in 0..frames {
             for ch in &signal.channels {
                 let x = ch.get(f).copied().unwrap_or(0.0);
-                // Clamp to [-1, 1] first (documented clipping), then scale to code units.
-                let mut v = x.clamp(-1.0, 1.0) * full_scale;
-                // ponytail: the f32 pipeline caps 32-bit int PCM at ~24 significant bits and makes
-                // 1-LSB dither a no-op there, so skip it; an f64 encode path is the upgrade if
-                // true 32-bit int resolution is ever needed.
-                if enc.dither && enc.bits < 32 {
-                    v += rng.tpdf();
-                }
-                let code = (v.round() as i64).clamp(min_code, max_code);
-                writer.write_sample(code as i32)?;
+                writer.write_sample(quantize_pcm(x, enc, &mut rng))?;
             }
         }
     }
     writer.finalize()
+}
+
+/// Incremental WAV writer — the streaming counterpart to [`write_wav_encoded`], for
+/// bounded-memory pipelines (plan task H5): feed planar blocks in order, then
+/// [`finalize`](Self::finalize) (hound patches the RIFF length header). Quantization is
+/// sample-for-sample identical to the whole-file writer: same clamp/scale/round and the same
+/// deterministic TPDF dither stream carried across blocks.
+pub struct WavBlockWriter {
+    writer: WavWriter<std::io::BufWriter<std::fs::File>>,
+    enc: WavEncoding,
+    channels: usize,
+    rng: XorShift,
+}
+
+impl WavBlockWriter {
+    /// Create the output file with the given rate/channel/encoding spec.
+    pub fn create(
+        path: impl AsRef<Path>,
+        fs: u32,
+        channels: u16,
+        enc: WavEncoding,
+    ) -> Result<Self, hound::Error> {
+        let sample_format = match (enc.float, enc.bits) {
+            (true, 32) => SampleFormat::Float,
+            (false, 16 | 24 | 32) => SampleFormat::Int,
+            _ => return Err(hound::Error::Unsupported),
+        };
+        let spec = WavSpec {
+            channels,
+            sample_rate: fs,
+            bits_per_sample: enc.bits,
+            sample_format,
+        };
+        Ok(Self {
+            writer: WavWriter::create(path, spec)?,
+            enc,
+            channels: channels as usize,
+            rng: XorShift(DITHER_SEED),
+        })
+    }
+
+    /// Append one planar block (`block[c]` = channel `c`). Channels must match the spec;
+    /// short channels are zero-padded within the block, like the whole-file writer.
+    pub fn write_block(&mut self, block: &[Vec<f32>]) -> Result<(), hound::Error> {
+        assert_eq!(block.len(), self.channels, "channel count changed mid-stream");
+        let frames = block.iter().map(Vec::len).max().unwrap_or(0);
+        if self.enc.float {
+            for f in 0..frames {
+                for ch in block {
+                    self.writer.write_sample(ch.get(f).copied().unwrap_or(0.0))?;
+                }
+            }
+        } else {
+            for f in 0..frames {
+                for ch in block {
+                    let x = ch.get(f).copied().unwrap_or(0.0);
+                    let code = quantize_pcm(x, self.enc, &mut self.rng);
+                    self.writer.write_sample(code)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Finish the file (writes the final RIFF header).
+    pub fn finalize(self) -> Result<(), hound::Error> {
+        self.writer.finalize()
+    }
 }
 
 /// Metadata about a WAV file, without decoding its samples.
@@ -980,6 +1054,42 @@ mod tests {
         assert_eq!(rebuilt.frames(), 250);
         for ch in 0..2 {
             assert_eq!(rebuilt.channels[ch], whole.channels[ch]);
+        }
+    }
+
+    #[test]
+    fn block_writer_matches_whole_file_writer_bit_exact() {
+        // Streamed writes (including the dither PRNG stream carried across blocks) must
+        // produce byte-identical files to the whole-file writer.
+        let sig = Signal::new(
+            22_050,
+            vec![
+                (0..300).map(|i| ((i as f32) * 0.037).sin() * 0.8).collect(),
+                (0..300).map(|i| ((i as f32) * 0.011).cos() * 0.6).collect(),
+            ],
+        );
+        for enc in [WavEncoding::default(), WavEncoding::pcm(16), WavEncoding::pcm(24)] {
+            let p_whole = tmp_path(&format!("whole_{}", enc.bits + enc.float as u16));
+            let p_stream = tmp_path(&format!("stream_{}", enc.bits + enc.float as u16));
+            write_wav_encoded(&p_whole, &sig, enc).expect("whole write");
+
+            let mut w = super::WavBlockWriter::create(&p_stream, sig.fs, 2, enc).expect("create");
+            for start in (0..300).step_by(128) {
+                let end = (start + 128).min(300);
+                let block: Vec<Vec<f32>> = sig
+                    .channels
+                    .iter()
+                    .map(|ch| ch[start..end].to_vec())
+                    .collect();
+                w.write_block(&block).expect("block");
+            }
+            w.finalize().expect("finalize");
+
+            let a = std::fs::read(&p_whole).unwrap();
+            let b = std::fs::read(&p_stream).unwrap();
+            let _ = std::fs::remove_file(&p_whole);
+            let _ = std::fs::remove_file(&p_stream);
+            assert_eq!(a, b, "bits={} float={}", enc.bits, enc.float);
         }
     }
 

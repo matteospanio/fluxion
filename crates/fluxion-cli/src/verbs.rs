@@ -6,11 +6,11 @@ use std::f32::consts::PI;
 
 use fluxion::{OpKind, Signal, Unit, certify_graph, fxg, process, transform};
 use fluxion_io::{
-    AudioInfo, WavEncoding, decode, probe, probe_wav, read_wav, read_wav_from, write_wav_encoded,
-    write_wav_encoded_to,
+    AudioInfo, WavBlockWriter, WavEncoding, decode, decode_blocks, probe, probe_wav, read_wav,
+    read_wav_blocks, read_wav_from, write_wav_encoded, write_wav_encoded_to,
 };
 
-use crate::chain::{STAGES, parse_chain, parse_stages, parse_value, run_stages, stage_doc};
+use crate::chain::{STAGES, Stage, parse_chain, parse_stages, parse_value, run_stages, stage_doc};
 
 /// `-` (std stream) and `-n` (null sink) are not real file paths.
 pub(crate) fn is_stream(path: &str) -> bool {
@@ -131,6 +131,18 @@ pub(crate) fn cmd_process(
             return Err(format!(
                 "input and output are the same file '{output}' — refusing to overwrite"
             ));
+        }
+    }
+
+    // SoX-style bounded-memory fast path: a single file input, a file (or null) output,
+    // no resampling, and a pipeline that lowers whole to the realtime graph is processed
+    // in fixed blocks — read → per-channel RtGraph → write — instead of loaded whole.
+    // The streaming executor is block-size invariant and the streamed WAV writer is
+    // byte-identical to the buffered one, so the output matches the buffered path.
+    if rate.is_none() && !mix_inputs && inputs.len() == 1 {
+        let streamed = try_stream_process(&inputs[0], effects, output, fs, enc)?;
+        if streamed {
+            return Ok(());
         }
     }
 
@@ -652,4 +664,115 @@ mod tests {
         assert!(output_encoding(Some(20), false, false).is_err());
         assert!(output_encoding(Some(16), true, false).is_err()); // float needs 32-bit
     }
+}
+
+/// Frames per streamed block: big enough to amortize per-block overhead, small enough
+/// that peak memory stays a few MB regardless of file length.
+const STREAM_BLOCK: usize = 65_536;
+
+/// Bounded-memory fast path for [`cmd_process`]. Returns `Ok(false)` when the input,
+/// output, or pipeline shape does not qualify — the caller falls back to the buffered
+/// path — and `Ok(true)` after the file has been fully processed and written.
+fn try_stream_process(
+    input: &str,
+    effects: &[String],
+    output: &str,
+    fs_override: Option<u32>,
+    enc: WavEncoding,
+) -> Result<bool, String> {
+    if is_stream(input) || output == "-" {
+        return Ok(false); // stdin/stdout need the buffered path (seekable-sink WAV header)
+    }
+    let stages = parse_stages(effects)?;
+    // Only effect stages stream; geometry stages (trim/pad/rate/…) need the whole signal.
+    let mut graph: Option<fluxion::Graph> = None;
+    for st in &stages {
+        match st {
+            Stage::Graph(g) => {
+                graph = Some(match graph {
+                    Some(acc) => acc | g.clone(),
+                    None => g.clone(),
+                });
+            }
+            _ => return Ok(false),
+        }
+    }
+    let graph = graph.unwrap_or(fluxion::Graph::Id);
+
+    let is_wav = std::path::Path::new(input)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("wav"));
+    let probed_fs = if is_wav {
+        probe_wav(input).map_err(|e| format!("probing '{input}': {e}"))?.fs
+    } else {
+        probe(input).map_err(|e| format!("probing '{input}': {e}"))?.fs
+    };
+    let fs = fs_override.unwrap_or(probed_fs);
+    if fs == 0 || fluxion::to_rt_graph(&graph, fs).is_none() {
+        return Ok(false); // unknown rate, or a stage that is not realtime-lowerable
+    }
+
+    if is_wav {
+        let blocks = read_wav_blocks(input, STREAM_BLOCK)
+            .map_err(|e| format!("reading '{input}': {e}"))?
+            .map(|r| r.map_err(|e| format!("reading '{input}': {e}")));
+        stream_blocks(blocks, &graph, fs, output, enc)
+    } else {
+        let blocks = decode_blocks(input, STREAM_BLOCK)
+            .map_err(|e| format!("decoding '{input}': {e}"))?
+            .map(|r| r.map_err(|e| format!("decoding '{input}': {e}")));
+        stream_blocks(blocks, &graph, fs, output, enc)
+    }
+}
+
+/// Drive the block loop: per-channel [`fluxion::RtGraph`] state persists across blocks
+/// (sample-identical to whole-signal processing), output written incrementally.
+fn stream_blocks(
+    blocks: impl Iterator<Item = Result<Signal, String>>,
+    graph: &fluxion::Graph,
+    fs: u32,
+    output: &str,
+    enc: WavEncoding,
+) -> Result<bool, String> {
+    let mut graphs: Vec<fluxion::RtGraph> = Vec::new();
+    let mut writer: Option<WavBlockWriter> = None;
+    let mut outs: Vec<Vec<f32>> = Vec::new();
+
+    for block in blocks {
+        let sig = block?;
+        let ch = sig.channel_count();
+        if graphs.is_empty() {
+            graphs = (0..ch)
+                .map(|_| {
+                    let mut g = fluxion::to_rt_graph(graph, fs).expect("lowerability checked");
+                    g.prepare(STREAM_BLOCK);
+                    g
+                })
+                .collect();
+            outs = vec![vec![0.0f32; STREAM_BLOCK]; ch];
+            if output != "-n" {
+                writer = Some(
+                    WavBlockWriter::create(output, fs, ch as u16, enc)
+                        .map_err(|e| format!("writing '{output}': {e}"))?,
+                );
+            }
+        } else if ch != graphs.len() {
+            return Err(format!(
+                "channel count changed mid-stream ({} -> {ch})",
+                graphs.len()
+            ));
+        }
+        for (c, in_ch) in sig.channels.iter().enumerate() {
+            outs[c].resize(in_ch.len(), 0.0);
+            graphs[c].process(in_ch, &mut outs[c]);
+        }
+        if let Some(w) = writer.as_mut() {
+            w.write_block(&outs).map_err(|e| format!("writing '{output}': {e}"))?;
+        }
+    }
+    if let Some(w) = writer.take() {
+        w.finalize().map_err(|e| format!("writing '{output}': {e}"))?;
+    }
+    Ok(true)
 }
