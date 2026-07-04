@@ -247,10 +247,13 @@ impl Backend for Cpu {
         const PAR_MIN_WORK: usize = 1 << 16;
         let work: usize = x.iter().map(Vec::len).sum::<usize>() * sos.len().max(1);
         if x.len() > 1 && work >= PAR_MIN_WORK {
-            x.par_iter_mut().for_each(|ch| *ch = sos_filter(ch, sos));
+            // In place: a fresh 11.5 MB Vec per channel serializes parallel channels
+            // on page faults; the owned buffers are filtered where they sit.
+            x.par_iter_mut()
+                .for_each(|ch| fluxion_ops::sos_filter_in_place(ch, sos));
         } else {
             for ch in &mut x {
-                *ch = sos_filter(ch, sos);
+                fluxion_ops::sos_filter_in_place(ch, sos);
             }
         }
         x
@@ -593,11 +596,18 @@ pub fn sos_filter_batch(rows: &[f32], frames: usize, sos: &[Biquad]) -> Vec<f32>
     if n_rows <= 1 || sos.is_empty() {
         return sos_filter(rows, sos);
     }
-    // Group size trades SIMD-lane fill (wider) against rayon task count (narrower):
-    // with few rows, fixed 16-row groups leave cores idle (64 rows = only 4 tasks),
-    // so shrink toward one 8-lane AVX vector per group until every thread has work.
+    // Group size trades SIMD-lane fill (wider) against rayon task count (narrower).
+    // On AVX2 the 8-row register-transpose kernel is both the fastest and the most
+    // parallel choice (one vector of rows per group, no bounce buffer); elsewhere,
+    // shrink from 16 toward 8 rows only when fixed groups would leave threads idle.
+    #[cfg(target_arch = "x86_64")]
+    let avx2 = sos.len() <= 8 && std::arch::is_x86_feature_detected!("avx2");
+    #[cfg(not(target_arch = "x86_64"))]
+    let avx2 = false;
     let threads = rayon::current_num_threads().max(1);
-    let group = if n_rows / BATCH_GROUP >= threads {
+    let group = if avx2 {
+        MIN_GROUP
+    } else if n_rows / BATCH_GROUP >= threads {
         BATCH_GROUP
     } else {
         (n_rows / threads).clamp(MIN_GROUP, BATCH_GROUP)
@@ -605,8 +615,24 @@ pub fn sos_filter_batch(rows: &[f32], frames: usize, sos: &[Biquad]) -> Vec<f32>
     let mut out = vec![0.0f32; rows.len()];
     out.par_chunks_mut(group * frames)
         .zip(rows.par_chunks(group * frames))
-        .for_each(|(out_group, in_group)| filter_group(in_group, out_group, frames, sos));
+        .for_each(|(out_group, in_group)| dispatch_group(in_group, out_group, frames, sos));
     out
+}
+
+/// Route one row-group to the AVX2 register-transpose kernel when it applies
+/// (full 8-row group, cascade depth ≤ 8, AVX2 present), else to the portable
+/// gather/scatter path.
+fn dispatch_group(in_group: &[f32], out_group: &mut [f32], frames: usize, sos: &[Biquad]) {
+    #[cfg(target_arch = "x86_64")]
+    if in_group.len() == 8 * frames
+        && sos.len() <= 8
+        && std::arch::is_x86_feature_detected!("avx2")
+    {
+        // SAFETY: AVX2 support was just verified at runtime; the group is exactly 8 rows.
+        unsafe { avx2_group::filter_group_8rows(in_group, out_group, frames, sos) };
+        return;
+    }
+    filter_group(in_group, out_group, frames, sos);
 }
 
 /// Rows per SIMD group in [`sos_filter_batch`]: wide enough to fill AVX lanes with headroom for
@@ -687,6 +713,144 @@ fn try_batched_filter(graph: &Graph, batch: &[Signal]) -> Option<Vec<Signal>> {
             .map(|i| Signal::new(fs, vec![out[i * frames..(i + 1) * frames].to_vec()]))
             .collect(),
     )
+}
+
+
+/// AVX2 fast path for [`sos_filter_batch`]: one full 8-row group is filtered with
+/// strided planar loads, an in-register 8×8 transpose, the fused K-section vector
+/// cascade, and a transpose back to planar stores — no interleaved bounce buffer,
+/// so the group touches each planar byte exactly once in and once out (half the
+/// memory traffic of the gather/scatter path, which is what bounds it at full
+/// thread count). Arithmetic per (section, frame, row) is identical to the scalar
+/// kernel: same operand order, `mul`/`add`/`sub` intrinsics only (no FMA
+/// contraction), so results stay bit-identical.
+#[cfg(target_arch = "x86_64")]
+mod avx2_group {
+    use fluxion_ops::Biquad;
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::*;
+
+    /// # Safety
+    /// Caller must have verified AVX2 support; `in_group`/`out_group` must be exactly
+    /// `8 * frames` long and `sos.len()` must be in `1..=8`.
+    #[target_feature(enable = "avx2")]
+    pub unsafe fn filter_group_8rows(
+        in_group: &[f32],
+        out_group: &mut [f32],
+        frames: usize,
+        sos: &[Biquad],
+    ) {
+        debug_assert_eq!(in_group.len(), 8 * frames);
+        debug_assert_eq!(out_group.len(), 8 * frames);
+        match sos.len() {
+            1 => run::<1>(in_group, out_group, frames, sos),
+            2 => run::<2>(in_group, out_group, frames, sos),
+            3 => run::<3>(in_group, out_group, frames, sos),
+            4 => run::<4>(in_group, out_group, frames, sos),
+            5 => run::<5>(in_group, out_group, frames, sos),
+            6 => run::<6>(in_group, out_group, frames, sos),
+            7 => run::<7>(in_group, out_group, frames, sos),
+            8 => run::<8>(in_group, out_group, frames, sos),
+            _ => unreachable!("dispatch_group only routes sos.len() <= 8 here"),
+        }
+    }
+
+    #[target_feature(enable = "avx2")]
+    unsafe fn run<const K: usize>(input: &[f32], out: &mut [f32], frames: usize, sos: &[Biquad]) {
+        let b0: [__m256; K] = core::array::from_fn(|k| _mm256_set1_ps(sos[k].b0));
+        let b1: [__m256; K] = core::array::from_fn(|k| _mm256_set1_ps(sos[k].b1));
+        let b2: [__m256; K] = core::array::from_fn(|k| _mm256_set1_ps(sos[k].b2));
+        let a1: [__m256; K] = core::array::from_fn(|k| _mm256_set1_ps(sos[k].a1));
+        let a2: [__m256; K] = core::array::from_fn(|k| _mm256_set1_ps(sos[k].a2));
+        let mut s1 = [_mm256_setzero_ps(); K];
+        let mut s2 = [_mm256_setzero_ps(); K];
+
+        let full = frames - frames % 8;
+        let src = input.as_ptr();
+        let dst = out.as_mut_ptr();
+        let mut t = 0usize;
+        while t < full {
+            // SAFETY: rows r in 0..8, frames t..t+8 are in bounds (t + 8 <= full <= frames).
+            let mut v: [__m256; 8] =
+                core::array::from_fn(|r| unsafe { _mm256_loadu_ps(src.add(r * frames + t)) });
+            transpose8x8(&mut v);
+            for vi in v.iter_mut() {
+                let mut x = *vi;
+                for k in 0..K {
+                    // y = b0*x + s1; s1 = (b1*x - a1*y) + s2; s2 = b2*x - a2*y
+                    let y = _mm256_add_ps(_mm256_mul_ps(b0[k], x), s1[k]);
+                    s1[k] = _mm256_add_ps(
+                        _mm256_sub_ps(_mm256_mul_ps(b1[k], x), _mm256_mul_ps(a1[k], y)),
+                        s2[k],
+                    );
+                    s2[k] = _mm256_sub_ps(_mm256_mul_ps(b2[k], x), _mm256_mul_ps(a2[k], y));
+                    x = y;
+                }
+                *vi = x;
+            }
+            transpose8x8(&mut v);
+            for (r, vi) in v.iter().enumerate() {
+                // SAFETY: same bounds as the loads above.
+                unsafe { _mm256_storeu_ps(dst.add(r * frames + t), *vi) };
+            }
+            t += 8;
+        }
+
+        if t < frames {
+            // Tail frames: spill the vector states to per-row scalars and finish
+            // with the exact scalar recurrence (identical operand order).
+            let mut s1a = [[0.0f32; 8]; K];
+            let mut s2a = [[0.0f32; 8]; K];
+            for k in 0..K {
+                // SAFETY: arrays are 8 f32s; storeu has no alignment requirement.
+                unsafe {
+                    _mm256_storeu_ps(s1a[k].as_mut_ptr(), s1[k]);
+                    _mm256_storeu_ps(s2a[k].as_mut_ptr(), s2[k]);
+                }
+            }
+            for r in 0..8 {
+                for tt in t..frames {
+                    let mut x = input[r * frames + tt];
+                    for k in 0..K {
+                        let y = sos[k].b0 * x + s1a[k][r];
+                        s1a[k][r] = sos[k].b1 * x - sos[k].a1 * y + s2a[k][r];
+                        s2a[k][r] = sos[k].b2 * x - sos[k].a2 * y;
+                        x = y;
+                    }
+                    out[r * frames + tt] = x;
+                }
+            }
+        }
+    }
+
+    /// Canonical AVX2 8×8 f32 in-register transpose (unpack / shuffle / permute2f128).
+    #[inline(always)]
+    unsafe fn transpose8x8(v: &mut [__m256; 8]) {
+        let t0 = _mm256_unpacklo_ps(v[0], v[1]);
+        let t1 = _mm256_unpackhi_ps(v[0], v[1]);
+        let t2 = _mm256_unpacklo_ps(v[2], v[3]);
+        let t3 = _mm256_unpackhi_ps(v[2], v[3]);
+        let t4 = _mm256_unpacklo_ps(v[4], v[5]);
+        let t5 = _mm256_unpackhi_ps(v[4], v[5]);
+        let t6 = _mm256_unpacklo_ps(v[6], v[7]);
+        let t7 = _mm256_unpackhi_ps(v[6], v[7]);
+        let u0 = _mm256_shuffle_ps(t0, t2, 0x44);
+        let u1 = _mm256_shuffle_ps(t0, t2, 0xEE);
+        let u2 = _mm256_shuffle_ps(t1, t3, 0x44);
+        let u3 = _mm256_shuffle_ps(t1, t3, 0xEE);
+        let u4 = _mm256_shuffle_ps(t4, t6, 0x44);
+        let u5 = _mm256_shuffle_ps(t4, t6, 0xEE);
+        let u6 = _mm256_shuffle_ps(t5, t7, 0x44);
+        let u7 = _mm256_shuffle_ps(t5, t7, 0xEE);
+        v[0] = _mm256_permute2f128_ps(u0, u4, 0x20);
+        v[1] = _mm256_permute2f128_ps(u1, u5, 0x20);
+        v[2] = _mm256_permute2f128_ps(u2, u6, 0x20);
+        v[3] = _mm256_permute2f128_ps(u3, u7, 0x20);
+        v[4] = _mm256_permute2f128_ps(u0, u4, 0x31);
+        v[5] = _mm256_permute2f128_ps(u1, u5, 0x31);
+        v[6] = _mm256_permute2f128_ps(u2, u6, 0x31);
+        v[7] = _mm256_permute2f128_ps(u3, u7, 0x31);
+    }
 }
 
 #[cfg(test)]
@@ -1013,8 +1177,8 @@ mod tests {
                 let want = fluxion_ops::sos_filter(&flat[r * frames..(r + 1) * frames], &sos);
                 for (a, b) in got[r * frames..(r + 1) * frames].iter().zip(&want) {
                     assert!(
-                        (a - b).abs() < 1e-5,
-                        "rows={rows} frames={frames}: {a} vs {b}"
+                        a.to_bits() == b.to_bits(),
+                        "bit mismatch rows={rows} frames={frames}: {a} vs {b}"
                     );
                 }
             }

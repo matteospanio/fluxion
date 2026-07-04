@@ -187,7 +187,10 @@ pub fn sos_filter(input: &[f32], sos: &[Biquad]) -> Vec<f32> {
 }
 
 /// In-place [`sos_filter`], dispatching on cascade depth for register-resident state.
-fn sos_filter_in_place(data: &mut [f32], sos: &[Biquad]) {
+///
+/// Same fused single pass and bit-identical results; use this on an owned buffer to
+/// avoid `sos_filter`'s input copy and fresh output allocation.
+pub fn sos_filter_in_place(data: &mut [f32], sos: &[Biquad]) {
     match sos.len() {
         0 => {}
         1 => fused_cascade::<1>(data, sos),

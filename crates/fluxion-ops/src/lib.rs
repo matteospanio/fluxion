@@ -39,7 +39,8 @@ pub use effect::{
 pub use fir::{fft_convolve, fir_filter, fir_vjp};
 pub use iir::{
     Biquad, BiquadGrad, Sos, biquad_forward, biquad_vjp, butterworth_highpass, butterworth_lowpass,
-    sos_filter, sos_filter_interleaved, sos_filter_interleaved_chunk, sos_input_grad,
+    sos_filter, sos_filter_in_place, sos_filter_interleaved, sos_filter_interleaved_chunk,
+    sos_input_grad,
     sos_is_stable, sos_magnitude, sos_vjp,
 };
 pub use modulation::{chorus, flanger, phaser};
