@@ -14,3 +14,23 @@ opt-level = 3
 
 [dependencies]
 cubecl = { version = "0.10", features = ["cuda"] }
+
+# Temporary: cubecl 0.10.0 + the create_with_data H2D fix (upstream PR pending,
+# https://github.com/tracel-ai/cubecl). Remove when the fix lands in a cubecl release.
+# All cubecl crates must come from the same source or the graph gets duplicate types.
+[patch.crates-io]
+cubecl = { git = "https://github.com/matteospanio/cubecl", branch = "fix-0.10/create-with-data-size-guard" }
+cubecl-common = { git = "https://github.com/matteospanio/cubecl", branch = "fix-0.10/create-with-data-size-guard" }
+cubecl-core = { git = "https://github.com/matteospanio/cubecl", branch = "fix-0.10/create-with-data-size-guard" }
+cubecl-cpp = { git = "https://github.com/matteospanio/cubecl", branch = "fix-0.10/create-with-data-size-guard" }
+cubecl-cpu = { git = "https://github.com/matteospanio/cubecl", branch = "fix-0.10/create-with-data-size-guard" }
+cubecl-cuda = { git = "https://github.com/matteospanio/cubecl", branch = "fix-0.10/create-with-data-size-guard" }
+cubecl-hip = { git = "https://github.com/matteospanio/cubecl", branch = "fix-0.10/create-with-data-size-guard" }
+cubecl-ir = { git = "https://github.com/matteospanio/cubecl", branch = "fix-0.10/create-with-data-size-guard" }
+cubecl-macros = { git = "https://github.com/matteospanio/cubecl", branch = "fix-0.10/create-with-data-size-guard" }
+cubecl-macros-internal = { git = "https://github.com/matteospanio/cubecl", branch = "fix-0.10/create-with-data-size-guard" }
+cubecl-opt = { git = "https://github.com/matteospanio/cubecl", branch = "fix-0.10/create-with-data-size-guard" }
+cubecl-runtime = { git = "https://github.com/matteospanio/cubecl", branch = "fix-0.10/create-with-data-size-guard" }
+cubecl-std = { git = "https://github.com/matteospanio/cubecl", branch = "fix-0.10/create-with-data-size-guard" }
+cubecl-wgpu = { git = "https://github.com/matteospanio/cubecl", branch = "fix-0.10/create-with-data-size-guard" }
+cubecl-zspace = { git = "https://github.com/matteospanio/cubecl", branch = "fix-0.10/create-with-data-size-guard" }
