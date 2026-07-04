@@ -173,22 +173,54 @@ pub fn biquad_forward(input: &[f32], bq: &Biquad) -> Vec<f32> {
 
 /// Filter one channel through a cascade of sections.
 ///
-/// Fused in registers: one output buffer total, each section run in place with its
-/// Direct-Form-II-Transposed state pair — no per-section allocation (plan task C6). Sample-for-sample
-/// identical to chaining [`biquad_forward`] (same recurrence, same operation order).
+/// Fully fused: one pass over the signal, all `K` section states held in registers
+/// (monomorphized per `K ≤ 8`; longer cascades run in fused passes of 8). Per-section
+/// passes are latency-bound on the ~12-cycle `y→s1→y` dependency chain of each section;
+/// fusing the cascade per sample lets the K independent section chains pipeline in the
+/// out-of-order core and reads the signal once instead of K times. Sample-for-sample
+/// identical to chaining [`biquad_forward`]: every (section, sample) computation keeps
+/// the exact same operands and operation order, only the loop nest is interchanged.
 pub fn sos_filter(input: &[f32], sos: &[Biquad]) -> Vec<f32> {
     let mut data = input.to_vec();
-    for bq in sos {
-        let (mut s1, mut s2) = (0.0f32, 0.0f32);
-        for x in data.iter_mut() {
-            let xi = *x;
-            let y = bq.b0 * xi + s1;
-            s1 = bq.b1 * xi - bq.a1 * y + s2;
-            s2 = bq.b2 * xi - bq.a2 * y;
-            *x = y;
+    sos_filter_in_place(&mut data, sos);
+    data
+}
+
+/// In-place [`sos_filter`], dispatching on cascade depth for register-resident state.
+fn sos_filter_in_place(data: &mut [f32], sos: &[Biquad]) {
+    match sos.len() {
+        0 => {}
+        1 => fused_cascade::<1>(data, sos),
+        2 => fused_cascade::<2>(data, sos),
+        3 => fused_cascade::<3>(data, sos),
+        4 => fused_cascade::<4>(data, sos),
+        5 => fused_cascade::<5>(data, sos),
+        6 => fused_cascade::<6>(data, sos),
+        7 => fused_cascade::<7>(data, sos),
+        8 => fused_cascade::<8>(data, sos),
+        _ => {
+            for chunk in sos.chunks(8) {
+                sos_filter_in_place(data, chunk);
+            }
         }
     }
-    data
+}
+
+#[inline(always)]
+fn fused_cascade<const K: usize>(data: &mut [f32], sos: &[Biquad]) {
+    let bq: [Biquad; K] = core::array::from_fn(|k| sos[k]);
+    let mut s1 = [0.0f32; K];
+    let mut s2 = [0.0f32; K];
+    for x in data.iter_mut() {
+        let mut v = *x;
+        for k in 0..K {
+            let y = bq[k].b0 * v + s1[k];
+            s1[k] = bq[k].b1 * v - bq[k].a1 * y + s2[k];
+            s2[k] = bq[k].b2 * v - bq[k].a2 * y;
+            v = y;
+        }
+        *x = v;
+    }
 }
 
 /// Apply an SOS cascade to a **channel-interleaved** batch in place: `data[t * channels + c]` is
@@ -240,12 +272,19 @@ pub fn sos_filter_interleaved_chunk(
 }
 
 /// The interleaved cascade loop, monomorphized per ISA by the wrappers below.
+///
+/// Loop nest is frame-outer, section-inner: the per-section vector dependency chains
+/// (`y→s1→y`, ~12 cycles each) are independent across sections, so fusing the cascade
+/// per frame lets them pipeline in the out-of-order core instead of paying the full
+/// chain latency per section pass — and the block is read once instead of K times.
+/// Per-(section, frame, channel) arithmetic is unchanged, so results stay identical
+/// to the section-outer formulation.
 #[inline(always)]
 fn interleaved_impl(data: &mut [f32], channels: usize, sos: &[Biquad], state: &mut [f32]) {
-    for (bq, st) in sos.iter().zip(state.chunks_exact_mut(2 * channels)) {
-        let (s1, s2) = st.split_at_mut(channels);
-        let (b0, b1, b2, a1, a2) = (bq.b0, bq.b1, bq.b2, bq.a1, bq.a2);
-        for frame in data.chunks_exact_mut(channels) {
+    for frame in data.chunks_exact_mut(channels) {
+        for (bq, st) in sos.iter().zip(state.chunks_exact_mut(2 * channels)) {
+            let (s1, s2) = st.split_at_mut(channels);
+            let (b0, b1, b2, a1, a2) = (bq.b0, bq.b1, bq.b2, bq.a1, bq.a2);
             // Independent across channels → vectorizes. `s1`/`s2` don't alias `data`.
             for ((x, p1), p2) in frame.iter_mut().zip(s1.iter_mut()).zip(s2.iter_mut()) {
                 let xi = *x;

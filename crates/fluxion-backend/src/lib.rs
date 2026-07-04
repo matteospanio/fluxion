@@ -593,9 +593,18 @@ pub fn sos_filter_batch(rows: &[f32], frames: usize, sos: &[Biquad]) -> Vec<f32>
     if n_rows <= 1 || sos.is_empty() {
         return sos_filter(rows, sos);
     }
+    // Group size trades SIMD-lane fill (wider) against rayon task count (narrower):
+    // with few rows, fixed 16-row groups leave cores idle (64 rows = only 4 tasks),
+    // so shrink toward one 8-lane AVX vector per group until every thread has work.
+    let threads = rayon::current_num_threads().max(1);
+    let group = if n_rows / BATCH_GROUP >= threads {
+        BATCH_GROUP
+    } else {
+        (n_rows / threads).clamp(MIN_GROUP, BATCH_GROUP)
+    };
     let mut out = vec![0.0f32; rows.len()];
-    out.par_chunks_mut(BATCH_GROUP * frames)
-        .zip(rows.par_chunks(BATCH_GROUP * frames))
+    out.par_chunks_mut(group * frames)
+        .zip(rows.par_chunks(group * frames))
         .for_each(|(out_group, in_group)| filter_group(in_group, out_group, frames, sos));
     out
 }
@@ -603,6 +612,9 @@ pub fn sos_filter_batch(rows: &[f32], frames: usize, sos: &[Biquad]) -> Vec<f32>
 /// Rows per SIMD group in [`sos_filter_batch`]: wide enough to fill AVX lanes with headroom for
 /// superscalar overlap, narrow enough that a time-block's working set stays cache-resident.
 const BATCH_GROUP: usize = 16;
+
+/// Smallest useful group: one AVX2 f32 vector of rows.
+const MIN_GROUP: usize = 8;
 
 /// Frames per time-block inside a group. The interleave/deinterleave transposes only ever touch
 /// `BATCH_GROUP × BLOCK_FRAMES` floats (≈256 KB) of hot scratch, while the big planar buffers are
