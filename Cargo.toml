@@ -29,8 +29,9 @@ all = "warn"
 lto = "thin"
 codegen-units = 1
 
-# Temporary: cubecl 0.10.0 + the create_with_data H2D fix (upstream PR pending,
-# https://github.com/tracel-ai/cubecl). Remove when the fix lands in a cubecl release.
+# Temporary: cubecl 0.10.0 + pipelined pinned staging for large H2D uploads
+# (upstream PR: https://github.com/tracel-ai/cubecl/pull/1404).
+# Remove when the fix lands in a cubecl release.
 # All cubecl crates must come from the same source or the graph gets duplicate types.
 [patch.crates-io]
 cubecl = { git = "https://github.com/matteospanio/cubecl", branch = "fix-0.10/create-with-data-size-guard" }

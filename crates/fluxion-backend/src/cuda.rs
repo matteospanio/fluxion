@@ -67,12 +67,20 @@ fn sos_kernel<F: Float>(
 /// Filter a flat batch of `input.len() / frames` rows (each `frames` samples, contiguous) through
 /// the SOS cascade on the GPU. Equivalent to applying [`fluxion_ops::sos_filter`] to each row.
 ///
-/// The kernel compute is ~59× a CPU core, but this entry uploads the input and downloads the output
-/// each call, so a one-shot batch is **transfer-bound** (~430 ms for 67 Msamples — slower than the
-/// CPU). It pays off when the data is already resident and reused across many launches; that resident
-/// path (and the differentiable GPU forward/backward) is the next step. The CubeCL client is cached
-/// (the module-level `client`) so the JIT'd kernel is reused across calls.
+/// Borrowed-slice convenience wrapper over [`sos_filter_batch_owned`]; the copy into an owned
+/// buffer is the price of the borrow (the runtime needs owned data for its async upload).
 pub fn sos_filter_batch(input: &[f32], frames: usize, sos: &[Biquad]) -> Vec<f32> {
+    sos_filter_batch_owned(input.to_vec(), frames, sos)
+}
+
+/// [`sos_filter_batch`] taking ownership of the input: the buffer is handed to the runtime
+/// zero-copy and uploaded through pipelined pinned staging (~6.4 GB/s on PCIe 3.0 with the
+/// patched CubeCL — see the cubecl fork note in the workspace Cargo.toml).
+///
+/// One-shot calls are **transfer-bound**: the kernel is a ~23 ms sliver in a ~106 ms round trip
+/// for 67 Msamples. The GPU pays off when data is resident and reused across launches; the CubeCL
+/// client is cached (module-level `client`) so the JIT'd kernel is reused across calls.
+pub fn sos_filter_batch_owned(input: Vec<f32>, frames: usize, sos: &[Biquad]) -> Vec<f32> {
     assert!(frames > 0 && !sos.is_empty() && !input.is_empty() && input.len() % frames == 0);
     let n = input.len();
     let rows = n / frames;
@@ -82,7 +90,7 @@ pub fn sos_filter_batch(input: &[f32], frames: usize, sos: &[Biquad]) -> Vec<f32
         .collect();
 
     let client = client();
-    let in_h = client.create_from_slice(f32::as_bytes(input));
+    let in_h = client.create(cubecl::bytes::Bytes::from_elems(input));
     let out_h = client.empty(n * std::mem::size_of::<f32>()); // no 268 MB zero-upload
     let co_h = client.create_from_slice(f32::as_bytes(&flat));
 
