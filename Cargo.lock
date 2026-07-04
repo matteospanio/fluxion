@@ -1598,7 +1598,7 @@ dependencies = [
 [[package]]
 name = "cubecl"
 version = "0.10.0"
-source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#03dd2d860d2e913a015568cb0b8755e15ebad630"
+source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#c56570acb9884f8b50e44389b6a0c25bff528cd7"
 dependencies = [
  "cubecl-core",
  "cubecl-cpu",
@@ -1614,7 +1614,7 @@ dependencies = [
 [[package]]
 name = "cubecl-common"
 version = "0.10.0"
-source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#03dd2d860d2e913a015568cb0b8755e15ebad630"
+source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#c56570acb9884f8b50e44389b6a0c25bff528cd7"
 dependencies = [
  "backtrace",
  "bytemuck",
@@ -1655,7 +1655,7 @@ dependencies = [
 [[package]]
 name = "cubecl-core"
 version = "0.10.0"
-source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#03dd2d860d2e913a015568cb0b8755e15ebad630"
+source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#c56570acb9884f8b50e44389b6a0c25bff528cd7"
 dependencies = [
  "bitflags 2.13.0",
  "bytemuck",
@@ -1682,7 +1682,7 @@ dependencies = [
 [[package]]
 name = "cubecl-cpp"
 version = "0.10.0"
-source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#03dd2d860d2e913a015568cb0b8755e15ebad630"
+source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#c56570acb9884f8b50e44389b6a0c25bff528cd7"
 dependencies = [
  "bytemuck",
  "cubecl-common",
@@ -1698,7 +1698,7 @@ dependencies = [
 [[package]]
 name = "cubecl-cpu"
 version = "0.10.0"
-source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#03dd2d860d2e913a015568cb0b8755e15ebad630"
+source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#c56570acb9884f8b50e44389b6a0c25bff528cd7"
 dependencies = [
  "bytemuck",
  "cubecl-common",
@@ -1719,7 +1719,7 @@ dependencies = [
 [[package]]
 name = "cubecl-cuda"
 version = "0.10.0"
-source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#03dd2d860d2e913a015568cb0b8755e15ebad630"
+source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#c56570acb9884f8b50e44389b6a0c25bff528cd7"
 dependencies = [
  "bytemuck",
  "cubecl-common",
@@ -1737,7 +1737,7 @@ dependencies = [
 [[package]]
 name = "cubecl-hip"
 version = "0.10.0"
-source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#03dd2d860d2e913a015568cb0b8755e15ebad630"
+source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#c56570acb9884f8b50e44389b6a0c25bff528cd7"
 dependencies = [
  "bytemuck",
  "cubecl-common",
@@ -1766,7 +1766,7 @@ dependencies = [
 [[package]]
 name = "cubecl-ir"
 version = "0.10.0"
-source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#03dd2d860d2e913a015568cb0b8755e15ebad630"
+source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#c56570acb9884f8b50e44389b6a0c25bff528cd7"
 dependencies = [
  "cubecl-common",
  "cubecl-macros-internal",
@@ -1787,7 +1787,7 @@ dependencies = [
 [[package]]
 name = "cubecl-macros"
 version = "0.10.0"
-source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#03dd2d860d2e913a015568cb0b8755e15ebad630"
+source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#c56570acb9884f8b50e44389b6a0c25bff528cd7"
 dependencies = [
  "cubecl-common",
  "darling 0.23.0",
@@ -1803,7 +1803,7 @@ dependencies = [
 [[package]]
 name = "cubecl-macros-internal"
 version = "0.10.0"
-source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#03dd2d860d2e913a015568cb0b8755e15ebad630"
+source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#c56570acb9884f8b50e44389b6a0c25bff528cd7"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",
@@ -1814,7 +1814,7 @@ dependencies = [
 [[package]]
 name = "cubecl-opt"
 version = "0.10.0"
-source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#03dd2d860d2e913a015568cb0b8755e15ebad630"
+source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#c56570acb9884f8b50e44389b6a0c25bff528cd7"
 dependencies = [
  "cubecl-common",
  "cubecl-core",
@@ -1831,7 +1831,7 @@ dependencies = [
 [[package]]
 name = "cubecl-runtime"
 version = "0.10.0"
-source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#03dd2d860d2e913a015568cb0b8755e15ebad630"
+source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#c56570acb9884f8b50e44389b6a0c25bff528cd7"
 dependencies = [
  "ahash",
  "async-channel",
@@ -1861,7 +1861,7 @@ dependencies = [
 [[package]]
 name = "cubecl-std"
 version = "0.10.0"
-source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#03dd2d860d2e913a015568cb0b8755e15ebad630"
+source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#c56570acb9884f8b50e44389b6a0c25bff528cd7"
 dependencies = [
  "cubecl-common",
  "cubecl-core",
@@ -1877,7 +1877,7 @@ dependencies = [
 [[package]]
 name = "cubecl-wgpu"
 version = "0.10.0"
-source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#03dd2d860d2e913a015568cb0b8755e15ebad630"
+source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#c56570acb9884f8b50e44389b6a0c25bff528cd7"
 dependencies = [
  "async-channel",
  "bytemuck",
@@ -1901,7 +1901,7 @@ dependencies = [
 [[package]]
 name = "cubecl-zspace"
 version = "0.10.0"
-source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#03dd2d860d2e913a015568cb0b8755e15ebad630"
+source = "git+https://github.com/matteospanio/cubecl?branch=fix-0.10%2Fcreate-with-data-size-guard#c56570acb9884f8b50e44389b6a0c25bff528cd7"
 dependencies = [
  "derive-new",
  "serde",
@@ -3030,7 +3030,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.18",
- "windows 0.62.2",
+ "windows 0.54.0",
 ]
 
 [[package]]

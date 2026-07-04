@@ -3,10 +3,14 @@
 //!
 //! - **resident reused-out** — input + output stay on the GPU (pure kernel).
 //! - **resident alloc-out** — output allocated per call (matches torchfx returning a new tensor).
-//! - **one-shot transfer** — upload input + download output per call (the "filter a file" path).
+//! - **one-shot borrowed** — upload via `create_from_slice` (pays cubecl's internal defensive
+//!   copy of the borrowed slice) + download per call.
+//! - **one-shot shared** — upload via `create(Bytes::from_shared(..))`, zero client-side copy:
+//!   the same semantics as torch uploading a pre-existing CPU tensor.
 
 use cubecl::cuda::CudaRuntime;
 use cubecl::prelude::*;
+use cubecl_common::bytes::{AllocationProperty, Bytes as HostBytes};
 use std::time::Instant;
 
 #[cube(launch)]
@@ -93,5 +97,19 @@ fn main() {
         let _ = client.read_one(oh).unwrap();
     }
     let el = t0.elapsed().as_secs_f64() / k as f64;
-    println!("fluxion GPU one-shot transfer   : {:6.3} ms   {:7.0} Msamples/s", el * 1000.0, msamp / el);
+    println!("fluxion GPU one-shot borrowed   : {:6.3} ms   {:7.0} Msamples/s", el * 1000.0, msamp / el);
+
+    let shared = bytes::Bytes::from(f32::as_bytes(&input).to_vec());
+    let t0 = Instant::now();
+    for _ in 0..k {
+        let ih = client.create(HostBytes::from_shared(shared.clone(), AllocationProperty::Native));
+        let oh = client.empty(n * 4);
+        sos_kernel::launch::<f32, R>(&client, CubeCount::Static(cubes, 1, 1), dim,
+            unsafe { ArrayArg::from_raw_parts(ih, n) },
+            unsafe { ArrayArg::from_raw_parts(oh.clone(), n) },
+            unsafe { ArrayArg::from_raw_parts(co_h.clone(), nc) }, frames, ns);
+        let _ = client.read_one(oh).unwrap();
+    }
+    let el = t0.elapsed().as_secs_f64() / k as f64;
+    println!("fluxion GPU one-shot shared     : {:6.3} ms   {:7.0} Msamples/s", el * 1000.0, msamp / el);
 }

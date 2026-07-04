@@ -14,6 +14,8 @@ opt-level = 3
 
 [dependencies]
 cubecl = { version = "0.10", features = ["cuda"] }
+cubecl-common = { version = "0.10", features = ["shared-bytes"] }
+bytes = "1"
 
 # Temporary: cubecl 0.10.0 + the create_with_data H2D fix (upstream PR pending,
 # https://github.com/tracel-ai/cubecl). Remove when the fix lands in a cubecl release.
