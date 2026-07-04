@@ -278,7 +278,8 @@ impl Backend for Cpu {
     }
     fn fir(&self, mut x: Vec<Vec<f32>>, taps: &[f32]) -> Vec<Vec<f32>> {
         for ch in &mut x {
-            *ch = fir_filter(ch, taps);
+            // Size-aware: overlap-save above the FFT threshold (long kernels).
+            *ch = fluxion_ops::fir_filter_auto(ch, taps);
         }
         x
     }

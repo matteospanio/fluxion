@@ -60,6 +60,82 @@ pub fn fft_convolve(input: &[f32], taps: &[f32]) -> Vec<f32> {
     xs[..n].iter().map(|c| c.re * scale).collect()
 }
 
+/// [`fir_filter`] with size-aware routing: direct convolution for short kernels,
+/// [`overlap_save`] above [`FIR_FFT_THRESHOLD`] taps. Same causal, length-preserving
+/// semantics; the FFT path differs from direct summation only by f32 round-off
+/// (different, better-conditioned summation order — not bit-identical).
+pub fn fir_filter_auto(input: &[f32], taps: &[f32]) -> Vec<f32> {
+    if taps.len() >= FIR_FFT_THRESHOLD {
+        overlap_save(input, taps)
+    } else {
+        fir_filter(input, taps)
+    }
+}
+
+/// Tap count above which the FFT path wins: direct is `O(N·M)`, overlap-save is
+/// `O(N log M)`; the crossover on current x86/ARM cores sits near a few dozen taps —
+/// 64 keeps a safety margin for the short-kernel cache-friendly direct loop.
+pub const FIR_FFT_THRESHOLD: usize = 64;
+
+/// Causal FIR via **overlap-save**: the signal is processed in fixed FFT blocks
+/// (`fft_len = max(4·M, 4096)` rounded up to a power of two, `M` = taps), each block
+/// carrying `M−1` samples of history, so memory stays `O(fft_len)` regardless of the
+/// input length and the small FFTs stay cache-resident — the standard fast path for
+/// long kernels (convolution reverb). Output matches [`fir_filter`] (same length,
+/// causal) to f32 round-off.
+pub fn overlap_save(input: &[f32], taps: &[f32]) -> Vec<f32> {
+    let n = input.len();
+    let m = taps.len();
+    if n == 0 || m == 0 {
+        return vec![0.0f32; n];
+    }
+    let fft_len = (4 * m).max(4096).next_power_of_two();
+    let hop = fft_len - (m - 1); // new samples consumed per block
+
+    let mut planner = FftPlanner::new();
+    let fwd = planner.plan_fft_forward(fft_len);
+    let inv = planner.plan_fft_inverse(fft_len);
+
+    // Kernel spectrum, computed once.
+    let mut hs: Vec<Complex<f32>> = taps
+        .iter()
+        .map(|&v| Complex::new(v, 0.0))
+        .chain(std::iter::repeat(Complex::new(0.0, 0.0)))
+        .take(fft_len)
+        .collect();
+    fwd.process(&mut hs);
+
+    let scale = 1.0 / fft_len as f32;
+    let mut out = vec![0.0f32; n];
+    let mut buf = vec![Complex::new(0.0f32, 0.0); fft_len];
+
+    let mut pos = 0usize; // start of the new samples for this block
+    while pos < n {
+        // Block layout: [M-1 samples of history | up to `hop` new samples | zero pad].
+        for (i, c) in buf.iter_mut().enumerate() {
+            let idx = pos as isize - (m as isize - 1) + i as isize;
+            let v = if idx >= 0 && (idx as usize) < n {
+                input[idx as usize]
+            } else {
+                0.0
+            };
+            *c = Complex::new(v, 0.0);
+        }
+        fwd.process(&mut buf);
+        for (x, h) in buf.iter_mut().zip(&hs) {
+            *x *= *h;
+        }
+        inv.process(&mut buf);
+        // The first M-1 outputs are circularly aliased; the rest are valid.
+        let valid = hop.min(n - pos);
+        for (o, c) in out[pos..pos + valid].iter_mut().zip(&buf[m - 1..m - 1 + valid]) {
+            *o = c.re * scale;
+        }
+        pos += hop;
+    }
+    out
+}
+
 /// Analytic backward for [`fir_filter`]. Returns `(grad_input, grad_taps)` for `grad_out = ∂L/∂y`.
 pub fn fir_vjp(input: &[f32], taps: &[f32], grad_out: &[f32]) -> (Vec<f32>, Vec<f32>) {
     assert_eq!(
@@ -96,6 +172,28 @@ pub fn fir_vjp(input: &[f32], taps: &[f32], grad_out: &[f32]) -> (Vec<f32>, Vec<
 
 #[cfg(test)]
 mod tests {
+    use super::overlap_save;
+
+    #[test]
+    fn overlap_save_matches_direct() {
+        // Awkward sizes: kernel longer than a hop, input shorter than the kernel,
+        // non-power-of-two everything.
+        for (n, m) in [(4_800usize, 2_047usize), (10_000, 64), (100, 300), (4_096, 65)] {
+            let x: Vec<f32> = (0..n).map(|i| ((i as f32) * 0.137).sin()).collect();
+            let h: Vec<f32> = (0..m).map(|k| ((k as f32) * 0.03).cos() / m as f32).collect();
+            let want = fir_filter(&x, &h);
+            let got = overlap_save(&x, &h);
+            assert_eq!(got.len(), want.len());
+            let peak = want.iter().fold(0.0f32, |a, &v| a.max(v.abs())).max(1e-9);
+            for (i, (a, b)) in got.iter().zip(&want).enumerate() {
+                assert!(
+                    (a - b).abs() <= 1e-4 * peak.max(1.0),
+                    "n={n} m={m} i={i}: {a} vs {b}"
+                );
+            }
+        }
+    }
+
     use super::{fft_convolve, fir_filter, fir_vjp};
 
     #[test]

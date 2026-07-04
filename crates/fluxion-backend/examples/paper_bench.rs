@@ -49,6 +49,25 @@ fn emit(name: &str, params: &str, msamples: f64, secs: f64) {
 fn main() {
     let fs = 48_000u32;
 
+    // FIR long-kernel: 10 s mono, 2047 taps — the overlap-save path (the prior
+    // study's honest-loss cell vs torchaudio's FFT convolution).
+    {
+        let frames = 10 * fs as usize;
+        let x = signal(frames, 3);
+        let taps: Vec<f32> = (0..2047)
+            .map(|k| ((k as f32) * 0.011).sin() / 2047.0)
+            .collect();
+        let ms = frames as f64 / 1e6;
+        let s = median_secs(
+            || {
+                black_box(fluxion_ops::fir_filter_auto(black_box(&x), &taps));
+            },
+            2,
+            7,
+        );
+        emit("fir2047", "\"taps\":2047,\"seconds\":10", ms, s);
+    }
+
     // E1 `batch`: 64 mono signals x 524288 samples, order-6 Butterworth (3 sections).
     {
         let (rows, frames) = (64usize, 524_288usize);
