@@ -2644,6 +2644,7 @@ dependencies = [
  "criterion",
  "cubecl",
  "fluxion-core",
+ "fluxion-io",
  "fluxion-ops",
  "fluxion-rt",
  "mimalloc",
