@@ -24,7 +24,10 @@ const FS: u32 = 48_000;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let watch = args.get(1).cloned().unwrap_or_else(|| "/tmp/hotswap".into());
+    let watch = args
+        .get(1)
+        .cloned()
+        .unwrap_or_else(|| "/tmp/hotswap".into());
     let buffer: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(128);
     let total: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0); // 0 = until stop file
     let fade_blocks: u32 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(16);
@@ -66,7 +69,9 @@ fn main() {
                 let graph = match fxg::load(&path) {
                     Ok(g) => g,
                     Err(e) => {
-                        println!("{{\"event\":\"load-error\",\"file\":\"{name}\",\"err\":\"{e}\"}}");
+                        println!(
+                            "{{\"event\":\"load-error\",\"file\":\"{name}\",\"err\":\"{e}\"}}"
+                        );
                         continue;
                     }
                 };
@@ -79,18 +84,26 @@ fn main() {
                     continue;
                 }
                 let Some(frozen) = freeze(&graph, FS) else {
-                    println!("{{\"event\":\"REJECTED\",\"file\":\"{name}\",\"verdict\":\"not-lowerable\"}}");
+                    println!(
+                        "{{\"event\":\"REJECTED\",\"file\":\"{name}\",\"verdict\":\"not-lowerable\"}}"
+                    );
                     continue;
                 };
                 let sos: Vec<fluxion_ops::Biquad> = frozen
                     .sections
                     .iter()
                     .map(|c| fluxion_ops::Biquad {
-                        b0: c[0], b1: c[1], b2: c[2], a1: c[3], a2: c[4],
+                        b0: c[0],
+                        b1: c[1],
+                        b2: c[2],
+                        a1: c[3],
+                        a2: c[4],
                     })
                     .collect();
                 let Some(cmd) = SetCoeffs::new(0, &sos, fade_samples) else {
-                    println!("{{\"event\":\"REJECTED\",\"file\":\"{name}\",\"verdict\":\"too-many-sections\"}}");
+                    println!(
+                        "{{\"event\":\"REJECTED\",\"file\":\"{name}\",\"verdict\":\"too-many-sections\"}}"
+                    );
                     continue;
                 };
                 let _ = tx.push(cmd);

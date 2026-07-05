@@ -105,13 +105,16 @@ pub enum RtGraph {
         g: f32,
     },
     /// Direct-form FIR: `y[n] = Σ_k taps[k]·x[n-k]` (the realtime form of a trained/frozen FIR).
-    /// `ring` holds the last `taps.len()` inputs; `idx` is the write cursor.
+    /// `taps_rev` stores the taps reversed once at construction; `ring` is a *doubled* history
+    /// buffer (each sample written twice, `taps` apart), so every history window is one
+    /// contiguous slice and the per-sample work is a single forward dot product — no modulo,
+    /// no wrap handling in the hot loop.
     Fir {
-        /// Filter taps.
-        taps: Vec<f32>,
-        /// Input history (`taps.len()` samples).
+        /// Filter taps, reversed (`taps_rev[i] = taps[n-1-i]`).
+        taps_rev: Vec<f32>,
+        /// Doubled input history (`2·taps` samples; `ring[i] == ring[i+taps]`).
         ring: Vec<f32>,
-        /// Write cursor into `ring`.
+        /// Write cursor into the first half of `ring`.
         idx: usize,
     },
     /// Feed-forward compressor / expander (compand): a one-pole peak-envelope follower driving a
@@ -217,13 +220,16 @@ impl RtGraph {
     }
 
     /// A direct-form FIR leaf from a tap vector — the realtime form of a frozen/trained FIR:
-    /// `y[n] = Σ_k taps[k]·x[n-k]`. The `taps.len()`-sample history is allocated here, so
+    /// `y[n] = Σ_k taps[k]·x[n-k]`. The doubled history buffer is allocated here, so
     /// [`process`](Self::process) stays alloc-free.
     pub fn fir(taps: Vec<f32>) -> Self {
         let n = taps.len().max(1);
+        let mut taps_rev = taps;
+        taps_rev.resize(n, 0.0); // n >= 1 even for an empty tap vector
+        taps_rev.reverse();
         RtGraph::Fir {
-            taps,
-            ring: vec![0.0; n],
+            taps_rev,
+            ring: vec![0.0; 2 * n],
             idx: 0,
         }
     }
@@ -448,15 +454,20 @@ impl RtGraph {
                     }
                 }
             }
-            RtGraph::Fir { taps, ring, idx } => {
-                let n = ring.len();
+            RtGraph::Fir {
+                taps_rev,
+                ring,
+                idx,
+            } => {
+                let n = taps_rev.len();
                 for (o, &x) in output.iter_mut().zip(input) {
-                    ring[*idx] = x; // x[n] at idx; x[n-k] at (idx + n - k) mod n
-                    let mut acc = 0.0f32;
-                    for (k, &h) in taps.iter().enumerate() {
-                        acc += h * ring[(*idx + n - k) % n];
-                    }
-                    *o = acc;
+                    // Write twice, `n` apart: the window ending at the newest sample is
+                    // then contiguous at ring[idx+1 ..= idx+n], oldest -> newest, which
+                    // pairs with the reversed taps as one forward dot product.
+                    ring[*idx] = x;
+                    ring[*idx + n] = x;
+                    let window = &ring[*idx + 1..*idx + 1 + n];
+                    *o = dot_multi_acc(taps_rev, window);
                     *idx += 1;
                     if *idx == n {
                         *idx = 0;
@@ -616,8 +627,74 @@ impl SetCoeffs {
     }
 }
 
+
+/// Dot product with four independent accumulators: breaks the serial float-add
+/// dependency chain so the loop pipelines (and autovectorizes) instead of paying
+/// one add latency per tap. The summation order differs from a single-accumulator
+/// loop only at f32 round-off — the same tolerance class as the offline
+/// overlap-save FIR path.
+#[inline]
+fn dot_multi_acc(a: &[f32], b: &[f32]) -> f32 {
+    debug_assert_eq!(a.len(), b.len());
+    let mut acc = [0.0f32; 4];
+    let chunks = a.len() / 4;
+    for i in 0..chunks {
+        let a4 = &a[4 * i..4 * i + 4];
+        let b4 = &b[4 * i..4 * i + 4];
+        acc[0] += a4[0] * b4[0];
+        acc[1] += a4[1] * b4[1];
+        acc[2] += a4[2] * b4[2];
+        acc[3] += a4[3] * b4[3];
+    }
+    let mut tail = 0.0f32;
+    for i in 4 * chunks..a.len() {
+        tail += a[i] * b[i];
+    }
+    (acc[0] + acc[1]) + (acc[2] + acc[3]) + tail
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fir_1024_taps_matches_offline_and_is_chunk_invariant() {
+        // The soundlamp case-study load: a dense 1024-tap FIR. The RT node must
+        // match the offline direct convolution within f32 accumulation
+        // round-off (the multi-accumulator dot reorders the sum), and be
+        // exactly invariant to block-size choice.
+        let taps: Vec<f32> = (0..1024)
+            .map(|k| ((k as f32) * 0.013).sin() / 64.0)
+            .collect();
+        let x: Vec<f32> = (0..10_000).map(|i| ((i as f32) * 0.07).sin()).collect();
+        let want = fluxion_ops::fir_filter(&x, &taps);
+
+        let mut g = RtGraph::fir(taps.clone());
+        g.prepare(512);
+        let mut got = vec![0.0f32; x.len()];
+        for (i_chunk, o_chunk) in x.chunks(512).zip(got.chunks_mut(512)) {
+            g.process(i_chunk, o_chunk);
+        }
+        let peak = want.iter().fold(0.0f32, |a, &v| a.max(v.abs())).max(1.0);
+        for (i, (a, b)) in got.iter().zip(&want).enumerate() {
+            assert!(
+                (a - b).abs() <= 1e-4 * peak,
+                "offline mismatch at {i}: {a} vs {b}"
+            );
+        }
+
+        // Chunk invariance must be exact: same node semantics per sample.
+        let mut g2 = RtGraph::fir(taps);
+        g2.prepare(128);
+        let mut got2 = vec![0.0f32; x.len()];
+        for (i_chunk, o_chunk) in x.chunks(128).zip(got2.chunks_mut(128)) {
+            g2.process(i_chunk, o_chunk);
+        }
+        assert_eq!(
+            got.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            got2.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            "block size must not change FIR output"
+        );
+    }
+
     use super::RtGraph;
     use fluxion_ops::{
         butterworth_highpass, butterworth_lowpass, compand, delay, echo, fir_filter, reverb,

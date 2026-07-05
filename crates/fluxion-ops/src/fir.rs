@@ -128,7 +128,10 @@ pub fn overlap_save(input: &[f32], taps: &[f32]) -> Vec<f32> {
         inv.process(&mut buf);
         // The first M-1 outputs are circularly aliased; the rest are valid.
         let valid = hop.min(n - pos);
-        for (o, c) in out[pos..pos + valid].iter_mut().zip(&buf[m - 1..m - 1 + valid]) {
+        for (o, c) in out[pos..pos + valid]
+            .iter_mut()
+            .zip(&buf[m - 1..m - 1 + valid])
+        {
             *o = c.re * scale;
         }
         pos += hop;
@@ -178,9 +181,16 @@ mod tests {
     fn overlap_save_matches_direct() {
         // Awkward sizes: kernel longer than a hop, input shorter than the kernel,
         // non-power-of-two everything.
-        for (n, m) in [(4_800usize, 2_047usize), (10_000, 64), (100, 300), (4_096, 65)] {
+        for (n, m) in [
+            (4_800usize, 2_047usize),
+            (10_000, 64),
+            (100, 300),
+            (4_096, 65),
+        ] {
             let x: Vec<f32> = (0..n).map(|i| ((i as f32) * 0.137).sin()).collect();
-            let h: Vec<f32> = (0..m).map(|k| ((k as f32) * 0.03).cos() / m as f32).collect();
+            let h: Vec<f32> = (0..m)
+                .map(|k| ((k as f32) * 0.03).cos() / m as f32)
+                .collect();
             let want = fir_filter(&x, &h);
             let got = overlap_save(&x, &h);
             assert_eq!(got.len(), want.len());

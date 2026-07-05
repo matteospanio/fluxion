@@ -4,7 +4,7 @@
 //! Reads a `.safetensors` state-dict and replays, in `f64`, the **exact**
 //! parameter→coefficient math of the source library, yielding `[b0, b1, b2, a1, a2]`
 //! sections (`a0` normalised to 1) ready for the certified freeze pipeline: chain
-//! into [`OpKind::Biquad`] ops, `certify_graph`, then `.fxg` / `FrozenSos`.
+//! into [`fluxion_core::OpKind::Biquad`] ops, `certify_graph`, then `.fxg` / `FrozenSos`.
 //! Certification deliberately stays with the caller (CLI `import`, fluxion-py) so
 //! this module carries no DSP dependencies.
 //!

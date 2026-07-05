@@ -705,71 +705,6 @@ pub(crate) fn cmd_synth(
     write_output(output, &out, enc)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{Wave, output_encoding, synth_channel};
-    use fluxion_io::WavEncoding;
-
-    #[test]
-    fn sine_hits_known_samples() {
-        // fs = 8000, f = 1000 -> period 8 samples: sin(pi*k/4). k=0 -> 0, k=2 -> +1, k=6 -> -1.
-        let ch = synth_channel(Wave::Sine, 1_000.0, 8_000, 8, 1.0);
-        assert!(ch[0].abs() < 1e-6, "sine must start at 0");
-        assert!((ch[2] - 1.0).abs() < 1e-5, "quarter period is the +peak");
-        assert!(
-            (ch[6] + 1.0).abs() < 1e-5,
-            "three-quarter period is the -peak"
-        );
-    }
-
-    #[test]
-    fn white_noise_stays_in_range() {
-        let gain = 0.5f32;
-        let ch = synth_channel(Wave::White, 0.0, 48_000, 4_096, gain);
-        assert!(
-            ch.iter().all(|&x| x.abs() <= gain),
-            "white noise must stay within ±gain"
-        );
-        // And it is actually noisy (not a constant).
-        let distinct = ch.iter().any(|&x| (x - ch[0]).abs() > 1e-6);
-        assert!(distinct, "white noise must vary");
-    }
-
-    #[test]
-    fn encoding_flags_map_to_wav_encoding() {
-        assert_eq!(
-            output_encoding(None, false, false).unwrap(),
-            WavEncoding::default()
-        );
-        assert_eq!(
-            output_encoding(Some(16), false, false).unwrap(),
-            WavEncoding {
-                bits: 16,
-                float: false,
-                dither: true
-            }
-        );
-        assert_eq!(
-            output_encoding(Some(24), false, true).unwrap(),
-            WavEncoding {
-                bits: 24,
-                float: false,
-                dither: false
-            }
-        );
-        assert_eq!(
-            output_encoding(None, true, false).unwrap(),
-            WavEncoding {
-                bits: 32,
-                float: true,
-                dither: false
-            }
-        );
-        assert!(output_encoding(Some(20), false, false).is_err());
-        assert!(output_encoding(Some(16), true, false).is_err()); // float needs 32-bit
-    }
-}
-
 /// Frames per streamed block: big enough to amortize per-block overhead, small enough
 /// that peak memory stays a few MB regardless of file length.
 const STREAM_BLOCK: usize = 65_536;
@@ -885,4 +820,69 @@ fn stream_blocks(
             .map_err(|e| format!("writing '{output}': {e}"))?;
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Wave, output_encoding, synth_channel};
+    use fluxion_io::WavEncoding;
+
+    #[test]
+    fn sine_hits_known_samples() {
+        // fs = 8000, f = 1000 -> period 8 samples: sin(pi*k/4). k=0 -> 0, k=2 -> +1, k=6 -> -1.
+        let ch = synth_channel(Wave::Sine, 1_000.0, 8_000, 8, 1.0);
+        assert!(ch[0].abs() < 1e-6, "sine must start at 0");
+        assert!((ch[2] - 1.0).abs() < 1e-5, "quarter period is the +peak");
+        assert!(
+            (ch[6] + 1.0).abs() < 1e-5,
+            "three-quarter period is the -peak"
+        );
+    }
+
+    #[test]
+    fn white_noise_stays_in_range() {
+        let gain = 0.5f32;
+        let ch = synth_channel(Wave::White, 0.0, 48_000, 4_096, gain);
+        assert!(
+            ch.iter().all(|&x| x.abs() <= gain),
+            "white noise must stay within ±gain"
+        );
+        // And it is actually noisy (not a constant).
+        let distinct = ch.iter().any(|&x| (x - ch[0]).abs() > 1e-6);
+        assert!(distinct, "white noise must vary");
+    }
+
+    #[test]
+    fn encoding_flags_map_to_wav_encoding() {
+        assert_eq!(
+            output_encoding(None, false, false).unwrap(),
+            WavEncoding::default()
+        );
+        assert_eq!(
+            output_encoding(Some(16), false, false).unwrap(),
+            WavEncoding {
+                bits: 16,
+                float: false,
+                dither: true
+            }
+        );
+        assert_eq!(
+            output_encoding(Some(24), false, true).unwrap(),
+            WavEncoding {
+                bits: 24,
+                float: false,
+                dither: false
+            }
+        );
+        assert_eq!(
+            output_encoding(None, true, false).unwrap(),
+            WavEncoding {
+                bits: 32,
+                float: true,
+                dither: false
+            }
+        );
+        assert!(output_encoding(Some(20), false, false).is_err());
+        assert!(output_encoding(Some(16), true, false).is_err()); // float needs 32-bit
+    }
 }

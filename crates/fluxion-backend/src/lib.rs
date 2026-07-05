@@ -13,9 +13,8 @@ use fluxion_core::{FrozenSos, Graph, Op, OpKind, Signal};
 use fluxion_ops::{
     Biquad, FadeShape, Sos, allpass, bandpass, butterworth_highpass, butterworth_lowpass,
     certify_sos, chebyshev1_highpass, chebyshev1_lowpass, chebyshev2_highpass, chebyshev2_lowpass,
-    chorus, compand, delay, echo, fade, fir_filter, flanger, gain, high_shelf, low_shelf,
-    normalize_peak, notch, overdrive, peaking, phaser, reverb, reverse, small_gain_certify,
-    sos_filter, tremolo,
+    chorus, compand, delay, echo, fade, flanger, gain, high_shelf, low_shelf, normalize_peak,
+    notch, overdrive, peaking, phaser, reverb, reverse, small_gain_certify, sos_filter, tremolo,
 };
 use fluxion_rt::RtGraph;
 use rayon::prelude::*;

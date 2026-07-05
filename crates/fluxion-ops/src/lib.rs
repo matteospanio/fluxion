@@ -36,12 +36,13 @@ pub use dynamics::{CompandCoeffs, compand};
 pub use effect::{
     FadeShape, fade, gain, gain_vjp, normalize_peak, normalize_vjp, overdrive, reverse, tremolo,
 };
-pub use fir::{FIR_FFT_THRESHOLD, fft_convolve, fir_filter, fir_filter_auto, fir_vjp, overlap_save};
+pub use fir::{
+    FIR_FFT_THRESHOLD, fft_convolve, fir_filter, fir_filter_auto, fir_vjp, overlap_save,
+};
 pub use iir::{
     Biquad, BiquadGrad, Sos, biquad_forward, biquad_vjp, butterworth_highpass, butterworth_lowpass,
     sos_filter, sos_filter_in_place, sos_filter_interleaved, sos_filter_interleaved_chunk,
-    sos_input_grad,
-    sos_is_stable, sos_magnitude, sos_vjp,
+    sos_input_grad, sos_is_stable, sos_magnitude, sos_vjp,
 };
 pub use modulation::{chorus, flanger, phaser};
 pub use rbj::{allpass, bandpass, high_shelf, low_shelf, notch, peaking};
