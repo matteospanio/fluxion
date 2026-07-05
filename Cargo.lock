@@ -2686,6 +2686,8 @@ dependencies = [
  "fluxion-core",
  "hound",
  "parquet",
+ "safetensors 0.7.0",
+ "serde_json",
  "symphonia",
 ]
 

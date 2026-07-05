@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 use std::f32::consts::PI;
 
-use fluxion::{OpKind, Signal, Unit, certify_graph, fxg, process, transform};
+use fluxion::{Graph, OpKind, Signal, Unit, certify_graph, fxg, process, transform};
 use fluxion_io::{
     AudioInfo, WavBlockWriter, WavEncoding, decode, decode_blocks, probe, probe_wav, read_wav,
     read_wav_blocks, read_wav_from, write_wav_encoded, write_wav_encoded_to,
@@ -393,6 +393,110 @@ pub(crate) fn cmd_compile(args: &[String], fs: Option<u32>, force: bool) -> Resu
     Ok(())
 }
 
+/// `fluxion import <ckpt.safetensors> <out.fxg>` — import a DDSP checkpoint trained elsewhere
+/// (FLAMO / torchfx state-dict) into the certified freeze pipeline: replay its param→coefficient
+/// math, chain the sections as raw `biquad` ops, certify, and write a standard `.fxg` graph that
+/// splices anywhere (`fluxion in.wav model.fxg out.wav`, `play`, hot-swap).
+///
+/// Leading `--flag value` pairs configure the conversion; the two positionals are input and
+/// output. `--project-stable` clamps each section into the Jury stability triangle before
+/// certification (for checkpoints trained without a stability constraint).
+pub(crate) fn cmd_import(args: &[String], fs: Option<u32>, force: bool) -> Result<(), String> {
+    use fluxion_io::checkpoint::{
+        FlamoBiquadType, ImportOptions, Kind, SvfType, import_safetensors,
+    };
+
+    let usage = "usage: fluxion import [--kind K] [--svf-type T] [--biquad-type T] \
+       [--eq-flo Hz] [--eq-fhi Hz] [--eq-max-gain dB] [--project-stable] \
+       <ckpt.safetensors> <out.fxg>   (with --fs for Hz-parameterised checkpoints)";
+
+    let mut opts = ImportOptions {
+        fs,
+        ..ImportOptions::default()
+    };
+    let mut project = false;
+    let mut i = 0;
+    while i < args.len() && args[i].starts_with("--") {
+        let flag = &args[i][2..];
+        if flag == "project-stable" {
+            project = true;
+            i += 1;
+            continue;
+        }
+        let value = args
+            .get(i + 1)
+            .ok_or_else(|| format!("missing value for --{flag}"))?;
+        match flag {
+            "kind" => {
+                opts.kind = Kind::from_name(value).ok_or_else(|| {
+                    format!(
+                        "unknown kind '{value}' \
+                         (auto|flamo-sos|flamo-svf|flamo-biquad|ddsp-lowpass|ddsp-highpass)"
+                    )
+                })?;
+            }
+            "svf-type" => {
+                opts.svf_type = SvfType::from_name(value).ok_or_else(|| {
+                    format!(
+                        "unknown SVF type '{value}' (general|lowpass|highpass|bandpass|\
+                         lowshelf|highshelf|peaking|notch)"
+                    )
+                })?;
+            }
+            "biquad-type" => {
+                opts.biquad_type = FlamoBiquadType::from_name(value)
+                    .ok_or_else(|| format!("unknown biquad type '{value}' (lowpass|highpass)"))?;
+            }
+            "eq-flo" => opts.eq.f_lo = f64::from(parse_value(value)?),
+            "eq-fhi" => opts.eq.f_hi = f64::from(parse_value(value)?),
+            "eq-max-gain" => opts.eq.max_gain_db = f64::from(parse_value(value)?),
+            _ => return Err(format!("unknown flag --{flag}\n{usage}")),
+        }
+        i += 2;
+    }
+    let rest = &args[i..];
+    if rest.len() != 2 {
+        return Err(usage.into());
+    }
+    let (src, out) = (&rest[0], &rest[1]);
+
+    let imported = import_safetensors(src, &opts).map_err(|e| format!("importing '{src}': {e}"))?;
+    for key in &imported.skipped {
+        eprintln!("note: skipped non-filter parameter '{key}'");
+    }
+
+    // Flatten -> optional Jury projection -> raw biquad graph.
+    let mut coeffs: Vec<f32> = imported.sections.iter().flatten().copied().collect();
+    if project {
+        fluxion::project_stable_flat(&mut coeffs, 1e-3);
+    }
+    let mut nodes = coeffs
+        .chunks_exact(5)
+        .map(|c| Graph::op(OpKind::Biquad, [c[0], c[1], c[2], c[3], c[4]]));
+    let first = nodes.next().ok_or("checkpoint produced no sections")?;
+    let graph = nodes.fold(first, |acc, n| acc | n);
+
+    // Same stability gate as `compile`. The certificate is pole-based, so the fs
+    // here only labels the report.
+    let design_fs = imported.fs.or(fs).unwrap_or(48_000);
+    let cert = certify_graph(&graph, design_fs);
+    eprintln!("stability: {cert}");
+    if !cert.verdict.is_shippable() && !force {
+        return Err(format!(
+            "refusing to write a {} graph; retry with --project-stable (Jury clamp) or --force",
+            cert.verdict
+        ));
+    }
+
+    fxg::save(&graph, out).map_err(|e| format!("writing '{out}': {e}"))?;
+    eprintln!(
+        "wrote {out}: {} raw biquad section(s), designed at {design_fs} Hz — process at the same \
+         rate (raw coefficients do not retune)",
+        imported.sections.len()
+    );
+    Ok(())
+}
+
 /// `fluxion effects [name]` — list every effect and geometry stage with params/units/defaults, or
 /// describe just one. This is the discoverability fix (`trailing_var_arg` swallows `--help`).
 pub(crate) fn cmd_effects(args: &[String]) -> Result<(), String> {
@@ -704,9 +808,13 @@ fn try_stream_process(
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("wav"));
     let probed_fs = if is_wav {
-        probe_wav(input).map_err(|e| format!("probing '{input}': {e}"))?.fs
+        probe_wav(input)
+            .map_err(|e| format!("probing '{input}': {e}"))?
+            .fs
     } else {
-        probe(input).map_err(|e| format!("probing '{input}': {e}"))?.fs
+        probe(input)
+            .map_err(|e| format!("probing '{input}': {e}"))?
+            .fs
     };
     let fs = fs_override.unwrap_or(probed_fs);
     if fs == 0 || fluxion::to_rt_graph(&graph, fs).is_none() {
@@ -768,11 +876,13 @@ fn stream_blocks(
             graphs[c].process(in_ch, &mut outs[c]);
         }
         if let Some(w) = writer.as_mut() {
-            w.write_block(&outs).map_err(|e| format!("writing '{output}': {e}"))?;
+            w.write_block(&outs)
+                .map_err(|e| format!("writing '{output}': {e}"))?;
         }
     }
     if let Some(w) = writer.take() {
-        w.finalize().map_err(|e| format!("writing '{output}': {e}"))?;
+        w.finalize()
+            .map_err(|e| format!("writing '{output}': {e}"))?;
     }
     Ok(true)
 }

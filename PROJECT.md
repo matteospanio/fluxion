@@ -69,9 +69,14 @@ CPU, ideally WASM/WebGPU).
    over `(B, T)` batches, exposed in Python (`fluxion.augment`) and from the CLI (`batch`).
 6. **Import DDSP modules trained in other frameworks.** Fluxion is not only integrable *into*
    host frameworks — it also *consumes* their artifacts: a checkpoint trained elsewhere (named
-   target: **FLAMO** SISO biquad/SVF cascades, via `safetensors` state-dicts) is replayed into
-   SOS coefficients (`fluxion.interop`) and from there frozen/played like any native graph.
-   MIMO banks and frequency-sampled FIRs are out of the first slice.
+   targets: **FLAMO** SISO `SOSFilter`/`SVF`/`Biquad` cascades and **torchfx.ddsp** learnable
+   filters, via `safetensors` state-dicts — `.pt`/`.onnx` parse on the Python side) is replayed
+   into SOS coefficients by a Rust converter (`fluxion-io::checkpoint`, feature `checkpoint`),
+   **stability-certified** (E8 ladder, with an opt-in Jury projection for unconstrained
+   checkpoints), and written as a standard raw-`biquad` `.fxg` that processes, plays, and
+   hot-swaps like any native graph (`fluxion import` verb /
+   `fluxion.interop.import_checkpoint`). MIMO banks and frequency-sampled FIRs stay out of
+   scope; the importer rejects them with actionable errors.
 
 ### The central tension (and its resolution)
 

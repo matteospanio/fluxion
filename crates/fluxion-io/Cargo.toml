@@ -20,6 +20,9 @@ workspace = true
 # heavy, so only dataset consumers pay for them (the augmentation goal). Kept out of the default
 # build per the placeholder-deps rule.
 parquet = ["dep:arrow", "dep:parquet"]
+# DDSP checkpoint import (FLAMO / torchfx state-dicts -> SOS sections, plan goal #6 / J13). Only
+# pulls the small pure-Rust `safetensors` reader; off by default per the placeholder-deps rule.
+checkpoint = ["dep:safetensors"]
 
 [dependencies]
 fluxion-core = { path = "../fluxion-core", version = "0.0.0" }
@@ -35,3 +38,9 @@ parquet = { version = "56", optional = true, default-features = false, features 
     "snap",
     "zstd",
 ] }
+# Checkpoint import (feature `checkpoint`): reads named tensors out of `.safetensors` state-dicts.
+# The version already resolved in the workspace lock (via burn-store) — pure Rust, tiny.
+safetensors = { version = "0.7", optional = true }
+
+[dev-dependencies]
+serde_json = "1"

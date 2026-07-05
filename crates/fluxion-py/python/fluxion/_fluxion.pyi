@@ -47,6 +47,25 @@ def fir(taps: list[float]) -> Chain: ...
 def sos_forward(x: F32, coeffs: F32) -> F32: ...
 def sos_backward(grad_out: F32, x: F32, coeffs: F32) -> tuple[F32, F32]: ...
 
+# Checkpoint import (FLAMO / torchfx DDSP): state-dict of named arrays -> certified
+# (n_sections, 5) [b0,b1,b2,a1,a2] rows + stability verdict/margin + embedded fs (if any).
+def import_state_dict(
+    tensors: dict[str, F32],
+    kind: str = "auto",
+    fs: int | None = None,
+    svf_type: str = "general",
+    biquad_type: str = "lowpass",
+    eq_f_lo: float = 40.0,
+    eq_f_hi: float = 16_000.0,
+    eq_max_gain_db: float = 18.0,
+    project_stable: bool = False,
+) -> tuple[F32, str, float, int | None]: ...
+
+# Chain (n_sections, 5) rows as raw biquad ops, certify at fs, write a standard .fxg graph.
+def save_biquad_fxg(
+    path: str, sections: F32, fs: int = 48_000, force: bool = False
+) -> tuple[str, float]: ...
+
 # True in the CUDA-built ("GPU") wheel, False in the default ("CPU") wheel.
 __cuda__: bool
 

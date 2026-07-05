@@ -15,13 +15,17 @@
     clippy::type_complexity
 )]
 
-use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods};
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use fluxion_core::{Graph, Op, OpKind, Signal};
-use fluxion_ops::{Biquad, sos_filter, sos_input_grad, sos_vjp};
+use fluxion_io::checkpoint::{
+    self, FlamoBiquadType, ImportOptions, Kind as CkptKind, StateDict, SvfType,
+    Tensor as CkptTensor,
+};
+use fluxion_ops::{Biquad, certify_sos, project_stable_flat, sos_filter, sos_input_grad, sos_vjp};
 
 fn make(kind: OpKind, params: Vec<f32>) -> PyResult<Chain> {
     let op = Op::new(kind, params).map_err(|e| PyValueError::new_err(e.to_string()))?;
@@ -341,6 +345,146 @@ fn sos_filter_batch_gpu<'py>(
     Ok(out.into_pyarray_bound(py))
 }
 
+// --- checkpoint import (FLAMO / torchfx DDSP state-dicts -> certified sections) ---------------
+
+/// Parse checkpoint-import options shared by [`import_state_dict`].
+#[allow(clippy::too_many_arguments)]
+fn ckpt_options(
+    kind: &str,
+    fs: Option<u32>,
+    svf_type: &str,
+    biquad_type: &str,
+    eq_f_lo: f64,
+    eq_f_hi: f64,
+    eq_max_gain_db: f64,
+) -> PyResult<ImportOptions> {
+    let mut opts = ImportOptions { fs, ..ImportOptions::default() };
+    opts.kind = CkptKind::from_name(kind)
+        .ok_or_else(|| PyValueError::new_err(format!("unknown kind '{kind}'")))?;
+    opts.svf_type = SvfType::from_name(svf_type)
+        .ok_or_else(|| PyValueError::new_err(format!("unknown svf_type '{svf_type}'")))?;
+    opts.biquad_type = FlamoBiquadType::from_name(biquad_type)
+        .ok_or_else(|| PyValueError::new_err(format!("unknown biquad_type '{biquad_type}'")))?;
+    opts.eq.f_lo = eq_f_lo;
+    opts.eq.f_hi = eq_f_hi;
+    opts.eq.max_gain_db = eq_max_gain_db;
+    Ok(opts)
+}
+
+/// Convert a state-dict of named arrays (FLAMO / torchfx DDSP checkpoint tensors) into SOS
+/// sections and certify them. Returns `(sections, verdict, margin, fs)` where `sections` is
+/// `(n_sections, 5)` `[b0,b1,b2,a1,a2]` (`a0` normalised), `verdict` is the stability ladder
+/// string (`certified-stable` / `marginally-stable` / …), and `fs` is a sample rate embedded in
+/// the artifact (if any). `project_stable=True` clamps each section into the Jury stability
+/// triangle before certification. The conversion math is the same Rust code the `fluxion import`
+/// CLI verb runs — see `fluxion-io::checkpoint`.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (tensors, kind="auto", fs=None, svf_type="general", biquad_type="lowpass",
+                    eq_f_lo=40.0, eq_f_hi=16_000.0, eq_max_gain_db=18.0, project_stable=false))]
+fn import_state_dict<'py>(
+    py: Python<'py>,
+    tensors: &Bound<'py, PyDict>,
+    kind: &str,
+    fs: Option<u32>,
+    svf_type: &str,
+    biquad_type: &str,
+    eq_f_lo: f64,
+    eq_f_hi: f64,
+    eq_max_gain_db: f64,
+    project_stable: bool,
+) -> PyResult<(Bound<'py, PyArray2<f32>>, String, f32, Option<u32>)> {
+    let opts = ckpt_options(kind, fs, svf_type, biquad_type, eq_f_lo, eq_f_hi, eq_max_gain_db)?;
+
+    // Any array-like / DLPack value -> contiguous float32 n-D numpy -> (shape, flat data).
+    let np = py.import_bound("numpy")?;
+    let mut sd = StateDict::new();
+    for (k, v) in tensors.iter() {
+        let key: String = k.extract()?;
+        let arr = if v.hasattr("__dlpack__")? {
+            np.call_method1("from_dlpack", (&v,))?
+        } else {
+            np.call_method1("asarray", (&v,))?
+        };
+        let kwargs = PyDict::new_bound(py);
+        kwargs.set_item("dtype", "float32")?;
+        let arr = np.call_method("ascontiguousarray", (arr,), Some(&kwargs))?;
+        let arr = arr
+            .downcast_into::<numpy::PyArrayDyn<f32>>()
+            .map_err(|e| PyValueError::new_err(format!("tensor '{key}': {e}")))?;
+        let ro = arr.readonly();
+        sd.insert(
+            key,
+            CkptTensor { shape: ro.shape().to_vec(), data: ro.as_slice()?.to_vec() },
+        );
+    }
+
+    let imported = checkpoint::sections_from_state_dict(&sd, &opts)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let mut coeffs: Vec<f32> = imported.sections.iter().flatten().copied().collect();
+    if project_stable {
+        project_stable_flat(&mut coeffs, 1e-3);
+    }
+    let sos = to_sos(&coeffs)?;
+    let cert = certify_sos(&sos);
+
+    let n = coeffs.len() / 5;
+    let arr = numpy::PyArray2::from_vec2_bound(
+        py,
+        &coeffs.chunks_exact(5).map(|c| c.to_vec()).collect::<Vec<_>>(),
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    debug_assert_eq!(arr.shape(), [n, 5]);
+    Ok((arr, cert.verdict.to_string(), cert.margin, imported.fs))
+}
+
+/// Chain `(n_sections, 5)` `[b0,b1,b2,a1,a2]` sections as raw `biquad` graph ops, certify at
+/// `fs`, and write a standard `.fxg` graph (the same artifact `fluxion compile`/`import` write —
+/// it splices into any CLI pipeline and hot-swaps). Refuses a non-shippable certificate unless
+/// `force=True`. Returns `(verdict, margin)`.
+#[pyfunction]
+#[pyo3(signature = (path, sections, fs=48_000, force=false))]
+fn save_biquad_fxg(
+    py: Python<'_>,
+    path: &str,
+    sections: &Bound<'_, PyAny>,
+    fs: u32,
+    force: bool,
+) -> PyResult<(String, f32)> {
+    let np = py.import_bound("numpy")?;
+    let kwargs = PyDict::new_bound(py);
+    kwargs.set_item("dtype", "float32")?;
+    let arr = np.call_method("ascontiguousarray", (sections,), Some(&kwargs))?;
+    let arr = arr
+        .downcast_into::<numpy::PyArrayDyn<f32>>()
+        .map_err(|e| PyValueError::new_err(format!("sections: {e}")))?;
+    let ro = arr.readonly();
+    if ro.shape().len() != 2 || ro.shape()[1] != 5 || ro.shape()[0] == 0 {
+        return Err(PyValueError::new_err(format!(
+            "sections must be a non-empty (n_sections, 5) array, got {:?}",
+            ro.shape()
+        )));
+    }
+    let flat = ro.as_slice()?;
+
+    let mut nodes = flat
+        .chunks_exact(5)
+        .map(|c| Graph::op(OpKind::Biquad, [c[0], c[1], c[2], c[3], c[4]]));
+    let first = nodes.next().expect("checked non-empty");
+    let graph = nodes.fold(first, |acc, n| acc | n);
+
+    let cert = fluxion_backend::certify_graph(&graph, fs);
+    if !cert.verdict.is_shippable() && !force {
+        return Err(PyValueError::new_err(format!(
+            "refusing to write a {} graph (margin {:.2e}); project or pass force=True",
+            cert.verdict, cert.margin
+        )));
+    }
+    fluxion_core::fxg::save(&graph, path)
+        .map_err(|e| PyValueError::new_err(format!("writing '{path}': {e}")))?;
+    Ok((cert.verdict.to_string(), cert.margin))
+}
+
 #[pymodule]
 fn _fluxion(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Chain>()?;
@@ -372,6 +516,8 @@ fn _fluxion(m: &Bound<'_, PyModule>) -> PyResult<()> {
         fir,
         sos_forward,
         sos_backward,
+        import_state_dict,
+        save_biquad_fxg,
     );
     Ok(())
 }

@@ -19,8 +19,30 @@ All notable changes to fluxion are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **CPU batch kernel: set-spreading tile** — `sos_filter_batch`'s AVX2 8-row path now
+  bounces each time block through a small padded-pitch scratch instead of loading the
+  planar rows at their raw stride. Power-of-two row strides (e.g. the 64×524k paper
+  workload's 2 MB) map all sixteen row streams to a single L1/L2 set on 8-way parts
+  and cap the kernel at LLC speed; the tile restores cache-resident loads for two
+  L2-resident copies. Measured on the i9-10900KF: 1.66 → 2.60 Gsamples/s multi-thread
+  (+57%, past TorchFX's OpenMP kernel at 1.89) for ≈5% single-thread; per-row outputs
+  stay bit-identical (asserted across tile boundaries and scalar tails).
+
 ### Added
 
+- **Checkpoint import (goal #6 / J13, full slice)** — run DDSP filters trained in other
+  frameworks: `fluxion import ckpt.safetensors model.fxg` (CLI) and
+  `fluxion.interop.import_checkpoint(...)` (Python; also parses `.pt` and `.onnx` and torchfx
+  compiled artifacts) replay the exact param→coefficient math of FLAMO
+  (`SOSFilter`/`SVF` all filter types/`Biquad`, realised `b`/`a`, RBJ tables) and torchfx.ddsp
+  (learnable lowpass/highpass/peaking/parametric-EQ) into raw `biquad` sections, **certify** them
+  on the stability ladder (E8; `--project-stable` Jury-clamps unstable checkpoints), and write a
+  standard `.fxg` that splices into any pipeline, plays realtime, and hot-swaps. Rust converter in
+  `fluxion-io::checkpoint` (feature `checkpoint`, pure-Rust `safetensors` reader); golden-tested
+  against 15 real FLAMO/torchfx checkpoints. SISO only; MIMO banks and FIR taps are rejected with
+  clear errors.
 - **Filters & effects** — Butterworth and Chebyshev I/II low/high-pass; RBJ biquads (peaking,
   low/high shelf, notch, band-pass, all-pass) and a raw-coefficient `biquad`; FIR (plus FFT
   convolution); gain, normalize, delay (integer + fractional), echo, and Schroeder–Moorer reverb;

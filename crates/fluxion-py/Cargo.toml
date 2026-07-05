@@ -32,6 +32,9 @@ numpy = "0.22"
 fluxion-core = { path = "../fluxion-core" }
 fluxion-ops = { path = "../fluxion-ops" }
 fluxion-backend = { path = "../fluxion-backend" }
+# Checkpoint import (plan goal #6 / J13): the same Rust converter the CLI uses, so the
+# Python lane replays identical math. Pulls fluxion-io's audio deps at compile time only.
+fluxion-io = { path = "../fluxion-io", features = ["checkpoint"] }
 
 [profile.release]
 lto = "thin"

@@ -24,7 +24,8 @@
 //! (compile past a bad stability certificate).
 //!
 //! Other verbs: `info`/`soxi` (metadata), `stat` (signal statistics), `effects [name]` (discover the
-//! grammar), `synth` (generate a tone/noise), `compile` (freeze a chain to a `.fxg` graph), `batch`
+//! grammar), `synth` (generate a tone/noise), `compile` (freeze a chain to a `.fxg` graph),
+//! `import` (convert a FLAMO / torchfx DDSP checkpoint to a certified `.fxg`), `batch`
 //! (glob → directory), and `play`/`record` (feature `realtime`). A `.fxg` file drops into a pipeline
 //! as if it were an effect: `fluxion in.wav chain.fxg out.wav`.
 
@@ -37,7 +38,7 @@ mod realtime;
 mod verbs;
 
 use verbs::{
-    cmd_batch, cmd_compile, cmd_effects, cmd_info, cmd_process, cmd_stat, cmd_synth,
+    cmd_batch, cmd_compile, cmd_effects, cmd_import, cmd_info, cmd_process, cmd_stat, cmd_synth,
     output_encoding,
 };
 
@@ -69,7 +70,7 @@ struct Cli {
     #[arg(long = "no-dither")]
     no_dither: bool,
 
-    /// `compile`: write the graph even if its stability certificate is not shippable.
+    /// `compile`/`import`: write the graph even if its stability certificate is not shippable.
     #[arg(long)]
     force: bool,
 
@@ -100,6 +101,7 @@ fn run(cli: Cli) -> Result<(), String> {
         Some("stat") => cmd_stat(&cli.args[1..]),
         Some("effects") => cmd_effects(&cli.args[1..]),
         Some("compile") => cmd_compile(&cli.args[1..], cli.fs, cli.force),
+        Some("import") => cmd_import(&cli.args[1..], cli.fs, cli.force),
         Some("batch") => cmd_batch(&cli.args[1..], cli.fs, enc),
         Some("synth") => cmd_synth(&cli.args[1..], cli.fs, enc),
         Some("play") => realtime::play(&cli.args[1..], cli.fs),

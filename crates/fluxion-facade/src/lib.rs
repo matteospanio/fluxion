@@ -26,6 +26,11 @@ pub use fluxion_core::{
 /// frame count, channel count, or sample rate, so they run before/after a graph rather than inside it.
 pub use fluxion_ops::transform;
 
+/// The Jury-triangle stability projection for flat `[b0,b1,b2,a1,a2]·K` coefficient vectors (plan
+/// task E8) — clamps every section's `(a1, a2)` strictly inside the stable region. Used by
+/// `fluxion import --project-stable` to tame an unstable trained checkpoint before certification.
+pub use fluxion_ops::project_stable_flat;
+
 /// Whole-graph differentiation through Burn's autograd (feature `autodiff`): [`diff_process`] lowers
 /// a [`Graph`] onto Burn so `loss.backward()` flows a gradient through an entire effect chain, via
 /// the same [`eval`]/[`Backend`] surface the CPU executor uses (plan tasks E12 + C1).

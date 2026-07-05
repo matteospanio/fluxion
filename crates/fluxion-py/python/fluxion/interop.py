@@ -14,8 +14,13 @@ used, so a module prefix like ``biquad.b`` is fine):
   and a scalar ``fs``. The per-section coefficients are replayed with the RBJ cookbook peaking-EQ
   formulas (the layout of FLAMO's SISO ``Biquad`` in peaking/PEQ mode).
 
-A **state-variable-filter (SVF) cascade** is detected and rejected with a clear error — its
-param→coeff map is not implemented here. Any other layout raises :class:`ValueError`.
+For the **full import path** — FLAMO ``SOSFilter``/``SVF``/``Biquad`` raw-parameter layouts,
+torchfx.ddsp learnable filters, ``.pt`` / ``.onnx`` / ``.safetensors`` artifacts, stability
+certification, and writing a runnable ``.fxg`` — use :func:`import_checkpoint`, which replays the
+exact source-library math in Rust (the same converter behind the ``fluxion import`` CLI verb).
+
+``load_flamo_sos`` (below) is the original pure-NumPy first slice: realised ``b``/``a`` and RBJ
+peaking tables only; an SVF cascade is rejected there (use :func:`import_checkpoint` instead).
 
 ``load_flamo_sos`` returns ``float32`` SOS with the denominator normalised to ``a0 = 1``:
 
@@ -36,11 +41,11 @@ Feeding the result into fluxion's differentiable SOS path::
 from __future__ import annotations
 
 import os
-from typing import Any, Mapping, Union
+from typing import Any, Mapping, NamedTuple, Union
 
 import numpy as np
 
-__all__ = ["load_flamo_sos"]
+__all__ = ["ImportResult", "import_checkpoint", "load_flamo_sos"]
 
 StateDict = Mapping[str, Any]
 
@@ -168,3 +173,163 @@ def _looks_like_svf(named: StateDict) -> bool:
     keys = {k.lower() for k in named}
     svf_markers = {"m_lp", "m_bp", "m_hp", "mlp", "mbp", "mhp", "svf"}
     return bool(keys & svf_markers) or ("r" in keys and "f" in keys)
+
+
+# ── full import path (Rust-backed): FLAMO / torchfx / .pt / .onnx → certified sections ─────────
+
+
+class ImportResult(NamedTuple):
+    """What :func:`import_checkpoint` produced."""
+
+    sections: np.ndarray
+    """``(n_sections, 5)`` float32 ``[b0, b1, b2, a1, a2]`` rows (``a0`` normalised to 1)."""
+    verdict: str
+    """Stability ladder verdict on the (possibly projected) sections: ``certified-stable``,
+    ``marginally-stable``, ``indeterminate``, ``not-certified`` or ``unstable``."""
+    margin: float
+    """``1 - spectral_radius``: positive inside the stable region, ~0 on the boundary."""
+    fs: int | None
+    """Sample rate embedded in the artifact itself, when present (else the ``fs`` you passed)."""
+
+
+def import_checkpoint(
+    src: Union[StateDict, str, "os.PathLike[str]"],
+    out: Union[str, "os.PathLike[str]", None] = None,
+    *,
+    fs: int | None = None,
+    kind: str = "auto",
+    svf_type: str = "general",
+    biquad_type: str = "lowpass",
+    eq_f_lo: float = 40.0,
+    eq_f_hi: float = 16_000.0,
+    eq_max_gain_db: float = 18.0,
+    project_stable: bool = False,
+    force: bool = False,
+) -> ImportResult:
+    """Import a DDSP checkpoint trained elsewhere into fluxion's certified freeze pipeline.
+
+    ``src`` is a mapping of name → tensor/array, or a path: ``.safetensors`` (lazy ``safetensors``),
+    ``.pt``/``.pth``/``.ckpt`` (lazy ``torch``; plain state-dicts, Lightning-style dicts with a
+    ``state_dict`` key, and torchfx compiled ``.fxg`` artifacts ``{"version", "fs", "nodes"}`` are
+    all understood), or ``.onnx`` (lazy ``onnx``; initializer tensors are read — note FLAMO models
+    are generally *not* ONNX-exportable, prefer the state-dict path).
+
+    Supported module layouts (mirrors ``fluxion-io::checkpoint``): FLAMO ``SOSFilter`` /
+    ``SVF`` (every ``filter_type``, pass ``svf_type``) / ``Biquad`` (pass ``biquad_type``),
+    realised ``b``/``a`` pairs, RBJ peaking tables, and torchfx.ddsp learnable filters (pass
+    ``kind="ddsp-lowpass"``/``"ddsp-highpass"`` for the ambiguous log-cutoff pair; EQ band ranges
+    via ``eq_*``). SISO only — MIMO banks and FIR taps are rejected.
+
+    The sections are **stability-certified** (fluxion's verdict ladder, plan task E8);
+    ``project_stable=True`` first clamps each section into the Jury stability triangle — use it
+    for checkpoints trained without a stability constraint. If ``out`` is given, the sections are
+    chained as raw ``biquad`` ops and written as a standard ``.fxg`` graph (refused if the
+    certificate is not shippable, unless ``force=True``); the file splices into any CLI pipeline:
+    ``fluxion in.wav model.fxg out.wav``.
+
+    Raw coefficients do not retune: process at the checkpoint's training sample rate.
+    """
+    from . import _fluxion
+
+    embedded_fs: int | None = None
+    if isinstance(src, (str, os.PathLike)):
+        path = os.fspath(src)
+        if path.endswith(".safetensors"):
+            sd: StateDict = _load_state_dict(path)
+        elif path.endswith((".pt", ".pth", ".ckpt", ".fxg")):
+            sd, embedded_fs = _load_torch_artifact(path)
+        elif path.endswith(".onnx"):
+            sd = _load_onnx_initializers(path)
+        else:
+            raise ValueError(f"unrecognised checkpoint extension: {path!r}")
+    else:
+        sd = src
+
+    if embedded_fs is not None and fs is None:
+        fs = embedded_fs
+
+    sd_np = {k: _to_numpy(v) for k, v in sd.items()}
+    sections, verdict, margin, artifact_fs = _fluxion.import_state_dict(
+        sd_np,
+        kind=kind,
+        fs=fs,
+        svf_type=svf_type,
+        biquad_type=biquad_type,
+        eq_f_lo=eq_f_lo,
+        eq_f_hi=eq_f_hi,
+        eq_max_gain_db=eq_max_gain_db,
+        project_stable=project_stable,
+    )
+    final_fs = artifact_fs or fs
+
+    if out is not None:
+        _fluxion.save_biquad_fxg(os.fspath(out), sections, fs=final_fs or 48_000, force=force)
+
+    return ImportResult(sections, verdict, margin, final_fs)
+
+
+def _to_numpy(v: Any) -> np.ndarray:
+    """Tensor/array → float32 numpy (accepts torch tensors without importing torch)."""
+    arr = v.detach().cpu().numpy() if hasattr(v, "detach") else v
+    return np.ascontiguousarray(np.asarray(arr), dtype=np.float32)
+
+
+def _load_torch_artifact(path: str) -> tuple[StateDict, int | None]:
+    """Read a ``.pt``-family artifact with lazy torch → (state-dict, embedded fs or None).
+
+    Understands three shapes: a plain name→tensor state-dict, a Lightning-style wrapper with a
+    ``state_dict`` key, and torchfx's compiled artifact ``{"version": 1, "fs": N, "nodes": [...]}``
+    whose ``{"kind": "sos"}`` nodes carry realised ``[K, 6]`` coefficients (non-filter effect
+    nodes are rejected — export those separately).
+    """
+    try:
+        import torch
+    except ImportError as exc:  # pragma: no cover - exercised only without torch installed
+        raise ImportError(
+            "loading a .pt checkpoint needs 'torch' (only for parsing; conversion runs in Rust). "
+            "Alternatively re-save the state-dict as .safetensors."
+        ) from exc
+
+    obj = torch.load(path, map_location="cpu", weights_only=True)
+    if not isinstance(obj, dict):
+        raise ValueError(f"expected a dict-like checkpoint, got {type(obj).__name__}")
+
+    # torchfx compiled artifact (the `torchfx compile` CLI output).
+    if "nodes" in obj and "version" in obj:
+        rows = []
+        for node in obj["nodes"]:
+            if node.get("kind") != "sos":
+                raise ValueError(
+                    "torchfx artifact contains a non-filter effect node "
+                    f"({node.get('name', node.get('kind'))!r}); only SOS nodes are importable"
+                )
+            rows.append(np.asarray(node["sos"], dtype=np.float64).reshape(-1, 6))
+        sos = np.concatenate(rows, axis=0)
+        # Hand the realised rows to the converter as a FLAMO-style SOS param tensor.
+        return {"param": sos}, int(obj.get("fs") or 0) or None
+
+    if "state_dict" in obj and isinstance(obj["state_dict"], dict):
+        obj = obj["state_dict"]
+    return obj, None
+
+
+def _load_onnx_initializers(path: str) -> StateDict:
+    """Read an ``.onnx`` file's float initializer tensors with lazy ``onnx``."""
+    try:
+        import onnx
+        from onnx import numpy_helper
+    except ImportError as exc:  # pragma: no cover - exercised only without onnx installed
+        raise ImportError(
+            "loading a .onnx file needs the 'onnx' package (only for parsing; conversion runs "
+            "in Rust)."
+        ) from exc
+
+    model = onnx.load(path)
+    out: dict[str, np.ndarray] = {}
+    for init in model.graph.initializer:
+        arr = numpy_helper.to_array(init)
+        if arr.dtype.kind == "f":
+            out[init.name] = np.asarray(arr, dtype=np.float32)
+    if not out:
+        raise ValueError(f"no float initializer tensors found in {path!r}")
+    return out

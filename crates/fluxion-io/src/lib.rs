@@ -6,10 +6,15 @@
 //! (16/24/32-bit, with TPDF dither) is selectable via [`WavEncoding`] and [`write_wav_encoded`].
 //! For large files, [`read_wav_blocks`] / [`decode_blocks`] stream fixed-size [`Signal`] chunks
 //! with bounded memory. Columnar dataset IO ([`Signal`] ↔ Arrow/Parquet) is behind the optional
-//! `parquet` feature (the `arrow` module).
+//! `parquet` feature (the `arrow` module). DDSP checkpoint import (FLAMO / torchfx `.safetensors`
+//! state-dicts → SOS sections) is behind the optional `checkpoint` feature (the `checkpoint`
+//! module).
 
 #[cfg(feature = "parquet")]
 pub mod arrow;
+
+#[cfg(feature = "checkpoint")]
+pub mod checkpoint;
 
 use std::io::{Cursor, Read, Write};
 use std::path::Path;
@@ -287,12 +292,17 @@ impl WavBlockWriter {
     /// Append one planar block (`block[c]` = channel `c`). Channels must match the spec;
     /// short channels are zero-padded within the block, like the whole-file writer.
     pub fn write_block(&mut self, block: &[Vec<f32>]) -> Result<(), hound::Error> {
-        assert_eq!(block.len(), self.channels, "channel count changed mid-stream");
+        assert_eq!(
+            block.len(),
+            self.channels,
+            "channel count changed mid-stream"
+        );
         let frames = block.iter().map(Vec::len).max().unwrap_or(0);
         if self.enc.float {
             for f in 0..frames {
                 for ch in block {
-                    self.writer.write_sample(ch.get(f).copied().unwrap_or(0.0))?;
+                    self.writer
+                        .write_sample(ch.get(f).copied().unwrap_or(0.0))?;
                 }
             }
         } else {
@@ -1068,7 +1078,11 @@ mod tests {
                 (0..300).map(|i| ((i as f32) * 0.011).cos() * 0.6).collect(),
             ],
         );
-        for enc in [WavEncoding::default(), WavEncoding::pcm(16), WavEncoding::pcm(24)] {
+        for enc in [
+            WavEncoding::default(),
+            WavEncoding::pcm(16),
+            WavEncoding::pcm(24),
+        ] {
             let p_whole = tmp_path(&format!("whole_{}", enc.bits + enc.float as u16));
             let p_stream = tmp_path(&format!("stream_{}", enc.bits + enc.float as u16));
             write_wav_encoded(&p_whole, &sig, enc).expect("whole write");
