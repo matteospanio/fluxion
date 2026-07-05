@@ -89,6 +89,29 @@ fn main() {
         );
     }
 
+    // E2 companion `batch_gpu_shape`: the GPU one-shot workload (16384 x 4096,
+    // order-8 = 4 sections) run through the CPU batch path — feeds the Sec. 5
+    // "operational advice" sentence comparing CPU batch vs GPU one-shot.
+    {
+        let (rows, frames) = (16_384usize, 4_096usize);
+        let sos = butterworth_lowpass(8, 4_000.0, fs);
+        let flat = signal(rows * frames, 0);
+        let ms = (rows * frames) as f64 / 1e6;
+        let s = median_secs(
+            || {
+                black_box(sos_filter_batch(black_box(&flat), frames, &sos));
+            },
+            2,
+            5,
+        );
+        emit(
+            "batch_gpu_shape",
+            &format!("\"rows\":{rows},\"frames\":{frames},\"sections\":4"),
+            ms,
+            s,
+        );
+    }
+
     // E1 `multichannel`: 8 ch x 60 s, order-4 lowpass, through the graph executor.
     {
         let frames = 60 * fs as usize;

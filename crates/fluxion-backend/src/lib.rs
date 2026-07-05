@@ -625,9 +625,7 @@ pub fn sos_filter_batch(rows: &[f32], frames: usize, sos: &[Biquad]) -> Vec<f32>
 /// gather/scatter path.
 fn dispatch_group(in_group: &[f32], out_group: &mut [f32], frames: usize, sos: &[Biquad]) {
     #[cfg(target_arch = "x86_64")]
-    if in_group.len() == 8 * frames
-        && sos.len() <= 8
-        && std::arch::is_x86_feature_detected!("avx2")
+    if in_group.len() == 8 * frames && sos.len() <= 8 && std::arch::is_x86_feature_detected!("avx2")
     {
         // SAFETY: AVX2 support was just verified at runtime; the group is exactly 8 rows.
         unsafe { avx2_group::filter_group_8rows(in_group, out_group, frames, sos) };
@@ -716,7 +714,6 @@ fn try_batched_filter(graph: &Graph, batch: &[Signal]) -> Option<Vec<Signal>> {
     )
 }
 
-
 /// AVX2 fast path for [`sos_filter_batch`]: one full 8-row group is filtered with
 /// strided planar loads, an in-register 8×8 transpose, the fused K-section vector
 /// cascade, and a transpose back to planar stores — no interleaved bounce buffer,
@@ -727,6 +724,7 @@ fn try_batched_filter(graph: &Graph, batch: &[Signal]) -> Option<Vec<Signal>> {
 /// contraction), so results stay bit-identical.
 #[cfg(target_arch = "x86_64")]
 mod avx2_group {
+    use super::BLOCK_FRAMES;
     use fluxion_ops::Biquad;
     #[cfg(target_arch = "x86_64")]
     use std::arch::x86_64::*;
@@ -759,6 +757,15 @@ mod avx2_group {
         }
     }
 
+    /// Padding (in f32s) added to the scratch row pitch so the 8 tile rows land in
+    /// *different* L1/L2 cache sets. Planar batch rows sit exactly `frames·4` bytes
+    /// apart — for the paper's 524k-frame workload that is a 2 MB power-of-two
+    /// stride, which maps every row (and the output rows) to the same set: 16
+    /// streams contending for 8 L1 ways thrash on every 8×8 tile and the kernel
+    /// runs at LLC speed, killing multi-core scaling. A 16-float pad makes the
+    /// pitch 257 cache lines, so consecutive rows shift by one set.
+    const PITCH_PAD: usize = 16;
+
     #[target_feature(enable = "avx2")]
     unsafe fn run<const K: usize>(input: &[f32], out: &mut [f32], frames: usize, sos: &[Biquad]) {
         let b0: [__m256; K] = core::array::from_fn(|k| _mm256_set1_ps(sos[k].b0));
@@ -766,17 +773,70 @@ mod avx2_group {
         let b2: [__m256; K] = core::array::from_fn(|k| _mm256_set1_ps(sos[k].b2));
         let a1: [__m256; K] = core::array::from_fn(|k| _mm256_set1_ps(sos[k].a1));
         let a2: [__m256; K] = core::array::from_fn(|k| _mm256_set1_ps(sos[k].a2));
+        let coeffs = (b0, b1, b2, a1, a2);
         let mut s1 = [_mm256_setzero_ps(); K];
         let mut s2 = [_mm256_setzero_ps(); K];
 
-        let full = frames - frames % 8;
-        let src = input.as_ptr();
-        let dst = out.as_mut_ptr();
+        // Bounce each time block through a small padded-pitch scratch: the gathers
+        // and scatters are sequential per-row memcpys (no simultaneous strided
+        // streams), and the kernel's 8 concurrent row streams read the scratch at a
+        // set-spreading pitch instead of the pathological planar stride. The whole
+        // scratch (8 × ~16 KB) stays L2-resident. Measured on the i9-10900KF
+        // (Comet Lake, 32 KB 8-way L1): 64×524k batch 1.66 → 2.60 Gsamples/s
+        // multi-thread (+57%) for a ~5% single-thread cost (the two extra copies);
+        // direct strided loads thrash there because a 2 MB row stride lands all 16
+        // streams in one L1/L2 set.
+        let block_cap = BLOCK_FRAMES.min(frames);
+        let pitch = block_cap + PITCH_PAD;
+        let mut scratch = vec![0.0f32; 8 * pitch];
+        let mut t0 = 0usize;
+        while t0 < frames {
+            let block = block_cap.min(frames - t0);
+            for r in 0..8 {
+                scratch[r * pitch..r * pitch + block]
+                    .copy_from_slice(&input[r * frames + t0..r * frames + t0 + block]);
+            }
+            // SAFETY: AVX2 verified by the caller; scratch rows are `pitch` apart and
+            // `block <= pitch` frames long.
+            unsafe { tile::<K>(&mut scratch, pitch, block, &coeffs, &mut s1, &mut s2, sos) };
+            for r in 0..8 {
+                out[r * frames + t0..r * frames + t0 + block]
+                    .copy_from_slice(&scratch[r * pitch..r * pitch + block]);
+            }
+            t0 += block;
+        }
+    }
+
+    /// Coefficient vectors for a K-section cascade, splatted per lane.
+    type CoeffVecs<const K: usize> = (
+        [__m256; K],
+        [__m256; K],
+        [__m256; K],
+        [__m256; K],
+        [__m256; K],
+    );
+
+    /// Filter one time block **in place** on the padded scratch, carrying the
+    /// per-lane section state across calls. Identical operand order to the scalar
+    /// recurrence, so per-row results match [`fluxion_ops::sos_filter`] exactly.
+    #[target_feature(enable = "avx2")]
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn tile<const K: usize>(
+        scratch: &mut [f32],
+        pitch: usize,
+        block: usize,
+        (b0, b1, b2, a1, a2): &CoeffVecs<K>,
+        s1: &mut [__m256; K],
+        s2: &mut [__m256; K],
+        sos: &[Biquad],
+    ) {
+        let full = block - block % 8;
+        let src = scratch.as_mut_ptr();
         let mut t = 0usize;
         while t < full {
-            // SAFETY: rows r in 0..8, frames t..t+8 are in bounds (t + 8 <= full <= frames).
+            // SAFETY: rows r in 0..8, frames t..t+8 are in bounds (t + 8 <= full <= block <= pitch).
             let mut v: [__m256; 8] =
-                core::array::from_fn(|r| unsafe { _mm256_loadu_ps(src.add(r * frames + t)) });
+                core::array::from_fn(|r| unsafe { _mm256_loadu_ps(src.add(r * pitch + t)) });
             // SAFETY: AVX2 verified by the caller; arithmetic intrinsics are register-only.
             unsafe {
                 transpose8x8(&mut v);
@@ -798,14 +858,15 @@ mod avx2_group {
             }
             for (r, vi) in v.iter().enumerate() {
                 // SAFETY: same bounds as the loads above.
-                unsafe { _mm256_storeu_ps(dst.add(r * frames + t), *vi) };
+                unsafe { _mm256_storeu_ps(src.add(r * pitch + t), *vi) };
             }
             t += 8;
         }
 
-        if t < frames {
-            // Tail frames: spill the vector states to per-row scalars and finish
-            // with the exact scalar recurrence (identical operand order).
+        if t < block {
+            // Tail frames: spill the vector states to per-row scalars, finish with
+            // the exact scalar recurrence (identical operand order), and reload the
+            // vectors so a following block continues from the right state.
             let mut s1a = [[0.0f32; 8]; K];
             let mut s2a = [[0.0f32; 8]; K];
             for k in 0..K {
@@ -816,15 +877,22 @@ mod avx2_group {
                 }
             }
             for r in 0..8 {
-                for tt in t..frames {
-                    let mut x = input[r * frames + tt];
+                for tt in t..block {
+                    let mut x = scratch[r * pitch + tt];
                     for k in 0..K {
                         let y = sos[k].b0 * x + s1a[k][r];
                         s1a[k][r] = sos[k].b1 * x - sos[k].a1 * y + s2a[k][r];
                         s2a[k][r] = sos[k].b2 * x - sos[k].a2 * y;
                         x = y;
                     }
-                    out[r * frames + tt] = x;
+                    scratch[r * pitch + tt] = x;
+                }
+            }
+            for k in 0..K {
+                // SAFETY: arrays are 8 f32s; loadu has no alignment requirement.
+                unsafe {
+                    s1[k] = _mm256_loadu_ps(s1a[k].as_ptr());
+                    s2[k] = _mm256_loadu_ps(s2a[k].as_ptr());
                 }
             }
         }
@@ -835,30 +903,30 @@ mod avx2_group {
     unsafe fn transpose8x8(v: &mut [__m256; 8]) {
         // SAFETY: register-only shuffles; AVX2 verified by the caller chain.
         unsafe {
-        let t0 = _mm256_unpacklo_ps(v[0], v[1]);
-        let t1 = _mm256_unpackhi_ps(v[0], v[1]);
-        let t2 = _mm256_unpacklo_ps(v[2], v[3]);
-        let t3 = _mm256_unpackhi_ps(v[2], v[3]);
-        let t4 = _mm256_unpacklo_ps(v[4], v[5]);
-        let t5 = _mm256_unpackhi_ps(v[4], v[5]);
-        let t6 = _mm256_unpacklo_ps(v[6], v[7]);
-        let t7 = _mm256_unpackhi_ps(v[6], v[7]);
-        let u0 = _mm256_shuffle_ps(t0, t2, 0x44);
-        let u1 = _mm256_shuffle_ps(t0, t2, 0xEE);
-        let u2 = _mm256_shuffle_ps(t1, t3, 0x44);
-        let u3 = _mm256_shuffle_ps(t1, t3, 0xEE);
-        let u4 = _mm256_shuffle_ps(t4, t6, 0x44);
-        let u5 = _mm256_shuffle_ps(t4, t6, 0xEE);
-        let u6 = _mm256_shuffle_ps(t5, t7, 0x44);
-        let u7 = _mm256_shuffle_ps(t5, t7, 0xEE);
-        v[0] = _mm256_permute2f128_ps(u0, u4, 0x20);
-        v[1] = _mm256_permute2f128_ps(u1, u5, 0x20);
-        v[2] = _mm256_permute2f128_ps(u2, u6, 0x20);
-        v[3] = _mm256_permute2f128_ps(u3, u7, 0x20);
-        v[4] = _mm256_permute2f128_ps(u0, u4, 0x31);
-        v[5] = _mm256_permute2f128_ps(u1, u5, 0x31);
-        v[6] = _mm256_permute2f128_ps(u2, u6, 0x31);
-        v[7] = _mm256_permute2f128_ps(u3, u7, 0x31);
+            let t0 = _mm256_unpacklo_ps(v[0], v[1]);
+            let t1 = _mm256_unpackhi_ps(v[0], v[1]);
+            let t2 = _mm256_unpacklo_ps(v[2], v[3]);
+            let t3 = _mm256_unpackhi_ps(v[2], v[3]);
+            let t4 = _mm256_unpacklo_ps(v[4], v[5]);
+            let t5 = _mm256_unpackhi_ps(v[4], v[5]);
+            let t6 = _mm256_unpacklo_ps(v[6], v[7]);
+            let t7 = _mm256_unpackhi_ps(v[6], v[7]);
+            let u0 = _mm256_shuffle_ps(t0, t2, 0x44);
+            let u1 = _mm256_shuffle_ps(t0, t2, 0xEE);
+            let u2 = _mm256_shuffle_ps(t1, t3, 0x44);
+            let u3 = _mm256_shuffle_ps(t1, t3, 0xEE);
+            let u4 = _mm256_shuffle_ps(t4, t6, 0x44);
+            let u5 = _mm256_shuffle_ps(t4, t6, 0xEE);
+            let u6 = _mm256_shuffle_ps(t5, t7, 0x44);
+            let u7 = _mm256_shuffle_ps(t5, t7, 0xEE);
+            v[0] = _mm256_permute2f128_ps(u0, u4, 0x20);
+            v[1] = _mm256_permute2f128_ps(u1, u5, 0x20);
+            v[2] = _mm256_permute2f128_ps(u2, u6, 0x20);
+            v[3] = _mm256_permute2f128_ps(u3, u7, 0x20);
+            v[4] = _mm256_permute2f128_ps(u0, u4, 0x31);
+            v[5] = _mm256_permute2f128_ps(u1, u5, 0x31);
+            v[6] = _mm256_permute2f128_ps(u2, u6, 0x31);
+            v[7] = _mm256_permute2f128_ps(u3, u7, 0x31);
         }
     }
 }
@@ -1178,7 +1246,17 @@ mod tests {
         // including partial groups (rows % BATCH_GROUP ≠ 0) and partial transpose tiles
         // (frames % 32 ≠ 0).
         let sos = fluxion_ops::butterworth_lowpass(6, 3_000.0, 48_000);
-        for (rows, frames) in [(2usize, 100usize), (16, 333), (37, 1000), (5, 7)] {
+        // 9_999 and 5_000 cross the AVX2 bounce-tile boundary (BLOCK_FRAMES) so the
+        // carried section state and the final-block scalar tail are both exercised.
+        let sizes = [
+            (2usize, 100usize),
+            (16, 333),
+            (37, 1000),
+            (5, 7),
+            (8, 9_999),
+            (24, 5_000),
+        ];
+        for (rows, frames) in sizes {
             let flat: Vec<f32> = (0..rows * frames)
                 .map(|i| ((i % 97) as f32 * 0.13).sin())
                 .collect();
