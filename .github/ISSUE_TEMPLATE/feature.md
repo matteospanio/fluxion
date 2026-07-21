@@ -18,8 +18,8 @@ A rough API, CLI surface, or graph example — even pseudocode.
 ```
 
 **Fit with the design**
-Anything relevant from [PROJECT.md](../../PROJECT.md) / [AGENTS.md](../../AGENTS.md) (two-engine
-split, own-the-backward, explicit coeff design). Note any new dependency it would need.
+How it fits the conventions in [CONTRIBUTING.md](../../CONTRIBUTING.md) (two-engine split,
+own-the-backward, explicit coeff design). Note any new dependency it would need.
 
 **Alternatives considered**
 Other approaches and why this one.

@@ -14,7 +14,7 @@ that shared name is the join key the test asserts on.
 
 Run:  python scripts/gen_golden.py      (needs scipy + numpy in the environment)
 
-Conventions mirrored from AGENTS.md: frequencies in Hz, sample rate is `fs`.
+Conventions: frequencies in Hz, sample rate is `fs`.
 """
 
 from __future__ import annotations

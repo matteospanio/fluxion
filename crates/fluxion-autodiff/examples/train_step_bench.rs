@@ -1,5 +1,5 @@
 //! Training-step throughput: analytic-adjoint SOS training, for the paper's T4
-//! (IS22022/EXPERIMENTS.md E3). Times one step (forward + backward, MSE) of a trainable cascade
+//! (experiment E3). Times one step (forward + backward, MSE) of a trainable cascade
 //! over a grid of (sections K, samples T, batch B); JSON per cell. The torch-side counterparts
 //! (torchfx.ddsp analytic; torchaudio lfilter unrolled) run from a Python script on the same box.
 //!
@@ -93,8 +93,7 @@ fn run_cuda() {
             let mut step = || {
                 let mut acc = 0.0f32;
                 for row in &rows {
-                    let xr =
-                        Tensor::<G, 1>::from_floats(row.as_slice(), &device).require_grad();
+                    let xr = Tensor::<G, 1>::from_floats(row.as_slice(), &device).require_grad();
                     let loss = sos_gpu(xr.clone(), &sos).powf_scalar(2.0).sum();
                     let g = xr
                         .grad(&loss.backward())

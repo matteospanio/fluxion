@@ -627,7 +627,6 @@ impl SetCoeffs {
     }
 }
 
-
 /// Dot product with four independent accumulators: breaks the serial float-add
 /// dependency chain so the loop pipelines (and autovectorizes) instead of paying
 /// one add latency per tap. The summation order differs from a single-accumulator

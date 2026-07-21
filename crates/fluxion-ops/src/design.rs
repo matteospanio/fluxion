@@ -1,4 +1,4 @@
-//! Design-parameter gradients — the DDSP reparameterisation (PROJECT.md §8.2).
+//! Design-parameter gradients — the DDSP reparameterisation.
 //!
 //! `sos_vjp`/`biquad_vjp` give ∂L/∂coeffs. This module back-propagates that one step further, to the
 //! **design parameters** (`cutoff`, `Q`, `gain`, `order`, `ripple`, …) that produced the

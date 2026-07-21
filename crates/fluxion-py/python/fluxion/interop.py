@@ -153,7 +153,7 @@ def _sos_from_rbj_peaking(named: StateDict) -> np.ndarray:
         raise ValueError(
             f"'freq', 'gain_db', 'Q' must share shape; got {freq.shape}, {gain_db.shape}, {q.shape}"
         )
-    # RBJ Audio-EQ cookbook, peaking EQ (AGENTS.md permits the RBJ math).
+    # RBJ Audio-EQ cookbook, peaking EQ.
     amp = np.power(10.0, gain_db / 40.0)
     w0 = 2.0 * np.pi * freq / fs
     alpha = np.sin(w0) / (2.0 * q)

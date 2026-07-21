@@ -2,7 +2,7 @@
 //! graph API.
 //!
 //! This is the **facade** crate: it re-exports the public surface and a [`prelude`] of ergonomic
-//! node constructors. See `PROJECT.md` for the design and `IMPLEMENTATION_PLAN.md` for the roadmap.
+//! node constructors.
 //!
 //! ```
 //! use fluxion::prelude::*;

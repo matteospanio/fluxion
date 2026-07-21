@@ -30,8 +30,8 @@ pub enum Graph {
     /// Parallel: run `.0` and `.1` on the same input and sum their outputs.
     Parallel(Box<Graph>, Box<Graph>),
     /// A **named** node — transparent to execution (it runs exactly as `node`), but addressable by
-    /// `name` for per-node parameter automation (PROJECT.md §8.5) and named-module import (plan task
-    /// B8 / J13). See [`Graph::find_named`].
+    /// `name` for per-node parameter automation and named-module (checkpoint) import.
+    /// See [`Graph::find_named`].
     Named {
         /// The node's stable identifier.
         name: String,

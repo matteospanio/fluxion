@@ -3,7 +3,7 @@
 //! Requires an NVIDIA GPU + CUDA toolkit (`libnvrtc`) to build and run; this whole module is gated
 //! behind the `cuda` feature so the default build stays pure-Rust and offline.
 //!
-//! The kernel is the cross-vendor IIR kernel proven in `spikes/c4-cubecl-biquad` (CubeCL lowers the
+//! The kernel is cross-vendor (CubeCL lowers the
 //! same `#[cube]` kernel to CUDA / ROCm / Metal / Vulkan / WGSL): one thread per batch row runs the
 //! whole SOS cascade over time in a single launch. The output matches the CPU
 //! [`fluxion_ops::sos_filter`] per row to `f32` precision.

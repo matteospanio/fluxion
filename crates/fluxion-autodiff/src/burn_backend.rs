@@ -2,8 +2,8 @@
 //!
 //! Registers fluxion's hand-derived analytic backward as a Burn **custom op**, so an SOS filter runs
 //! inside Burn's autograd with the analytic VJP as its gradient — no recursion unrolling.
-//! Backend-agnostic: differentiates on `Autodiff<NdArray>` (CPU) or `Autodiff<Cuda>` (GPU, validated
-//! in `spikes/f0-burn-cuda`). Forward reuses [`fluxion_ops::sos_filter`].
+//! Backend-agnostic: differentiates on `Autodiff<NdArray>` (CPU) or `Autodiff<Cuda>` (GPU).
+//! Forward reuses [`fluxion_ops::sos_filter`].
 //!
 //! Ops:
 //! - [`sos`] — fixed coefficients; differentiates the **input** (the composable gradient).
@@ -280,7 +280,7 @@ impl<B: Backend> Backward<B, 2> for SosDesignBackward {
 
 /// Filter `x` through a cascade **designed** from trainable `params`, so the design parameters
 /// (`cutoff`, `Q`, `gain`, …) train directly on the always-stable design manifold — the DDSP
-/// `cutoff_learnable` reparameterisation (PROJECT.md §8.2). `design(params, fs)` is any closed-form
+/// `cutoff_learnable` reparameterisation. `design(params, fs)` is any closed-form
 /// design flattened to `[b0,b1,b2,a1,a2]` per section (e.g. a fn calling
 /// [`fluxion_ops::butterworth_lowpass`]). Differentiable in input (adjoint) and params
 /// ([`fluxion_ops::design_param_grad`] ∘ [`fluxion_ops::sos_vjp`]).

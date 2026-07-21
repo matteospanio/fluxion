@@ -1,6 +1,6 @@
 //! `fluxion-autodiff` — make the graph trainable without owning an autograd engine.
 //!
-//! "Own the backward, rent the graph" (see `PROJECT.md` §2): the analytic VJPs live in `fluxion-ops`
+//! "Own the backward, rent the graph": the analytic VJPs live in `fluxion-ops`
 //! (`fluxion_ops::biquad_vjp`, `sos_vjp`, `gain_vjp`), gradcheck-
 //! verified. This crate registers them with a host framework's autograd. The Burn integration
 //! (`burn_backend`, feature `burn`) wraps a biquad as a Burn custom op whose backward is the

@@ -1,5 +1,4 @@
-//! Blind coloration inversion — the paper's train→certify→freeze→play experiment
-//! (IS22026/EXPERIMENTS.md E4).
+//! Blind coloration inversion — the paper's train→certify→freeze→play experiment (E4).
 //!
 //! An unknown coloration filter (low-shelf | peaking | high-shelf, randomized) colours broadband
 //! noise; a 3-band parametric EQ is trained from audio alone to invert it. Three modes:

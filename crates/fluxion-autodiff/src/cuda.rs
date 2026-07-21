@@ -3,7 +3,7 @@
 //! The analytic VJP kernels (forward, input-gradient adjoint, coefficient gradient) launch directly
 //! on a resident Burn CubeCL tensor, so `loss.backward()` runs them without a host roundtrip for the
 //! signal — where the GPU compute win lands (a resident forward+backward is ~40 ms/iter vs ~860 ms
-//! round-tripping; see `spikes/burn-cubecl-bridge`). Mirrors [`crate::burn_backend`]'s ops, which
+//! round-tripping). Mirrors [`crate::burn_backend`]'s ops, which
 //! stay the backend-agnostic (NdArray/CPU) fallback.
 //!
 //! - [`sos_gpu`] — fixed cascade, differentiates the input (adjoint = recurrence backward in time,

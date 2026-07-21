@@ -1,13 +1,34 @@
+<div align="center">
+
 # Fluxion
 
-> Differentiable, cross-vendor, framework-agnostic audio DSP with a functional graph API,
-> a modern SoX-substitute CLI, and a hard-real-time engine — written in Rust, bound to anything.
+**Differentiable, cross-vendor, framework-agnostic audio DSP — a functional graph API, a modern
+SoX-substitute CLI, and a hard-real-time engine. Written in Rust, bound to anything.**
 
-**Status: pre-1.0 (0.x).** The core is implemented and tested: the graph algebra, the DSP op set
-with hand-derived analytic gradients, Burn-based whole-graph autodiff, CPU SIMD + CUDA batch
-kernels, the allocation-free realtime engine, audio IO, the CLI, and the Python package. The API
-and the `.fxg` on-disk format may still change before 1.0. Design rationale lives in
-[`PROJECT.md`](PROJECT.md); the remaining road to 1.0 in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).
+[![CI](https://github.com/matteospanio/fluxion/actions/workflows/ci.yml/badge.svg)](https://github.com/matteospanio/fluxion/actions/workflows/ci.yml)
+[![MSRV 1.85](https://img.shields.io/badge/MSRV-1.85-orange.svg)](rust-toolchain.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+<!-- [![Paper: IS² 2026](https://img.shields.io/badge/paper-IS%C2%B2_2026-b31b1b.svg)](#citation) -->
+
+</div>
+
+Fluxion **owns** the DSP-specific pieces that determine correctness and deployability —
+closed-form filter design, forward kernels, analytic adjoints for exact gradients, stability
+certificates — and **rents** the general-purpose infrastructure that ML systems already provide:
+the autodiff tape, portable GPU code generation, array interchange. One graph algebra lowers to
+two engines that never mix their rules: a batched differentiable **training** engine (CPU SIMD /
+CUDA) and an allocation-free, lock-free **real-time** engine. A certified freeze boundary
+connects them: a trained graph becomes a versioned `.fxg` artifact that an edge device
+re-certifies before playback and can hot-swap live with a click-free crossfade.
+
+This repository is the software companion to the paper *Fluxion: A Differentiable DSP Runtime
+from Training GPU to Real-Time Edge* (IS² 2026) — see [Citation](#citation) and
+[Reproducing the paper](#reproducing-the-paper).
+
+> **Status: pre-1.0 (0.x).** The core is implemented and tested: the graph algebra, the DSP op
+> set with hand-derived analytic gradients, Burn-based whole-graph autodiff, CPU SIMD + CUDA
+> batch kernels, the allocation-free realtime engine, audio IO, the CLI, and the Python package.
+> The public API and the `.fxg` on-disk format may still change before 1.0.
 
 One codebase, four ways in:
 
@@ -97,6 +118,9 @@ fluxion batch out/ 'data/*.wav' highpass --cutoff 80
 fluxion compile lowpass --cutoff 800 echo --time 0.3 chain.fxg
 fluxion play in.wav chain.fxg          # --features realtime
 fluxion record --secs 5 take.wav       # --features realtime
+
+# Import a DDSP checkpoint trained elsewhere (FLAMO / torchfx), certified on the way in.
+fluxion import ckpt.safetensors model.fxg
 ```
 
 **Effects** (graph ops): `gain`, `lowpass`/`highpass` (Butterworth, any order),
@@ -106,7 +130,7 @@ fluxion record --secs 5 take.wav       # --features realtime
 **Geometry stages**: `trim`, `pad`, `rate`, `speed`, `repeat`, `silence`, `channels`, `remix`.
 Run `fluxion effects [name]` for every parameter, unit, and default.
 
-Not ported from SoX (yet or ever): `tempo`/`pitch` (time-stretch — roadmap), `spectrogram`
+Not ported from SoX (yet or ever): `tempo`/`pitch` (time-stretch), `spectrogram`
 (imaging dependency), noise reduction, and legacy niches (`oops`, `riaa`, `earwax`).
 
 ## Python
@@ -138,23 +162,41 @@ coeffs = fluxion.interop.load_flamo_sos("checkpoint.safetensors")
 
 ## Workspace
 
-| Crate | Role | State |
-|-------|------|-------|
-| `fluxion` (`crates/fluxion-facade`) | Facade + `prelude`; the crate users depend on (features: `autodiff`, `realtime`) | **working** |
-| `fluxion-core` | Graph algebra + IR (`\|` series, `+` parallel, `~` feedback), typed op catalog, versioned `.fxg` | **working + tested** |
-| `fluxion-ops` | DSP kernels + analytic VJPs, coefficient design, geometry transforms | **working + tested** (SciPy golden-vector oracle) |
-| `fluxion-backend` | CPU executor (SIMD batch path), graph lowering, stability certification, CUDA kernels (feature `cuda`) | **working + tested** |
-| `fluxion-autodiff` | Burn `Autodiff` integration: whole-graph `diff_process`, trainable coeffs/design params | **working + tested** (feature-gated) |
-| `fluxion-rt` | Realtime engine: lock-free SPSC ring, alloc-free executor, CPAL backend (feature `cpal`) | **working + tested** (alloc-asserted) |
-| `fluxion-io` | WAV read/write (16/24/32-bit, TPDF dither) + Symphonia decode/probe (FLAC/MP3/OGG/AAC/…), bounded-memory streaming readers, Arrow/Parquet dataset IO (feature `parquet`), FLAMO/torchfx DDSP checkpoint import (feature `checkpoint`) | **working + tested** |
-| `fluxion-cli` | The `fluxion` binary (feature `realtime` for play/record) | **working + tested** |
-| `fluxion-py` | PyO3/maturin package `fluxion` (abi3, numpy-only hard dep; extras: torch/jax/interop) | **working + tested** |
-| `fluxion-ffi` | C ABI (`include/fluxion.h`, cbindgen), panic-safe | minimal, tested; `publish = false` |
-| `fluxion-wasm` | wasm-bindgen (CPU + WebGPU) | stub, deferred to 1.x; `publish = false` |
+| Crate | Role |
+|-------|------|
+| `fluxion` (`crates/fluxion-facade`) | Facade + `prelude`; the crate users depend on (features: `autodiff`, `realtime`) |
+| `fluxion-core` | Graph algebra + IR (`\|` series, `+` parallel, `~` feedback), typed op catalog, versioned `.fxg` |
+| `fluxion-ops` | DSP kernels + analytic VJPs, coefficient design, geometry transforms (SciPy golden-vector oracle tests) |
+| `fluxion-backend` | CPU executor (SIMD batch path), graph lowering, stability certification, CUDA kernels (feature `cuda`) |
+| `fluxion-autodiff` | Burn `Autodiff` integration: whole-graph `diff_process`, trainable coeffs/design params (feature-gated) |
+| `fluxion-rt` | Realtime engine: lock-free SPSC ring, alloc-free executor (alloc-asserted tests), CPAL backend (feature `cpal`) |
+| `fluxion-io` | WAV read/write (16/24/32-bit, TPDF dither), Symphonia decode/probe (FLAC/MP3/OGG/AAC/…), bounded-memory streaming, Arrow/Parquet dataset IO (feature `parquet`), FLAMO/torchfx DDSP checkpoint import (feature `checkpoint`) |
+| `fluxion-cli` | The `fluxion` binary (feature `realtime` for play/record) |
+| `fluxion-py` | PyO3/maturin package `fluxion` (abi3, numpy-only hard dep; extras: torch/jax/interop/dataset) |
+| `fluxion-ffi` | C ABI (`include/fluxion.h`, cbindgen), panic-safe; `publish = false` |
+| `fluxion-wasm` | wasm-bindgen (CPU + WebGPU) — stub, deferred to 1.x; `publish = false` |
 
-GPU status: CUDA forward + backward kernels are implemented and validated on NVIDIA (RTX 3070,
-~59× CPU on large batches; benchmarked 1.9× torchfx resident); Apple Metal / AMD ROCm validation
-via CubeCL is pending, so GPU stays behind the `cuda` feature for now.
+GPU status: CUDA forward + backward kernels are implemented and validated on NVIDIA hardware;
+Apple Metal / AMD ROCm validation via CubeCL is pending, so GPU stays behind the `cuda` feature.
+
+## Reproducing the paper
+
+The measurement harnesses used in the paper's evaluation ship as ordinary `cargo` examples
+(release builds; each prints JSON lines or a summary):
+
+| Experiment | Command |
+|------------|---------|
+| CPU batch throughput | `cargo run --release -p fluxion-backend --example paper_bench` |
+| Training-step throughput (analytic adjoint) | `cargo run --release -p fluxion-autodiff --example train_step_bench --features burn` |
+| EQ inversion: train → certify → freeze → play | `cargo run --release -p fluxion-autodiff --example eq_inversion --features burn` |
+| Real-time callback latency CCDF | `cargo run --release -p fluxion-rt --example latency_ccdf` |
+| 1024-tap FIR per-block latency | `cargo run --release -p fluxion-rt --example fir_latency` |
+| Certified live hot-swap loop | `cargo run --release -p fluxion-backend --example hotswap_demo` |
+| Multichannel per-channel-chain case study | `cargo run --release -p fluxion-backend --example soundlamp_demo` |
+
+Two didactic examples show the differentiable path in miniature: `learn_cutoff`
+(`-p fluxion-autodiff --features burn`) trains a low-pass cutoff by gradient descent, and
+`fit_filter` (`-p fluxion-ops`) fits biquad coefficients with the analytic gradient alone.
 
 ## Develop
 
@@ -166,8 +208,22 @@ cargo run -p fluxion-cli -- effects
 cd crates/fluxion-py && maturin develop && pytest tests/   # Python package
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) (and [AGENTS.md](AGENTS.md) for the conventions that
-CI enforces).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the conventions CI enforces.
+
+<!--
+## Citation
+
+If you use Fluxion in academic work, please cite the companion paper:
+
+```bibtex
+@inproceedings{spanio2026fluxion,
+  author    = {Spanio, Matteo and Rod{\`a}, Antonio},
+  title     = {Fluxion: A Differentiable {DSP} Runtime from Training {GPU} to Real-Time Edge},
+  booktitle = {Proceedings of the International Symposium on the Internet of Sounds (IS2)},
+  year      = {2026},
+}
+```
+-->
 
 ## License
 

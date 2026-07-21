@@ -5,7 +5,7 @@
 //! offline [`compand`] kernel and the realtime `RtGraph::Compand` node both drive that same `step`,
 //! so streaming is sample-for-sample identical to the batch pass.
 //!
-//! Coefficients are computed here in an explicit design stage (`PROJECT.md` §3), never lazily inside
+//! Coefficients are computed here in an explicit design stage, never lazily inside
 //! the sample loop.
 
 /// Designed coefficients for a soft-knee feed-forward compressor.

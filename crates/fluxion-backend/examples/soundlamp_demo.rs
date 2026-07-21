@@ -7,6 +7,7 @@
 //! The chain itself is read from a spec file (the production tuning is
 //! proprietary and lives outside the repo):
 //! one block per output channel, blocks separated by `---`, ops one per line:
+//! `biquad <b0> <b1> <b2> <a1> <a2>` (a frozen SOS row, the production path),
 //! `highpass|lowpass <cutoff> <order>`, `highshelf|peaking <freq> <gain_db> <q>`,
 //! `fir <taps.f32>` (little-endian f32 taps, relative to the spec dir),
 //! `gain_db <dB>`.
@@ -41,7 +42,7 @@ fn load_chains(spec_path: &str) -> Vec<Graph> {
     let text = std::fs::read_to_string(spec_path).expect("read chain spec");
     let mut chains = Vec::new();
     let mut current: Option<Graph> = None;
-    let mut push = |g: &mut Option<Graph>, op: Graph| {
+    let push = |g: &mut Option<Graph>, op: Graph| {
         *g = Some(match g.take() {
             Some(acc) => acc | op,
             None => op,
@@ -60,6 +61,10 @@ fn load_chains(spec_path: &str) -> Vec<Graph> {
         let word = it.next().unwrap();
         let args: Vec<f32> = it.clone().filter_map(|t| t.parse().ok()).collect();
         let op = match word {
+            "biquad" => Graph::op(
+                OpKind::Biquad,
+                [args[0], args[1], args[2], args[3], args[4]],
+            ),
             "highpass" => Graph::op(OpKind::Highpass, [args[0], args[1]]),
             "lowpass" => Graph::op(OpKind::Lowpass, [args[0], args[1]]),
             "highshelf" => Graph::op(OpKind::HighShelf, [args[0], args[1], args[2]]),

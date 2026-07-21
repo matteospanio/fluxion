@@ -27,7 +27,9 @@ fn main() {
             .chunks_exact(4)
             .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
             .collect(),
-        _ => (0..TAPS).map(|k| ((k as f32) * 0.013).sin() / 64.0).collect(),
+        _ => (0..TAPS)
+            .map(|k| ((k as f32) * 0.013).sin() / 64.0)
+            .collect(),
     };
     assert_eq!(taps.len(), TAPS, "expected {TAPS} taps");
     let paced = args.get(3).map(String::as_str) == Some("paced");

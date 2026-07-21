@@ -1,5 +1,5 @@
 //! Paper benchmark: CPU throughput of the **shipped** paths, emitted as JSON (one object per
-//! line) for the IS² paper's Fig 2a / T2 (protocol: IS22026/EXPERIMENTS.md E1).
+//! line) for the IS² paper's Fig 2a / T2 (experiment E1).
 //!
 //! Run with: `cargo run -p fluxion-backend --release --example paper_bench`
 //! Thread count is controlled by `RAYON_NUM_THREADS` (set 1 for the single-thread rows).

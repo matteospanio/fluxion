@@ -1,4 +1,4 @@
-//! Real-time latency CCDF harness for the paper's Fig 4 (IS22026/EXPERIMENTS.md E5).
+//! Real-time latency CCDF harness for the paper's Fig 4 (experiment E5).
 //!
 //! Measures the wall time of the render-callback *body* — `RtGraph::process` on a prepared cascade
 //! — per block, for 8192 blocks per (depth, buffer) config, while a control thread streams
