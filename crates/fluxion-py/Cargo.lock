@@ -1177,6 +1177,7 @@ dependencies = [
  "fluxion-core",
  "fluxion-io",
  "fluxion-ops",
+ "fluxion-rt",
  "numpy",
  "pyo3",
 ]

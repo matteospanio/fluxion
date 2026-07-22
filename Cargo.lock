@@ -2677,6 +2677,8 @@ version = "0.0.0"
 dependencies = [
  "fluxion-backend",
  "fluxion-core",
+ "fluxion-ops",
+ "fluxion-rt",
 ]
 
 [[package]]

@@ -23,4 +23,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 [dependencies]
 fluxion-core = { path = "../fluxion-core", version = "0.0.0" }
 fluxion-backend = { path = "../fluxion-backend", version = "0.0.0" }
+# Realtime surface (fx_rt_*): the allocation-free streaming executor + cascade certification.
+fluxion-ops = { path = "../fluxion-ops", version = "0.0.0" }
+fluxion-rt = { path = "../fluxion-rt", version = "0.0.0" }
 # Added when the surface grows: a DLPack binding crate for zero-copy GPU tensor handoff.

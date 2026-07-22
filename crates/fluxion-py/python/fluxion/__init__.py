@@ -17,6 +17,7 @@ from .augment import Compose, RandomChain
 from ._fluxion import __cuda__
 from ._fluxion import (
     Chain,
+    RtChain,
     allpass,
     bandpass,
     cheby1_highpass,
@@ -41,6 +42,7 @@ from ._fluxion import (
 
 __all__ = [
     "Chain",
+    "RtChain",
     "lowpass",
     "highpass",
     "cheby1_lowpass",

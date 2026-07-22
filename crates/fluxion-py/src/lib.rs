@@ -27,6 +27,9 @@ use fluxion_io::checkpoint::{
 };
 use fluxion_ops::{Biquad, certify_sos, project_stable_flat, sos_filter, sos_input_grad, sos_vjp};
 
+mod rt;
+use rt::RtChain;
+
 fn make(kind: OpKind, params: Vec<f32>) -> PyResult<Chain> {
     let op = Op::new(kind, params).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(Chain {
@@ -488,6 +491,7 @@ fn save_biquad_fxg(
 #[pymodule]
 fn _fluxion(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Chain>()?;
+    m.add_class::<RtChain>()?;
     // True in the CUDA-built ("GPU") wheel, False in the default ("CPU") wheel.
     m.add("__cuda__", cfg!(feature = "cuda"))?;
     #[cfg(feature = "cuda")]

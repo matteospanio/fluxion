@@ -32,6 +32,19 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Added
 
+- **Realtime bindings (Python + C ABI)** — the `fluxion-rt` streaming engine is now reachable
+  from both binding surfaces, closing the "batch-only bindings" gap. Python: `fluxion.RtChain`
+  (`from_chain` / `from_sections`) lowers a `Chain` once at a fixed `fs`, certifies it on the
+  stability ladder (an `unstable` verdict is refused), pre-sizes every scratch buffer, then
+  `process(input, output)` filters caller-provided numpy blocks in place — allocation-free,
+  filter state carried across calls (chunked streaming ≡ whole-signal, asserted), GIL released
+  while the Rust kernel runs; `set_coeffs(node, sections, fade_samples)` swaps a filter live with
+  the equal-power crossfade (incoming sections certified too), and `filter_count` / `fs` /
+  `max_block` / `verdict` / `margin` expose the executor's state. C:
+  `fx_rt_new` / `fx_rt_process` / `fx_rt_set_coeffs` / `fx_rt_reset` / `fx_rt_filter_count` /
+  `fx_rt_free` plus the `FX_VERDICT_*` codes in the regenerated `include/fluxion.h` — the same
+  certification gate, panic-safe at the boundary, with an allocation-free process path that is
+  safe inside an audio callback (in/out aliasing and oversized blocks are rejected, not UB).
 - **Checkpoint import (goal #6 / J13, full slice)** — run DDSP filters trained in other
   frameworks: `fluxion import ckpt.safetensors model.fxg` (CLI) and
   `fluxion.interop.import_checkpoint(...)` (Python; also parses `.pt` and `.onnx` and torchfx

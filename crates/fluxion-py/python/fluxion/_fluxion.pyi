@@ -26,6 +26,54 @@ class Chain:
     def __add__(self, other: Chain) -> Chain: ...
     def __repr__(self) -> str: ...
 
+class RtChain:
+    """A realtime, stateful executor for a :class:`Chain`: streams a signal block-by-block.
+
+    Built once (lower + certify + pre-size), then :meth:`process` filters caller-provided
+    float32 blocks in place, allocation-free, carrying filter state across calls and releasing
+    the GIL while the Rust kernel runs. One ``RtChain`` is one mono stream — build one per
+    channel for multichannel audio.
+    """
+
+    @staticmethod
+    def from_chain(chain: Chain, fs: int, max_block: int = 4096) -> RtChain:
+        """Lower ``chain`` at sample rate ``fs`` for blocks up to ``max_block`` samples.
+
+        Certifies stability (an ``unstable`` chain raises ``ValueError``) and rejects chains
+        containing an op with no realtime lowering (``normalize`` / ``fade`` / ``reverse`` /
+        the modulated effects / feedback).
+        """
+        ...
+    @staticmethod
+    def from_sections(sections: F32, max_block: int = 4096) -> RtChain:
+        """A realtime executor from already-designed ``(n_sections, 5)`` ``[b0,b1,b2,a1,a2]``
+        coefficients (e.g. from ``import_state_dict``); ``fs`` is ``None``."""
+        ...
+    def process(self, input: F32, output: F32) -> None:
+        """Filter one block: both 1-D float32 C-contiguous arrays, same length ≤ ``max_block``,
+        distinct. State is carried across calls; the call is allocation-free."""
+        ...
+    def set_coeffs(self, node: int, sections: F32, fade_samples: int = 0) -> None:
+        """Crossfade the ``node``-th filter (depth-first) to a new ``(n_sections, 5)`` cascade.
+        Unstable sections raise ``ValueError``; an out-of-range node raises ``IndexError``.
+        Control-plane call (converts + certifies, allocating): call it between blocks from a
+        control thread, not from a hard-realtime audio callback."""
+        ...
+    def reset(self) -> None:
+        """Reset all filter state and delay lines to silence (call on seek / source switch)."""
+        ...
+    @property
+    def filter_count(self) -> int: ...
+    @property
+    def max_block(self) -> int: ...
+    @property
+    def fs(self) -> int | None: ...
+    @property
+    def verdict(self) -> str: ...
+    @property
+    def margin(self) -> float: ...
+    def __repr__(self) -> str: ...
+
 def lowpass(cutoff: float, order: int) -> Chain: ...
 def highpass(cutoff: float, order: int) -> Chain: ...
 def cheby1_lowpass(cutoff: float, order: int, ripple_db: float) -> Chain: ...
