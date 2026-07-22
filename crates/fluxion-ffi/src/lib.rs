@@ -616,6 +616,52 @@ mod tests {
     }
 
     #[test]
+    fn rt_fxg_roundtrip_with_fir_matches_batch() {
+        // The exact lampstream path: a provisioned `.fxg` carrying a FIR + gain chain is loaded
+        // from disk through the C ABI, lowered to a realtime executor, and streamed in blocks —
+        // the result must match the one-shot batch path on the same graph.
+        let taps: Vec<f32> = (0..64).map(|k| ((k as f32) * 0.11).sin() / 8.0).collect();
+        let g = Graph::op(OpKind::Fir, taps) | Graph::op(OpKind::Gain, [0.5]);
+
+        let mut path = std::env::temp_dir();
+        path.push(format!("fluxion_ffi_rt_fir_{}.fxg", std::process::id()));
+        fluxion_core::fxg::save(&g, &path).unwrap();
+        let c_path = CString::new(path.to_str().unwrap()).unwrap();
+
+        let gh = unsafe { fx_graph_load_fxg(c_path.as_ptr()) };
+        assert!(!gh.is_null(), "load returned NULL");
+        let rt = unsafe { fx_rt_new(gh, 48_000, 200, ptr::null_mut(), ptr::null_mut()) };
+        assert!(!rt.is_null());
+        // A FIR + gain chain has no addressable SOS filter node.
+        assert_eq!(unsafe { fx_rt_filter_count(rt) }, 0);
+
+        let x: Vec<f32> = (0..900).map(|i| (0.05 * i as f32).sin()).collect();
+        let mut streamed = vec![0.0f32; x.len()];
+        for (xc, yc) in x.chunks(100).zip(streamed.chunks_mut(100)) {
+            assert_eq!(
+                unsafe { fx_rt_process(rt, xc.as_ptr(), yc.as_mut_ptr(), xc.len()) },
+                FX_OK
+            );
+        }
+
+        let mut batch = x.clone();
+        assert_eq!(
+            unsafe { fx_process(gh, batch.as_mut_ptr(), batch.len(), 1, 48_000) },
+            FX_OK
+        );
+        for (i, (a, b)) in streamed.iter().zip(&batch).enumerate() {
+            assert!(
+                (a - b).abs() < 1e-4,
+                "sample {i}: streamed {a} vs batch {b}"
+            );
+        }
+
+        unsafe { fx_rt_free(rt) };
+        unsafe { fx_graph_free(gh) };
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
     fn rt_new_rejects_unstable_and_reports_verdict() {
         // A raw biquad with poles outside the unit circle (a2 = 1.5 ⇒ radius √1.5 > 1).
         let gh = graph_handle(Graph::op(OpKind::Biquad, [1.0, 0.0, 0.0, 0.0, 1.5]));

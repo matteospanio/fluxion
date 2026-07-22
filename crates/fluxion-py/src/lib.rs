@@ -190,6 +190,28 @@ impl Chain {
         Ok(flat.into_pyarray_bound(py))
     }
 
+    /// Serialize this chain to a `.fxg` graph artifact at `path` — the interchange format the C
+    /// ABI (`fx_graph_load_fxg`) and the CLI load. Ops are stored **un-designed** (coefficients are
+    /// computed when the graph is lowered at a sample rate), so one `.fxg` is sample-rate-agnostic
+    /// and carries the whole chain — biquads, FIR taps, gain, delay — not just SOS sections (unlike
+    /// [`save_biquad_fxg`]). Provision one `.fxg` per output channel this way, then load and stream
+    /// them from a C/C++ host via `fx_graph_load_fxg` + `fx_rt_new`.
+    fn save_fxg(&self, path: &str) -> PyResult<()> {
+        fluxion_core::fxg::save(&self.graph, path)
+            .map_err(|e| PyValueError::new_err(format!("writing '{path}': {e}")))
+    }
+
+    /// Certify this chain's stability at sample rate `fs`, returning `(verdict, margin)`: the
+    /// verdict string on the stability ladder (`certified-stable` / `marginally-stable` /
+    /// `indeterminate` / `not-certified` / `unstable`) and the numerical margin (`1 − spectral
+    /// radius`; `NaN` if indeterminate). This is the same certificate `fx_rt_new` and
+    /// `RtChain.from_chain` gate on (they refuse `unstable`) — call it in a provisioning script to
+    /// fail fast per channel before shipping the `.fxg`.
+    fn certify(&self, fs: u32) -> (String, f32) {
+        let cert = fluxion_backend::certify_graph(&self.graph, fs);
+        (cert.verdict.to_string(), cert.margin)
+    }
+
     /// `self | other` — run `self`, then feed its output to `other` (series composition).
     fn __or__(&self, other: &Chain) -> Chain {
         Chain {

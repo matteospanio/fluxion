@@ -172,6 +172,30 @@ def test_rejects_unstable_sections():
         rt.set_coeffs(0, unstable)
 
 
+def test_save_fxg_and_certify_for_provisioning(tmp_path):
+    """The offline provisioning path: build the sf-tk-style chain, certify it, save a .fxg."""
+    import json
+
+    chain = (
+        fluxion.highpass(150.0, 4)
+        | fluxion.lowpass(15_000.0, 4)
+        | fluxion.high_shelf(1_800.0, 3.0, 0.5)
+        | fluxion.peaking(500.0, -5.0, 1.4)
+        | fluxion.fir([0.0] * 511 + [1.0] + [0.0] * 512)  # 1024-tap delta, like fir/01.npy
+        | fluxion.gain(0.5)
+    )
+    verdict, margin = chain.certify(FS)
+    assert verdict == "certified-stable"
+    assert margin > 0.0
+
+    path = tmp_path / "channel_01.fxg"
+    chain.save_fxg(str(path))
+    assert path.exists() and path.stat().st_size > 0
+    # A .fxg is a versioned "graph" envelope (loaded later by fx_graph_load_fxg in C/C++).
+    doc = json.loads(path.read_text())
+    assert doc.get("kind") == "graph"
+
+
 def test_introspection_getters():
     chain = fluxion.lowpass(1000.0, 4) | fluxion.peaking(500.0, -5.0, 1.4) | fluxion.gain(0.5)
     rt = fluxion.RtChain.from_chain(chain, FS, max_block=512)

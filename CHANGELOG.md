@@ -45,6 +45,14 @@ All notable changes to fluxion are documented here. The format is based on
   `fx_rt_free` plus the `FX_VERDICT_*` codes in the regenerated `include/fluxion.h` — the same
   certification gate, panic-safe at the boundary, with an allocation-free process path that is
   safe inside an audio callback (in/out aliasing and oversized blocks are rejected, not UB).
+  This lets a C/C++ host stream a loaded `.fxg` block-by-block; a round-trip test provisions a
+  FIR + gain graph to disk, loads it through the C ABI, and asserts the streamed output matches
+  the batch path.
+- **`.fxg` provisioning from Python** — `Chain.save_fxg(path)` serializes the whole chain
+  (biquads, FIR taps, gain, delay) to a sample-rate-agnostic `.fxg` graph a C/C++ host loads with
+  `fx_graph_load_fxg` (the pre-existing `save_biquad_fxg` only covered raw SOS sections), and
+  `Chain.certify(fs)` returns the `(verdict, margin)` stability certificate for fail-fast
+  per-channel checks in a provisioning script.
 - **Checkpoint import (goal #6 / J13, full slice)** — run DDSP filters trained in other
   frameworks: `fluxion import ckpt.safetensors model.fxg` (CLI) and
   `fluxion.interop.import_checkpoint(...)` (Python; also parses `.pt` and `.onnx` and torchfx
