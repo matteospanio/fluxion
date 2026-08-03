@@ -4,17 +4,22 @@
 //! This is the **facade** crate: it re-exports the public surface and a [`prelude`] of ergonomic
 //! node constructors.
 //!
+//! The Rust quickstart. It is a doctest, so `cargo test` runs it — see `docs/interfaces.md` for
+//! the ten-line rule it is held to.
+//!
+//! <!-- quickstart:start -->
 //! ```
 //! use fluxion::prelude::*;
 //!
-//! let chain = lowpass(800.0, 2) | gain(0.5);        // `|` = series
-//! let eq    = lowpass(800.0, 2) + highpass(80.0, 2); // `+` = parallel (summed)
-//! assert_eq!(chain.leaf_count(), 2);
-//! assert_eq!(eq.leaf_count(), 2);
+//! let chain = highpass(80.0, 4) | gain(0.708);  // `|` = series, `+` = parallel (summed)
+//! let dry = Signal::new(48_000, vec![vec![0.0; 480]]);
+//! let wet = process(&chain, &dry);
+//! assert_eq!(wet.frames(), 480);
 //!
-//! // The same chain, written in the shared text syntax the CLI, Python, C and JS all accept.
-//! assert_eq!("lowpass(800, 2) | gain(0.5)".parse::<Graph>().unwrap(), chain);
+//! // The same chain in the text syntax the CLI, Python, C and JS all read.
+//! assert_eq!("highpass(80, 4) | gain(0.708)".parse::<Graph>().unwrap(), chain);
 //! ```
+//! <!-- quickstart:end -->
 
 pub use fluxion_backend::{
     Backend, Certificate, Cpu, Verdict, certify_graph, eval, graph_to_sos, is_differentiable,

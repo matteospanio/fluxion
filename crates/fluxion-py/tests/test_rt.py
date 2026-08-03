@@ -22,7 +22,7 @@ def _stream(rt: "fluxion.RtChain", x: np.ndarray, block: int) -> np.ndarray:
 
 def test_streaming_matches_whole_signal_iir():
     """Chunked RtChain output equals the one-shot batch Chain.process (state carried across blocks)."""
-    chain = fluxion.highpass(150.0, 4) | fluxion.lowpass(15_000.0, 4) | fluxion.peaking(500.0, -5.0, 1.4)
+    chain = fluxion.filter.Highpass(150.0, 4) | fluxion.filter.Lowpass(15_000.0, 4) | fluxion.filter.Peaking(500.0, -5.0, 1.4)
     rng = np.random.default_rng(0)
     x = rng.standard_normal(5000).astype(np.float32)
 
@@ -37,7 +37,7 @@ def test_streaming_matches_whole_signal_fir_and_gain():
     """A chain with a long FIR and a gain (the soundlamp shape) streams identically to batch."""
     rng = np.random.default_rng(1)
     taps = (rng.standard_normal(1024) / 64.0).astype(np.float32)
-    chain = fluxion.lowpass(4000.0, 4) | fluxion.fir(taps.tolist()) | fluxion.gain(0.5)
+    chain = fluxion.filter.Lowpass(4000.0, 4) | fluxion.filter.Fir(*taps.tolist()) | fluxion.effect.Gain(0.5)
     x = rng.standard_normal(4096).astype(np.float32)
 
     whole = chain.process(x, FS)
@@ -50,7 +50,7 @@ def test_streaming_matches_whole_signal_fir_and_gain():
 
 def test_state_is_carried_and_reset():
     """Two identical blocks give different outputs (state), and reset() restores the start."""
-    chain = fluxion.lowpass(1000.0, 4)
+    chain = fluxion.filter.Lowpass(1000.0, 4)
     rt = fluxion.RtChain.from_chain(chain, FS, max_block=64)
     x = np.ones(64, np.float32)
     a, b, c = (np.empty(64, np.float32) for _ in range(3))
@@ -66,7 +66,7 @@ def test_state_is_carried_and_reset():
 
 def test_from_sections_matches_from_chain():
     """RtChain.from_sections(chain.sos_coeffs) behaves exactly like from_chain for a pure cascade."""
-    chain = fluxion.lowpass(2000.0, 6)
+    chain = fluxion.filter.Lowpass(2000.0, 6)
     sections = chain.sos_coeffs(FS).reshape(-1, 5)
     rng = np.random.default_rng(2)
     x = rng.standard_normal(2000).astype(np.float32)
@@ -80,8 +80,8 @@ def test_from_sections_matches_from_chain():
 
 def test_set_coeffs_crossfades_to_the_new_filter():
     """Swapping lp→hp on DC slides the output 1→0 without a click and settles near 0."""
-    rt = fluxion.RtChain.from_chain(fluxion.lowpass(2000.0, 2), FS, max_block=200)
-    hp = fluxion.highpass(2000.0, 2).sos_coeffs(FS).reshape(-1, 5)
+    rt = fluxion.RtChain.from_chain(fluxion.filter.Lowpass(2000.0, 2), FS, max_block=200)
+    hp = fluxion.filter.Highpass(2000.0, 2).sos_coeffs(FS).reshape(-1, 5)
 
     dc = np.ones(200, np.float32)
     out = np.empty(200, np.float32)
@@ -101,11 +101,11 @@ def test_set_coeffs_crossfades_to_the_new_filter():
 
 def test_set_coeffs_routes_to_the_addressed_node_in_series():
     """Swapping node 1 (the second filter, depth-first) to a high-pass must kill DC."""
-    chain = fluxion.lowpass(2000.0, 2) | fluxion.lowpass(2000.0, 2)
+    chain = fluxion.filter.Lowpass(2000.0, 2) | fluxion.filter.Lowpass(2000.0, 2)
     rt = fluxion.RtChain.from_chain(chain, FS, max_block=256)
     assert rt.filter_count == 2
 
-    hp = fluxion.highpass(2000.0, 2).sos_coeffs(FS).reshape(-1, 5)
+    hp = fluxion.filter.Highpass(2000.0, 2).sos_coeffs(FS).reshape(-1, 5)
     rt.set_coeffs(1, hp, fade_samples=1)
     dc = np.ones(256, np.float32)
     out = np.empty(256, np.float32)
@@ -121,7 +121,7 @@ def test_parallel_chain_filter_count_and_node_routing():
     depth-first — to another low-pass doubles the DC gain (sum ≈ 2), proving the index routed
     to the right branch and not the left.
     """
-    chain = fluxion.lowpass(2000.0, 2) + fluxion.highpass(2000.0, 2)
+    chain = fluxion.filter.Lowpass(2000.0, 2) + fluxion.filter.Highpass(2000.0, 2)
     rt = fluxion.RtChain.from_chain(chain, FS, max_block=256)
     assert rt.filter_count == 2
 
@@ -131,7 +131,7 @@ def test_parallel_chain_filter_count_and_node_routing():
         rt.process(dc, out)
     assert abs(out[-1] - 1.0) < 0.02, "before the swap only the low branch passes DC"
 
-    lp = fluxion.lowpass(2000.0, 2).sos_coeffs(FS).reshape(-1, 5)
+    lp = fluxion.filter.Lowpass(2000.0, 2).sos_coeffs(FS).reshape(-1, 5)
     rt.set_coeffs(1, lp, fade_samples=1)
     for _ in range(30):
         rt.process(dc, out)
@@ -139,7 +139,7 @@ def test_parallel_chain_filter_count_and_node_routing():
 
 
 def test_guard_rails():
-    chain = fluxion.lowpass(1000.0, 4)
+    chain = fluxion.filter.Lowpass(1000.0, 4)
     rt = fluxion.RtChain.from_chain(chain, FS, max_block=64)
     x64, y64 = np.zeros(64, np.float32), np.zeros(64, np.float32)
 
@@ -158,7 +158,7 @@ def test_guard_rails():
 def test_rejects_non_realtime_chain():
     """normalize needs the whole signal's peak — no realtime lowering."""
     with pytest.raises(ValueError, match="realtime"):
-        fluxion.RtChain.from_chain(fluxion.lowpass(1000.0, 4) | fluxion.normalize(1.0), FS)
+        fluxion.RtChain.from_chain(fluxion.filter.Lowpass(1000.0, 4) | fluxion.effect.Normalize(1.0), FS)
 
 
 def test_rejects_unstable_sections():
@@ -167,7 +167,7 @@ def test_rejects_unstable_sections():
     with pytest.raises(ValueError, match="unstable"):
         fluxion.RtChain.from_sections(unstable)
 
-    rt = fluxion.RtChain.from_chain(fluxion.lowpass(1000.0, 2), FS)
+    rt = fluxion.RtChain.from_chain(fluxion.filter.Lowpass(1000.0, 2), FS)
     with pytest.raises(ValueError, match="unstable"):
         rt.set_coeffs(0, unstable)
 
@@ -177,12 +177,12 @@ def test_save_fxg_and_certify_for_provisioning(tmp_path):
     import json
 
     chain = (
-        fluxion.highpass(150.0, 4)
-        | fluxion.lowpass(15_000.0, 4)
-        | fluxion.high_shelf(1_800.0, 3.0, 0.5)
-        | fluxion.peaking(500.0, -5.0, 1.4)
-        | fluxion.fir([0.0] * 511 + [1.0] + [0.0] * 512)  # 1024-tap delta, like fir/01.npy
-        | fluxion.gain(0.5)
+        fluxion.filter.Highpass(150.0, 4)
+        | fluxion.filter.Lowpass(15_000.0, 4)
+        | fluxion.filter.HighShelf(1_800.0, 3.0, 0.5)
+        | fluxion.filter.Peaking(500.0, -5.0, 1.4)
+        | fluxion.filter.Fir(*([0.0] * 511 + [1.0] + [0.0] * 512))  # 1024-tap delta, like fir/01.npy
+        | fluxion.effect.Gain(0.5)
     )
     verdict, margin = chain.certify(FS)
     assert verdict == "certified-stable"
@@ -197,7 +197,7 @@ def test_save_fxg_and_certify_for_provisioning(tmp_path):
 
 
 def test_introspection_getters():
-    chain = fluxion.lowpass(1000.0, 4) | fluxion.peaking(500.0, -5.0, 1.4) | fluxion.gain(0.5)
+    chain = fluxion.filter.Lowpass(1000.0, 4) | fluxion.filter.Peaking(500.0, -5.0, 1.4) | fluxion.effect.Gain(0.5)
     rt = fluxion.RtChain.from_chain(chain, FS, max_block=512)
     # lowpass and peaking design to SOS filter nodes; gain is not addressable.
     assert rt.filter_count == 2

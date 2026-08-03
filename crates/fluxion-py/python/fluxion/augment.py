@@ -11,8 +11,8 @@ Pure Python, numpy-only. Two small composables for stochastic audio augmentation
     >>> import numpy as np, fluxion
     >>> from fluxion.augment import Compose, RandomChain
     >>> aug = Compose([
-    ...     RandomChain(fluxion.lowpass, cutoff=(500.0, 8000.0), order=4, p=0.5, rng=0),
-    ...     fluxion.gain(0.9),
+    ...     RandomChain(fluxion.filter.Lowpass, cutoff=(500.0, 8000.0), order=4, p=0.5, rng=0),
+    ...     fluxion.effect.Gain(0.9),
     ... ])
     >>> x = np.random.default_rng(0).standard_normal(1000).astype(np.float32)
     >>> y = aug(x, 48_000)          # same seed → same output every run
@@ -71,7 +71,7 @@ class RandomChain:
 
         >>> import fluxion
         >>> from fluxion.augment import RandomChain
-        >>> rc = RandomChain(fluxion.lowpass, cutoff=(200.0, 8000.0), order=4, p=0.8, rng=0)
+        >>> rc = RandomChain(fluxion.filter.Lowpass, cutoff=(200.0, 8000.0), order=4, p=0.8, rng=0)
         >>> params = rc.sample()           # e.g. {'cutoff': 5123.4, 'order': 4}
         >>> chain = rc.build()             # a fresh fluxion.Chain with sampled params
     """

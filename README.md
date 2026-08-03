@@ -41,9 +41,14 @@ One codebase, four ways in:
   (parallel), run them batched on CPU/GPU, differentiate them, or freeze them for realtime.
 - **CLI** — `fluxion`, a SoX substitute with named effects and long flags (not SoX's interface,
   most of SoX's jobs).
-- **Python** — `fluxion` on PyPI: a torchaudio-style eager API, zero-copy DLPack interop,
-  torch/JAX autograd adapters, batched data augmentation.
+- **Python** — `fluxion` on PyPI: a torchfx-style API (`Wave`, effect classes, `|` and `+`),
+  zero-copy DLPack interop, torch/JAX autograd adapters, batched data augmentation.
 - **C ABI** — a small panic-safe surface (`fluxion.h`) for C/C++/Swift consumers.
+
+All of them build the same graph and share one text form for it —
+`"highpass(80, 4) | gain(-3dB)"` means the same thing everywhere. See
+[docs/interfaces.md](docs/interfaces.md) for the contract between them and
+[docs/ops.md](docs/ops.md) for every op's name on every interface.
 
 ## Install
 
@@ -146,15 +151,20 @@ Not ported from SoX (yet or ever): `tempo`/`pitch` (time-stretch), `spectrogram`
 ## Python
 
 ```python
-import numpy as np, fluxion
+import fluxion as fx
 from fluxion import Compose, RandomChain
 
-chain = fluxion.lowpass(8000) | fluxion.gain(0.5)     # same algebra
-y  = chain.process(x, fs=48_000)                      # (T,) or (C, T); numpy/torch/jax in via DLPack
-ys = chain.process_batch(batch, fs=48_000)            # (B, T) batched
+# Wave carries fs, so it never appears in the chain. `|` is series, `+` is parallel.
+wave = fx.Wave.from_file("in.wav")
+(wave | fx.filter.Highpass(80, order=4) | fx.effect.Gain(fx.db(-3))).save("out.wav")
+
+chain = fx.filter.Lowpass(8000) | fx.effect.Gain(0.5)  # same algebra as Rust and the CLI
+chain = fx.chain("lowpass(8000) | gain(0.5)")          # ...or the shared text form
+y  = chain(x, fs=48_000)                               # (T,) or (C, T); numpy/torch/jax via DLPack
+ys = chain.process_batch(batch, fs=48_000)             # (B, T) batched
 
 # Data augmentation: stochastic chains, seeded.
-aug = Compose([RandomChain(fluxion.lowpass, cutoff=(2_000, 16_000), p=0.8)])
+aug = Compose([RandomChain(fx.filter.Lowpass, cutoff=(2_000, 16_000), p=0.8)])
 x_aug = aug(x, fs=48_000)
 
 # Dataset IO (extra: fluxion[dataset]) — Parquet, same schema as the Rust side, streamed.
@@ -167,7 +177,7 @@ from fluxion.torch import SosModule
 mod = SosModule.from_chain(chain, fs=48_000)
 
 # Import a FLAMO-trained SISO biquad cascade (extra: fluxion[interop]).
-coeffs = fluxion.interop.load_flamo_sos("checkpoint.safetensors")
+coeffs = fx.interop.load_flamo_sos("checkpoint.safetensors")
 ```
 
 ## Workspace

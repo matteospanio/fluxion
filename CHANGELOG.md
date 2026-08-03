@@ -21,6 +21,24 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Changed
 
+- **Breaking: the Python API is now torchfx-shaped (Epic I / I3)** — `fluxion.Wave` carries the
+  sample rate, so `fs` leaves user code entirely: `wave | fx.filter.Highpass(80, order=4) |
+  fx.effect.Gain(fx.db(-3))`, then `.save()`. `|` is series and `+` is parallel, the same algebra
+  as the Rust library and the CLI. Piping is deferred — `w | a | b | c` accumulates one chain and
+  runs it in a single fused pass rather than three. `Wave.from_file` / `.save` go through
+  `fluxion-io`, so the wheel gained file I/O with no new Python dependency. Arrays still work
+  everywhere a `Wave` does, and a chain is now directly callable: `chain(x, fs=48_000)`.
+  The eighteen hand-written per-op functions are gone. Every op is a class in `fluxion.filter` or
+  `fluxion.effect`, **generated** from the registry along with its typed stub and its docstring —
+  coverage goes from 18 of 27 ops to all 27, and `fade`, `tremolo`, `overdrive`, `compand`,
+  `reverse`, `biquad`, `chorus`, `flanger` and `phaser` reach Python for the first time. Names and
+  parameter names are the registry's, so `low_shelf`/`high_shelf` become `LowShelf`/`HighShelf`,
+  `delay(seconds=…)` becomes `Delay(time=…)` and `gain(value=…)` becomes `Gain(gain=…)`.
+  `fluxion.chain("highpass(80, 4) | gain(-3dB)")` parses the shared text form and `str(chain)`
+  prints it back. Errors name the class, the parameter and its range, and suggest a fix on a typo.
+  A conformance test compares `fluxion.filter` / `fluxion.effect` against `fluxion.ops_table()` in
+  both directions, so neither a missing class nor a stale generated file can survive CI. New
+  helper: `fluxion.db(-3)` for the linear ratio the gain-like ops take.
 - **Breaking: one op name on every interface (Epic I / I2)** — the four Chebyshev ops were spelled
   `cheby1low` / `cheby1high` / `cheby2low` / `cheby2high` in the CLI and chain text but
   `cheby1_lowpass` / … in Rust and Python. The registry name is now the long form everywhere, which
