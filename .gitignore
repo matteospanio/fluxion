@@ -12,8 +12,11 @@ __pycache__/
 dist/
 *.egg-info/
 
-# WASM build artifacts
+# WASM build artifacts (scripts/build-wasm.sh output; the JS package that wraps it is
+# committed, the compiled bytes are not)
 /pkg
+crates/fluxion-wasm/js/pkg/
+node_modules/
 
 # Editor / OS
 .DS_Store

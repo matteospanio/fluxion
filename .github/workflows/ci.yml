@@ -243,6 +243,29 @@ jobs:
                    --output "$RUNNER_TEMP/fluxion.h"
           diff -u crates/fluxion-ffi/include/fluxion.h "$RUNNER_TEMP/fluxion.h"
 
+  # ROADMAP W1: the crate builds for wasm32 on every PR, and Node loads the module and calls into
+  # it. The build has to keep working or the browser story quietly stops being true.
+  wasm:
+    name: wasm (build + Node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      # wasm-bindgen-cli and the wasm-bindgen crate are a matched pair; a mismatch fails with an
+      # opaque schema error, so take the version from the lockfile rather than guessing.
+      - name: install wasm-bindgen-cli at the locked version
+        run: cargo install --locked "wasm-bindgen-cli@$(./scripts/build-wasm.sh --print-version)"
+      - run: ./scripts/build-wasm.sh
+      - name: Node loads the module
+        working-directory: crates/fluxion-wasm/js
+        run: node smoke.mjs
+
   cuda:
     name: cuda check (API drift, no GPU)
     runs-on: ubuntu-latest

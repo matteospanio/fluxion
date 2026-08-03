@@ -99,6 +99,14 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Added
 
+- **WebAssembly build (roadmap W1)** — `crates/fluxion-wasm` was a seven-line scaffold with no
+  dependencies. It now compiles to wasm32 with wasm-bindgen, and `scripts/build-wasm.sh` emits the
+  module plus its JavaScript glue and `.d.ts`. A `wasm` CI job builds it on every PR and loads it
+  in Node, so the browser path cannot quietly stop working. The facade's dependency tree turned out
+  to be wasm-clean as-is — rustfft included — because it does not pull `fluxion-io` and CubeCL sits
+  behind the `cuda` feature. `rust-toolchain.toml` now installs the `wasm32-unknown-unknown` target,
+  so a fresh checkout can build it without a separate `rustup target add`. Panics route through
+  `console_error_panic_hook`, since the default is an unhelpful `unreachable executed`.
 - **C: build a chain from text (Epic I / I5)** — `fx_chain_from_text("highpass(80, 4) |
   gain(-3dB)")` reaches the whole op catalog from C, and `fx_graph_to_text` prints a graph back in
   the same form (snprintf semantics: caller-owned buffer, returns the length needed). Before this,

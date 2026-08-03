@@ -194,7 +194,7 @@ coeffs = fx.interop.load_flamo_sos("checkpoint.safetensors")
 | `fluxion-cli` | The `fluxion` binary (feature `realtime` for play/record) |
 | `fluxion-py` | PyO3/maturin package `fluxion` (abi3, numpy-only hard dep; extras: torch/jax/interop/dataset) |
 | `fluxion-ffi` | C ABI (`include/fluxion.h`, cbindgen), panic-safe; `publish = false` |
-| `fluxion-wasm` | wasm-bindgen (CPU + WebGPU) — stub, deferred to 1.x; `publish = false` |
+| `fluxion-wasm` | wasm-bindgen browser bindings: chain from text + offline render (CPU). AudioWorklet and WebGPU deferred; `publish = false` |
 
 GPU status: CUDA forward + backward kernels are implemented and validated on NVIDIA hardware;
 Apple Metal / AMD ROCm validation via CubeCL is pending, so GPU stays behind the `cuda` feature.
