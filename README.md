@@ -29,6 +29,11 @@ from Training GPU to Real-Time Edge* (IS² 2026) — see [Citation](#citation) a
 > set with hand-derived analytic gradients, Burn-based whole-graph autodiff, CPU SIMD + CUDA
 > batch kernels, the allocation-free realtime engine, audio IO, the CLI, and the Python package.
 > The public API and the `.fxg` on-disk format may still change before 1.0.
+>
+> **Roadmap:** the host-engine push — WebAssembly first, then streaming resampling, the
+> mastering set, sidechain routing, analysis taps, the timeline helpers, and one simple API
+> across CLI, Python, C and the browser — is planned task-by-task, with dependencies and
+> verifiable milestones, in [ROADMAP.md](ROADMAP.md).
 
 One codebase, four ways in:
 
