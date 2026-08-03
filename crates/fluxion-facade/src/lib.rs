@@ -7,10 +7,13 @@
 //! ```
 //! use fluxion::prelude::*;
 //!
-//! let chain = lowpass(800.0) | gain(0.5);        // `|` = series
-//! let eq    = lowpass(800.0) + highpass(80.0);   // `+` = parallel (summed)
+//! let chain = lowpass(800.0, 2) | gain(0.5);        // `|` = series
+//! let eq    = lowpass(800.0, 2) + highpass(80.0, 2); // `+` = parallel (summed)
 //! assert_eq!(chain.leaf_count(), 2);
 //! assert_eq!(eq.leaf_count(), 2);
+//!
+//! // The same chain, written in the shared text syntax the CLI, Python, C and JS all accept.
+//! assert_eq!("lowpass(800, 2) | gain(0.5)".parse::<Graph>().unwrap(), chain);
 //! ```
 
 pub use fluxion_backend::{
@@ -60,23 +63,13 @@ pub mod prelude {
         Graph::op(OpKind::Gain, [g])
     }
 
-    /// A 2nd-order Butterworth low-pass with the given cutoff in Hz.
-    pub fn lowpass(cutoff_hz: f32) -> Graph {
-        lowpass_n(cutoff_hz, 2)
-    }
-
     /// A Butterworth low-pass of the given cutoff (Hz) and order.
-    pub fn lowpass_n(cutoff_hz: f32, order: u32) -> Graph {
+    pub fn lowpass(cutoff_hz: f32, order: u32) -> Graph {
         Graph::op(OpKind::Lowpass, [cutoff_hz, order as f32])
     }
 
-    /// A 2nd-order Butterworth high-pass with the given cutoff in Hz.
-    pub fn highpass(cutoff_hz: f32) -> Graph {
-        highpass_n(cutoff_hz, 2)
-    }
-
     /// A Butterworth high-pass of the given cutoff (Hz) and order.
-    pub fn highpass_n(cutoff_hz: f32, order: u32) -> Graph {
+    pub fn highpass(cutoff_hz: f32, order: u32) -> Graph {
         Graph::op(OpKind::Highpass, [cutoff_hz, order as f32])
     }
 
@@ -140,6 +133,21 @@ pub mod prelude {
     /// Chebyshev Type I high-pass: `cutoff` Hz, `order`, passband `ripple` dB.
     pub fn cheby1_highpass(cutoff_hz: f32, order: u32, ripple_db: f32) -> Graph {
         Graph::op(OpKind::Cheby1Highpass, [cutoff_hz, order as f32, ripple_db])
+    }
+
+    /// Chebyshev Type II low-pass: `cutoff` = stopband edge Hz, `order`, stopband `atten` dB.
+    pub fn cheby2_lowpass(cutoff_hz: f32, order: u32, atten_db: f32) -> Graph {
+        Graph::op(OpKind::Cheby2Lowpass, [cutoff_hz, order as f32, atten_db])
+    }
+
+    /// Chebyshev Type II high-pass: `cutoff` = stopband edge Hz, `order`, stopband `atten` dB.
+    pub fn cheby2_highpass(cutoff_hz: f32, order: u32, atten_db: f32) -> Graph {
+        Graph::op(OpKind::Cheby2Highpass, [cutoff_hz, order as f32, atten_db])
+    }
+
+    /// Schroeder–Moorer reverb: `room` size, `damping`, wet/dry `mix` (all 0..1).
+    pub fn reverb(room: f32, damping: f32, mix: f32) -> Graph {
+        Graph::op(OpKind::Reverb, [room, damping, mix])
     }
 
     /// Amplitude fade: `fadein`/`fadeout` seconds with a `shape` curve (0 = linear, 1 = quarter-sine
@@ -221,8 +229,14 @@ mod tests {
     #[test]
     fn prelude_constructors_build_the_right_ops() {
         assert_op(gain(0.5), OpKind::Gain, &[0.5]);
-        assert_op(lowpass(800.0), OpKind::Lowpass, &[800.0, 2.0]);
-        assert_op(highpass_n(80.0, 4), OpKind::Highpass, &[80.0, 4.0]);
+        assert_op(lowpass(800.0, 2), OpKind::Lowpass, &[800.0, 2.0]);
+        assert_op(highpass(80.0, 4), OpKind::Highpass, &[80.0, 4.0]);
+        assert_op(reverb(0.5, 0.3, 0.3), OpKind::Reverb, &[0.5, 0.3, 0.3]);
+        assert_op(
+            cheby2_lowpass(1000.0, 4, 40.0),
+            OpKind::Cheby2Lowpass,
+            &[1000.0, 4.0, 40.0],
+        );
         assert_op(
             peaking(1_000.0, 6.0, 1.5),
             OpKind::Peaking,

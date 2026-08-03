@@ -71,7 +71,11 @@ behind the feature flags that need them.
 use fluxion::prelude::*;
 
 // `|` = series, `+` = parallel (outputs summed) — the same algebra everywhere.
-let chain = (lowpass(800.0) + highpass(4000.0)) | compand(0.01, 0.1, -20.0, 4.0, 6.0, 0.0) | gain(0.5);
+let chain = (lowpass(800.0, 2) + highpass(4000.0, 2)) | compand(0.01, 0.1, -20.0, 4.0, 6.0, 0.0) | gain(0.5);
+
+// The same chain, written in the text syntax the CLI, Python, C and JS all share.
+let same: Graph = "(lowpass(800, 2) + highpass(4000, 2)) | compand(0.01, 0.1, -20, 4, 6, 0) | gain(0.5)".parse()?;
+assert_eq!(same, chain);
 
 let wet = process(&chain, &signal);              // batch: any channels, allocates freely
 ```
@@ -129,7 +133,8 @@ fluxion import ckpt.safetensors model.fxg
 ```
 
 **Effects** (graph ops): `gain`, `lowpass`/`highpass` (Butterworth, any order),
-`cheby1low`/`cheby1high`/`cheby2low`/`cheby2high`, RBJ `peaking`/`lowshelf`/`highshelf`/
+`cheby1_lowpass`/`cheby1_highpass`/`cheby2_lowpass`/`cheby2_highpass`, RBJ
+`peaking`/`lowshelf`/`highshelf`/
 `notch`/`bandpass`/`allpass`, raw `biquad`, `fir --taps …`, `normalize`, `delay`, `echo`,
 `reverb`, `fade`, `tremolo`, `overdrive`, `compand`, `reverse`, `chorus`, `flanger`, `phaser`.
 **Geometry stages**: `trim`, `pad`, `rate`, `speed`, `repeat`, `silence`, `channels`, `remix`.

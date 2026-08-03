@@ -170,28 +170,28 @@ ops! {
     ];
 
     /// Chebyshev Type I low-pass (`cutoff` Hz, `order`, passband `ripple` dB).
-    Cheby1Lowpass => "cheby1low", Filter, [
+    Cheby1Lowpass => "cheby1_lowpass", Filter, [
         ParamSpec::new("cutoff", Unit::Hz, 1000.0, 0.0, f32::INFINITY),
         ParamSpec::new("order", Unit::Linear, 4.0, 1.0, 16.0),
         ParamSpec::new("ripple", Unit::Db, 1.0, 1e-2, 12.0),
     ];
 
     /// Chebyshev Type I high-pass (`cutoff` Hz, `order`, passband `ripple` dB).
-    Cheby1Highpass => "cheby1high", Filter, [
+    Cheby1Highpass => "cheby1_highpass", Filter, [
         ParamSpec::new("cutoff", Unit::Hz, 1000.0, 0.0, f32::INFINITY),
         ParamSpec::new("order", Unit::Linear, 4.0, 1.0, 16.0),
         ParamSpec::new("ripple", Unit::Db, 1.0, 1e-2, 12.0),
     ];
 
     /// Chebyshev Type II low-pass (`cutoff` = stopband edge Hz, `order`, stopband `atten` dB).
-    Cheby2Lowpass => "cheby2low", Filter, [
+    Cheby2Lowpass => "cheby2_lowpass", Filter, [
         ParamSpec::new("cutoff", Unit::Hz, 1000.0, 0.0, f32::INFINITY),
         ParamSpec::new("order", Unit::Linear, 4.0, 1.0, 16.0),
         ParamSpec::new("atten", Unit::Db, 40.0, 10.0, 120.0),
     ];
 
     /// Chebyshev Type II high-pass (`cutoff` = stopband edge Hz, `order`, stopband `atten` dB).
-    Cheby2Highpass => "cheby2high", Filter, [
+    Cheby2Highpass => "cheby2_highpass", Filter, [
         ParamSpec::new("cutoff", Unit::Hz, 1000.0, 0.0, f32::INFINITY),
         ParamSpec::new("order", Unit::Linear, 4.0, 1.0, 16.0),
         ParamSpec::new("atten", Unit::Db, 40.0, 10.0, 120.0),

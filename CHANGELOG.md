@@ -21,6 +21,16 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Changed
 
+- **Breaking: one op name on every interface (Epic I / I2)** — the four Chebyshev ops were spelled
+  `cheby1low` / `cheby1high` / `cheby2low` / `cheby2high` in the CLI and chain text but
+  `cheby1_lowpass` / … in Rust and Python. The registry name is now the long form everywhere, which
+  is also what CONTRIBUTING's naming rule asks for. `.fxg` files are unaffected — they key on the
+  Rust variant name, not this one. In the Rust prelude, `lowpass`/`highpass` now take
+  `(cutoff, order)` like every other builder, and the `lowpass_n`/`highpass_n` synonyms are gone;
+  the three ops the prelude was silently missing (`reverb`, `cheby2_lowpass`, `cheby2_highpass`)
+  are added. A conformance test in each of `fluxion` and `fluxion-cli` now fails the build if the
+  prelude or the `effects` listing drifts from the registry, which is how those three gaps were
+  found.
 - **`Graph`'s text rendering is now canonical (Epic I / I2)** — `Display` used to print
   `Series(Series(a,b),c)` and `Series(a,Series(b,c))` identically, and a `Named` node wrapping a
   composite lost track of where the label ended. Both are now bracketed: a same-kind child is

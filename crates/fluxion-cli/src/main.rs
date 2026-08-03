@@ -13,7 +13,8 @@
 //!
 //! - **Effects** (per-channel, length/rate/channel-preserving, composable): `gain`, `lowpass`,
 //!   `highpass`, `peaking`, `lowshelf`, `highshelf`, `notch`, `bandpass`, `allpass`, `delay`, `echo`,
-//!   `cheby1low/high`, `cheby2low/high`, `reverb`, `fir`, `fade`, `tremolo`, `overdrive`, `compand`,
+//!   `cheby1_lowpass/highpass`, `cheby2_lowpass/highpass`, `reverb`, `fir`, `fade`, `tremolo`,
+//!   `overdrive`, `compand`,
 //!   `reverse`, `biquad`, `chorus`, `flanger`, `phaser`. Run `fluxion effects` for the full schema.
 //! - **Geometry stages**: `trim`, `pad`, `rate`, `speed`, `repeat`, `silence`, `channels`, `remix`.
 //! - **Numbers** accept a `k`/`K` suffix (`--cutoff 1k`); `gain --db` / `normalize --db` take dB.
