@@ -2626,7 +2626,7 @@ dependencies = [
 
 [[package]]
 name = "fluxion"
-version = "0.0.0"
+version = "0.2.0"
 dependencies = [
  "fluxion-autodiff",
  "fluxion-backend",
@@ -2637,7 +2637,7 @@ dependencies = [
 
 [[package]]
 name = "fluxion-autodiff"
-version = "0.0.0"
+version = "0.2.0"
 dependencies = [
  "burn",
  "burn-cubecl",
@@ -2649,7 +2649,7 @@ dependencies = [
 
 [[package]]
 name = "fluxion-backend"
-version = "0.0.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "cubecl",
@@ -2663,7 +2663,7 @@ dependencies = [
 
 [[package]]
 name = "fluxion-cli"
-version = "0.0.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "fluxion",
@@ -2676,7 +2676,7 @@ dependencies = [
 
 [[package]]
 name = "fluxion-core"
-version = "0.0.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2684,7 +2684,7 @@ dependencies = [
 
 [[package]]
 name = "fluxion-ffi"
-version = "0.0.0"
+version = "0.2.0"
 dependencies = [
  "fluxion-backend",
  "fluxion-core",
@@ -2694,7 +2694,7 @@ dependencies = [
 
 [[package]]
 name = "fluxion-io"
-version = "0.0.0"
+version = "0.2.0"
 dependencies = [
  "arrow",
  "fluxion-core",
@@ -2707,7 +2707,7 @@ dependencies = [
 
 [[package]]
 name = "fluxion-ops"
-version = "0.0.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "fluxion-core",
@@ -2716,7 +2716,7 @@ dependencies = [
 
 [[package]]
 name = "fluxion-rt"
-version = "0.0.0"
+version = "0.2.0"
 dependencies = [
  "cpal",
  "fluxion-ops",
@@ -2724,7 +2724,7 @@ dependencies = [
 
 [[package]]
 name = "fluxion-wasm"
-version = "0.0.0"
+version = "0.2.0"
 dependencies = [
  "console_error_panic_hook",
  "fluxion",

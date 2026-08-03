@@ -60,6 +60,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # Six manifests plus a package.json have to name the same version or `cargo publish` refuses
+      # the workspace. scripts/set-version.sh is what sets them; this is what notices when one was
+      # edited by hand.
+      - run: ./scripts/set-version.sh --check
       - run: cargo build -p fluxion-cli --locked
       - run: python3 scripts/gen_interfaces.py
       - name: generated files are up to date

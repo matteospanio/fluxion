@@ -25,7 +25,7 @@ parquet = ["dep:arrow", "dep:parquet"]
 checkpoint = ["dep:safetensors"]
 
 [dependencies]
-fluxion-core = { path = "../fluxion-core", version = "0.0.0" }
+fluxion-core = { path = "../fluxion-core", version = "0.2.0" }
 hound = "3.5"
 symphonia = { version = "0.5", features = ["all-codecs", "all-formats"] }
 # Batch IO (feature `parquet`). default-features off keeps the transitive tree to the array/schema

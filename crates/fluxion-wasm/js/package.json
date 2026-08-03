@@ -1,6 +1,6 @@
 {
   "name": "fluxion",
-  "version": "0.0.0",
+  "version": "0.2.0",
   "description": "Differentiable, cross-vendor audio DSP in the browser — the same engine as the Rust library, the CLI and the Python package.",
   "type": "module",
   "main": "./index.mjs",

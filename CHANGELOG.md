@@ -19,6 +19,12 @@ All notable changes to fluxion are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-03
+
+First release of the host-engine push: [Epic I](ROADMAP.md) — one op registry behind every
+interface, one text form for a chain, and a quickstart per interface that CI runs — plus the
+WebAssembly build and the browser chain API (roadmap W1–W2).
+
 ### Changed
 
 - **CLI help and errors that help (Epic I / I4)** — `fluxion --help` used to list ten global flags
@@ -261,4 +267,5 @@ All notable changes to fluxion are documented here. The format is based on
 
 - Pre-1.0: the public Rust/Python API and the `.fxg` on-disk format are not yet stable.
 
-[Unreleased]: https://github.com/matteospanio/fluxion/commits/main
+[Unreleased]: https://github.com/matteospanio/fluxion/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/matteospanio/fluxion/releases/tag/v0.2.0
