@@ -2,7 +2,7 @@
 
 # The op catalog
 
-27 ops, generated from the single table in
+29 ops, generated from the single table in
 [`crates/fluxion-core/src/op.rs`](../crates/fluxion-core/src/op.rs). The rule this table
 exists to enforce is in [interfaces.md](interfaces.md): **an op ships on every interface,
 or this document says why not.**
@@ -39,6 +39,8 @@ same op as a function and a class respectively, both named from the row below.
 | `biquad` | `prelude::biquad` | `fluxion.filter.Biquad` | via chain text |
 | `chorus` | `prelude::chorus` | `fluxion.effect.Chorus` | via chain text |
 | `flanger` | `prelude::flanger` | `fluxion.effect.Flanger` | via chain text |
+| `limiter` | `prelude::limiter` | `fluxion.effect.Limiter` | via chain text |
+| `loudnorm` | `prelude::loudnorm` | `fluxion.effect.Loudnorm` | via chain text |
 | `phaser` | `prelude::phaser` | `fluxion.effect.Phaser` | via chain text |
 
 ## What each op does
@@ -148,6 +150,14 @@ same op as a function and a class respectively, both named from the row below.
 **`flanger(rate=0.5, depth=0.002, delay=0.001, feedback=0.5, mix=0.5)`** — Flanger: a short LFO-modulated delay (`rate` Hz, `depth` s, `delay` s) with `feedback`, blended by `mix`. Length-preserving.
 
 > `rate` 0..100 Hz · `depth` 0..1 s · `delay` 0..1 s · `feedback` -0.95..0.95 · `mix` 0..1
+
+**`limiter(ceiling=-1, lookahead=0.005, release=0.05)`** — True-peak limiter: holds the reconstructed waveform under `ceiling` dBTP, looking `lookahead` seconds ahead so the gain is already down when a peak arrives and recovering over `release` seconds. Measures the oversampled curve, not the samples, so inter-sample overshoot — the kind that clips a converter or a lossy encoder — is caught too.
+
+> `ceiling` -60..0 dB · `lookahead` 0.0001..0.1 s · `release` 0.001..1 s
+
+**`loudnorm(target=-14, ceiling=-1)`** — Loudness normalize: bring the programme to `target` LUFS (ITU-R BS.1770), then hold its true peak under `ceiling` dBTP. Two passes — loudness is a property of the whole programme, so it has to be measured before anything can be decided. Material with enough crest factor cannot reach a loud target under a strict ceiling; it lands as close as the ceiling allows.
+
+> `target` -70..0 dB · `ceiling` -60..0 dB
 
 **`phaser(rate=0.5, depth=0.5, feedback=0.5, mix=0.5)`** — Phaser: an LFO-swept cascade of first-order all-pass stages (`rate` Hz, `depth`) with `feedback`, blended by `mix`. Length-preserving.
 

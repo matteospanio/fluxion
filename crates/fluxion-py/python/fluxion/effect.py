@@ -22,6 +22,8 @@ __all__ = [
     "Fade",
     "Flanger",
     "Gain",
+    "Limiter",
+    "Loudnorm",
     "Normalize",
     "Overdrive",
     "Phaser",
@@ -183,6 +185,35 @@ class Flanger(Chain):
 
     def __new__(cls, rate: float = 0.5, depth: float = 0.002, delay: float = 0.001, feedback: float = 0.5, mix: float = 0.5) -> "Flanger":
         return _make(cls, "flanger", rate, depth, delay, feedback, mix)
+
+
+class Limiter(Chain):
+    """True-peak limiter: holds the reconstructed waveform under `ceiling` dBTP, looking `lookahead`
+    seconds ahead so the gain is already down when a peak arrives and recovering over `release`
+    seconds. Measures the oversampled curve, not the samples, so inter-sample overshoot — the kind
+    that clips a converter or a lossy encoder — is caught too.
+
+    ceiling: default -1.0, range -60.0..0.0 dB
+    lookahead: default 0.005, range 0.0001..0.1 s
+    release: default 0.05, range 0.001..1.0 s
+    """
+
+    def __new__(cls, ceiling: float = -1.0, lookahead: float = 0.005, release: float = 0.05) -> "Limiter":
+        return _make(cls, "limiter", ceiling, lookahead, release)
+
+
+class Loudnorm(Chain):
+    """Loudness normalize: bring the programme to `target` LUFS (ITU-R BS.1770), then hold its true
+    peak under `ceiling` dBTP. Two passes — loudness is a property of the whole programme, so it
+    has to be measured before anything can be decided. Material with enough crest factor cannot
+    reach a loud target under a strict ceiling; it lands as close as the ceiling allows.
+
+    target: default -14.0, range -70.0..0.0 dB
+    ceiling: default -1.0, range -60.0..0.0 dB
+    """
+
+    def __new__(cls, target: float = -14.0, ceiling: float = -1.0) -> "Loudnorm":
+        return _make(cls, "loudnorm", target, ceiling)
 
 
 class Phaser(Chain):

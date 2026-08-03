@@ -296,6 +296,25 @@ ops! {
         ParamSpec::new("mix", Unit::Linear, 0.5, 0.0, 1.0),
     ];
 
+    /// True-peak limiter: holds the reconstructed waveform under `ceiling` dBTP, looking
+    /// `lookahead` seconds ahead so the gain is already down when a peak arrives and recovering
+    /// over `release` seconds. Measures the oversampled curve, not the samples, so inter-sample
+    /// overshoot — the kind that clips a converter or a lossy encoder — is caught too.
+    Limiter => "limiter", Effect, [
+        ParamSpec::new("ceiling", Unit::Db, -1.0, -60.0, 0.0),
+        ParamSpec::new("lookahead", Unit::Seconds, 0.005, 1e-4, 0.1),
+        ParamSpec::new("release", Unit::Seconds, 0.05, 1e-3, 1.0),
+    ];
+
+    /// Loudness normalize: bring the programme to `target` LUFS (ITU-R BS.1770), then hold its true
+    /// peak under `ceiling` dBTP. Two passes — loudness is a property of the whole programme, so it
+    /// has to be measured before anything can be decided. Material with enough crest factor cannot
+    /// reach a loud target under a strict ceiling; it lands as close as the ceiling allows.
+    Loudnorm => "loudnorm", Effect, [
+        ParamSpec::new("target", Unit::Db, -14.0, -70.0, 0.0),
+        ParamSpec::new("ceiling", Unit::Db, -1.0, -60.0, 0.0),
+    ];
+
     /// Phaser: an LFO-swept cascade of first-order all-pass stages (`rate` Hz, `depth`) with
     /// `feedback`, blended by `mix`. Length-preserving.
     Phaser => "phaser", Effect, [

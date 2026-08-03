@@ -195,10 +195,10 @@ that turn the series/parallel algebra into multiband processing.
 
 | # | Task | Depends on | The check written first |
 |---|------|-----------|--------------------------|
-| [ ] M1 | Loudness metering per BS.1770: K-weighting (two biquads, already in the filter toolbox), gated integrated loudness, loudness range; shown by `stat` | — | ±0.1 LU vs ffmpeg and pyloudnorm on the fixture set; textbook case: −20 dBFS sine @1 kHz = −20.69 LUFS |
-| [ ] M2 | True peak with 4× oversampling, per the same standard | — | Known inter-sample-peak fixtures within 0.1 dB of ffmpeg |
-| [ ] M3 | True-peak limiter with lookahead, as a chain op: fixed and reported delay, realtime-safe | M1, M2 | Property test: the output never exceeds the ceiling, on any input; the delay is exactly the declared one |
-| [ ] M4 | Loudness normalize, two passes (measure → apply → verify) | M1 | Fixtures land within ±0.5 LU of target, true peak stays under the ceiling |
+| [x] M1 | Loudness metering per BS.1770: K-weighting (two biquads, already in the filter toolbox), gated integrated loudness, loudness range; shown by `stat` | — | ±0.1 LU vs ffmpeg and pyloudnorm on the fixture set; textbook case: −20 dBFS sine @1 kHz = −20.69 LUFS |
+| [x] M2 | True peak with 4× oversampling, per the same standard | — | Known inter-sample-peak fixtures within 0.1 dB of ffmpeg |
+| [x] M3 | True-peak limiter with lookahead, as a chain op: fixed and reported delay, realtime-safe | M1, M2 | Property test: the output never exceeds the ceiling, on any input; the delay is exactly the declared one |
+| [x] M4 | Loudness normalize, two passes (measure → apply → verify) | M1 | Fixtures land within ±0.5 LU of target, true peak stays under the ceiling |
 | [ ] M5 | Linkwitz-Riley crossover; multiband compression then needs no new op: `(low \| comp) + (mid \| comp) + (high \| comp)` | — | The crossover bands sum flat (±0.1 dB) — checked, not assumed |
 | [ ] M6 | Mid/side encode–decode and stereo width (cousins of `remix`) | — | Encode then decode returns the input to 1e-7; width 0 is mono, width 1 changes nothing |
 
@@ -262,7 +262,7 @@ engine, once, with tests.
 | ✅ F-M1 | **wasm renders** | A browser or Node loads the module, builds a chain, renders a buffer; the wasm-vs-native suite is green | Waveforms and bounces in any web host |
 | F-M2 | **worklet plays** | Live playback, 128-frame blocks, smooth parameter changes, zero allocations, size and speed budgets enforced | Live preview with the same DSP as the final render |
 | ✅ F-M7 | **easy everywhere** | Four ten-line quickstarts run in CI; names come from one registry; `pip install` works without a Rust toolchain | The library people actually pick up |
-| F-M3 | **mastering complete** | Loudness, true peak, limiter and normalize as ops, ±0.1 LU vs ffmpeg | A full mastering chain with no external tool |
+| ✅ F-M3 | **mastering complete** | Loudness, true peak, limiter and normalize as ops, ±0.1 LU vs ffmpeg | A full mastering chain with no external tool |
 | F-M4 | **time tools** | Streaming rate conversion on every input; stretch and pitch as separate controls, tested against a reference | Import at any rate, scrubbing, tempo and pitch edits |
 | F-M5 | **routing and taps** | A keyed gate works end to end; spectrum and meter taps are provably invisible to the audio | Duckers, keyed dynamics, live analysers |
 | F-M6 | **host-render ready** | Epic D done: a timeline of clips, fades and automation renders bit-exact, in one pass or in pieces, native and wasm | Fluxion as the single engine behind a timeline |
@@ -275,6 +275,11 @@ engine, once, with tests.
   sample (`overdrive`, `phaser`, `compand`, `fade`, `tremolo`), where wasm's libm and the
   platform's differ in the last bit — at most two ULP, tabulated in
   `crates/fluxion-wasm/tests/parity.rs`.
+- **F-M3 — mastering complete.** Loudness (BS.1770), true peak, a true-peak limiter and loudness
+  normalize, the last two as chain ops so they reach every interface. Integrated loudness agrees
+  with pyloudnorm and ffmpeg to within 0.058 LU, against the 0.1 LU the milestone asks for. True
+  peak is pinned against analytic truth rather than a reference, because measurement showed ffmpeg
+  reads up to 0.8 dB high near Nyquist — see `crates/fluxion-ops/tests/loudness_golden.rs`.
 - **F-M7 — easy everywhere.** Five ten-line quickstarts run in CI (six lines to ten, against a
   budget of ten); every name comes from the one registry in `fluxion-core/src/op.rs`; `pip install`
   works with no Rust toolchain on Linux, macOS and Windows. See [docs/interfaces.md](docs/interfaces.md).

@@ -23,10 +23,11 @@ use fluxion::{Graph, OpKind, Signal, process};
 
 const FS: u32 = 48_000;
 
-/// 85 ms. Long enough that the delay-based ops (delay, echo, reverb, chorus, flanger) have
-/// something in their lines by the end — a shorter window would compare mostly dry signal and
-/// call it a pass.
-const FRAMES: usize = 4096;
+/// 500 ms. Set by the longest thing any case needs to see: BS.1770's gating block is 400 ms, so
+/// `loudnorm` measures nothing at all below that and would sit in the suite doing nothing while
+/// appearing to pass. It also gives the delay-based ops (delay, echo, reverb, chorus, flanger)
+/// room to fill their lines rather than being compared on mostly-dry signal.
+const FRAMES: usize = 24_000;
 
 /// The bound W6 asks us to write down, and what it is measured against.
 ///
@@ -177,6 +178,16 @@ const CASES: &[Case] = &[
     Case {
         name: "phaser",
         chain: "phaser(3, 0.7, 0.5, 0.5)",
+    },
+    // Both measure the whole signal before deciding anything, so they exercise a path none of the
+    // sample-by-sample ops above does.
+    Case {
+        name: "limiter",
+        chain: "limiter(-12, 0.005, 0.05)",
+    },
+    Case {
+        name: "loudnorm",
+        chain: "loudnorm(-20, -3)",
     },
     // --- topologies, not ops: the algebra has to survive the trip too ---
     Case {

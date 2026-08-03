@@ -33,7 +33,7 @@ pub use chebyshev::{
 };
 pub use delay::{delay, delay_frac, delay_vjp, echo, echo_vjp};
 pub use design::design_param_grad;
-pub use dynamics::{CompandCoeffs, compand};
+pub use dynamics::{CompandCoeffs, compand, limit};
 pub use effect::{
     FadeShape, fade, gain, gain_vjp, normalize_peak, normalize_vjp, overdrive, reverse, tremolo,
 };
@@ -46,8 +46,8 @@ pub use iir::{
     sos_input_grad, sos_is_stable, sos_magnitude, sos_vjp,
 };
 pub use loudness::{
-    channel_weights, integrated_loudness, k_weighting, loudness_range, sample_peak,
-    short_term_loudness, true_peak,
+    channel_weights, integrated_loudness, k_weighting, loudness_normalize, loudness_range,
+    sample_peak, short_term_loudness, true_peak, true_peak_envelope,
 };
 pub use modulation::{chorus, flanger, phaser};
 pub use rbj::{allpass, bandpass, high_shelf, low_shelf, notch, peaking};

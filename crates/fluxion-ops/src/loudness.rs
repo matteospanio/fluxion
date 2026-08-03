@@ -426,29 +426,54 @@ fn interpolator() -> [[f32; PHASE_TAPS]; OVERSAMPLE] {
 /// assert!(true_peak(&[x], fs as u32) > sample_peak + 0.3);
 /// ```
 pub fn true_peak(channels: &[Vec<f32>], _fs: u32) -> f32 {
-    let phases = interpolator();
-    let mut peak = 0.0f32;
-
-    for channel in channels {
-        // A history window of PHASE_TAPS samples slides over the signal; each position yields
-        // OVERSAMPLE interpolated samples. Zero-padding at both ends is what lets the first and
-        // last samples contribute, which matters for a signal that starts at full level.
-        let mut history = [0.0f32; PHASE_TAPS];
-        for &sample in channel.iter().chain(std::iter::repeat_n(&0.0, PHASE_TAPS)) {
-            history.rotate_right(1);
-            history[0] = sample;
-            for phase in &phases {
-                let interpolated: f32 = phase.iter().zip(&history).map(|(h, x)| h * x).sum();
-                peak = peak.max(interpolated.abs());
-            }
-        }
-    }
-
+    let peak = true_peak_envelope(channels)
+        .into_iter()
+        .fold(0.0f32, f32::max);
     if peak <= 0.0 {
         f32::NEG_INFINITY
     } else {
         20.0 * peak.log10()
     }
+}
+
+/// The true-peak magnitude around each input sample, linear.
+///
+/// One value per input sample: the largest reconstructed magnitude among the interpolated points
+/// that sample is responsible for, taken across every channel so a limiter built on this moves all
+/// channels together and leaves the stereo image alone.
+///
+/// This is what makes a limiter a *true-peak* limiter rather than a sample-peak one.
+pub fn true_peak_envelope(channels: &[Vec<f32>]) -> Vec<f32> {
+    let frames = channels.iter().map(Vec::len).max().unwrap_or(0);
+    let phases = interpolator();
+    let mut envelope = vec![0.0f32; frames];
+
+    for channel in channels {
+        let mut history = [0.0f32; PHASE_TAPS];
+        // The filter is causal with its centre PHASE_TAPS/2 samples back, so the interpolated
+        // points produced while reading sample `i` describe the signal around `i - centre`.
+        let centre = PHASE_TAPS / 2;
+        for (i, &sample) in channel
+            .iter()
+            .chain(std::iter::repeat_n(&0.0, PHASE_TAPS))
+            .enumerate()
+        {
+            history.rotate_right(1);
+            history[0] = sample;
+            // Clamp rather than skip: the interpolated points before the filter's centre reaches
+            // the first sample, and after it passes the last, are still part of the reconstructed
+            // waveform and still clip. Attributing them to the nearest sample keeps
+            // `max(envelope)` equal to the true peak instead of quietly a little under it.
+            let at = i.saturating_sub(centre).min(frames - 1);
+            for phase in &phases {
+                let interpolated: f32 = phase.iter().zip(&history).map(|(h, x)| h * x).sum();
+                envelope[at] = envelope[at].max(interpolated.abs());
+            }
+            // The sample itself is on the reconstructed curve, so it can never be above it.
+            envelope[at] = envelope[at].max(channel[at].abs());
+        }
+    }
+    envelope
 }
 
 /// Sample peak in dBFS — the largest absolute sample, with no reconstruction.
@@ -466,6 +491,68 @@ pub fn sample_peak(channels: &[Vec<f32>]) -> f32 {
         20.0 * peak.log10()
     }
 }
+
+/// Bring the programme to `target_lufs`, then hold its true peak under `ceiling_db` dBTP.
+///
+/// Two passes, which is the only way it can work: loudness is a property of the whole programme,
+/// so it has to be measured before anything can be decided. Measure, apply the difference as a
+/// gain, then limit — the limiter can only pull down, so it can cost a little loudness on material
+/// with isolated peaks; how much is what the tolerance in the tests measures.
+///
+/// Silence is left alone: there is no gain that makes nothing louder.
+pub fn loudness_normalize(channels: &mut [Vec<f32>], target_lufs: f32, ceiling_db: f32, fs: u32) {
+    // Measure, apply, verify — and if the verification disagrees, correct and go round again.
+    // The limiter can only pull down, so on material with isolated peaks it costs loudness the
+    // first measurement could not have predicted; another pass recovers it.
+    if !integrated_loudness(channels, fs).is_finite() {
+        return; // silence: no gain makes nothing louder
+    }
+
+    // Hold the ceiling before anything else, so that every candidate below — including the one
+    // kept when the target turns out to be unreachable — already respects it. The ceiling is the
+    // part that is not negotiable; the target is the part that is.
+    crate::dynamics::limit(channels, ceiling_db, 0.005, 0.05, fs);
+
+    let mut best: Option<(f32, Vec<Vec<f32>>)> = None;
+    for _ in 0..NORMALIZE_PASSES {
+        let measured = integrated_loudness(channels, fs);
+        let error = (target_lufs - measured).abs();
+
+        // Keep the closest attempt, not the last one. On material with enough crest factor the
+        // target is simply unreachable under the ceiling — each extra decibel of gain buys less
+        // than the limiter takes away — and without this the passes would chase it downward and
+        // hand back something quieter than where they started.
+        if best.as_ref().is_none_or(|(e, _)| error < *e) {
+            best = Some((error, channels.to_vec()));
+        } else {
+            break;
+        }
+        if error < 0.05 {
+            break;
+        }
+
+        let gain = 10f32.powf((target_lufs - measured) / 20.0);
+        for channel in channels.iter_mut() {
+            for sample in channel.iter_mut() {
+                *sample *= gain;
+            }
+        }
+        // 5 ms of lookahead and a 50 ms release: short enough not to pump, long enough not to
+        // distort.
+        crate::dynamics::limit(channels, ceiling_db, 0.005, 0.05, fs);
+    }
+
+    if let Some((_, closest)) = best {
+        for (channel, kept) in channels.iter_mut().zip(closest) {
+            *channel = kept;
+        }
+    }
+}
+
+/// Measure-apply-verify rounds. Peaky material needs a second; nothing measured has needed a
+/// fourth, and material that cannot reach the target without the limiter eating the difference
+/// will not get there however many are allowed.
+const NORMALIZE_PASSES: usize = 4;
 
 #[cfg(test)]
 mod tests {
