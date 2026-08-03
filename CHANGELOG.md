@@ -99,6 +99,15 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Added
 
+- **The chain API in the browser (roadmap W2)** — `Chain.fromText("highpass(80, 4) | gain(-3dB)")`,
+  `.process(samples, fs)`, `.toText()`, plus `ops()` and `version()`. The same graph, from the same
+  string, as the native library — and the parity check that says so is committed: a fixture holds a
+  native-rendered reference which `cargo test` re-verifies against native, and a Node script feeds
+  the same input through the built wasm module and compares. It matches **bit for bit** (worst
+  difference 0.0, against a 1e-6 tolerance), which is the concrete form of "preview and export come
+  from the same DSP". The Node side reads a committed fixture, so it needs no Rust toolchain. A
+  misspelled op throws with the caret rendering and the suggestion, exactly as it does everywhere
+  else.
 - **WebAssembly build (roadmap W1)** — `crates/fluxion-wasm` was a seven-line scaffold with no
   dependencies. It now compiles to wasm32 with wasm-bindgen, and `scripts/build-wasm.sh` emits the
   module plus its JavaScript glue and `.d.ts`. A `wasm` CI job builds it on every PR and loads it

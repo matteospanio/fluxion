@@ -265,6 +265,12 @@ jobs:
       - name: Node loads the module
         working-directory: crates/fluxion-wasm/js
         run: node smoke.mjs
+      # ROADMAP W2: the same chain on the same input has to give the same samples as native,
+      # within a written tolerance. The reference is a committed fixture that `cargo test`
+      # re-verifies against native, so this side needs no Rust toolchain.
+      - name: wasm output matches native
+        working-directory: crates/fluxion-wasm/js
+        run: node parity.mjs
 
   cuda:
     name: cuda check (API drift, no GPU)
