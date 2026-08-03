@@ -185,6 +185,21 @@ pub fn speed(sig: &Signal, factor: f32) -> Signal {
     Signal::new(sig.fs, channels) // same fs — pitch changes with tempo
 }
 
+/// Change tempo by `factor` without changing pitch (ROADMAP R3): `factor > 1` is faster, so the
+/// output is `frames / factor` long. The opposite trade from [`speed`], which moves both together.
+///
+/// Frame count is exact — `round(frames / factor)` — which is what a timeline needs and what the
+/// reference stretchers do not provide.
+pub fn stretch(sig: &Signal, factor: f32) -> Signal {
+    let factor = factor.max(1e-6);
+    let channels = sig
+        .channels
+        .iter()
+        .map(|c| crate::stretch::time_stretch(c, sig.fs, 1.0 / factor))
+        .collect();
+    Signal::new(sig.fs, channels)
+}
+
 /// Build each output channel as a weighted sum of input channels: `spec[j]` is a list of
 /// `(input_channel, weight)` pairs for output channel `j`. Out-of-range input indices are ignored.
 /// Frame count and sample rate unchanged; channel count becomes `spec.len()`.

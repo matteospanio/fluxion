@@ -2,7 +2,7 @@
 
 # The op catalog
 
-29 ops, generated from the single table in
+30 ops, generated from the single table in
 [`crates/fluxion-core/src/op.rs`](../crates/fluxion-core/src/op.rs). The rule this table
 exists to enforce is in [interfaces.md](interfaces.md): **an op ships on every interface,
 or this document says why not.**
@@ -42,6 +42,7 @@ same op as a function and a class respectively, both named from the row below.
 | `limiter` | `prelude::limiter` | `fluxion.effect.Limiter` | via chain text |
 | `loudnorm` | `prelude::loudnorm` | `fluxion.effect.Loudnorm` | via chain text |
 | `phaser` | `prelude::phaser` | `fluxion.effect.Phaser` | via chain text |
+| `pitchshift` | `prelude::pitchshift` | `fluxion.effect.PitchShift` | via chain text |
 
 ## What each op does
 
@@ -163,6 +164,10 @@ same op as a function and a class respectively, both named from the row below.
 
 > `rate` 0..100 Hz · `depth` 0..1 · `feedback` -0.95..0.95 · `mix` 0..1
 
+**`pitchshift(cents=0)`** — Pitch-shift by `cents`, keeping the length: 1200 cents is an octave up, -1200 an octave down. A phase vocoder stretches the material by the pitch ratio and a resampler plays it back that much faster, so the duration change cancels and the pitch change does not.
+
+> `cents` -2400..2400
+
 ## Geometry stages (CLI only)
 
 These change the frame count, the sample rate or the channel layout, so they cannot be
@@ -176,6 +181,7 @@ a design round of its own — see the 'Not yet' section of [interfaces.md](inter
 | `pad` | prepend/append silence | `--start` (default 0), `--end` (default 0) |
 | `rate` | resample to a new sample rate (windowed-sinc SRC) | `--fs` (required) |
 | `speed` | change speed (pitch+tempo together); keeps fs | `--factor` (required; >1 faster) |
+| `stretch` | change tempo, not pitch; keeps fs | `--factor` (required; >1 faster) |
 | `repeat` | concatenate the signal with itself count times | `--count` (required) |
 | `silence` | trim leading/trailing near-silence | `--threshold-db` (default -60), `--min` (guard band, default 0), `--leading` (trim the front), `--trailing` (trim the tail) |
 | `channels` | up/down-mix to count channels (energy-preserving) | `--count` (required) |

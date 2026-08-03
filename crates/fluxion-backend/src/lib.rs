@@ -135,6 +135,10 @@ pub trait Backend {
     fn loudnorm(&self, _x: Self::Buf, _target_lufs: f32, _ceiling_db: f32, _fs: u32) -> Self::Buf {
         unimplemented!("loudnorm is a whole-signal effect — guard with is_differentiable")
     }
+    /// Pitch-shift by `cents`, keeping the length.
+    fn pitchshift(&self, _x: Self::Buf, _cents: f32, _fs: u32) -> Self::Buf {
+        unimplemented!("pitchshift is a whole-signal effect — guard with is_differentiable")
+    }
     /// Per-channel time reversal.
     fn reverse(&self, _x: Self::Buf) -> Self::Buf {
         unimplemented!("reverse is a whole-signal effect — guard with is_differentiable")
@@ -223,6 +227,7 @@ fn eval_op<B: Backend>(b: &B, op: &Op, x: B::Buf, fs: u32) -> B::Buf {
         OpKind::Reverse => b.reverse(x),
         OpKind::Limiter => b.limiter(x, p[0], p[1], p[2], fs),
         OpKind::Loudnorm => b.loudnorm(x, p[0], p[1], fs),
+        OpKind::PitchShift => b.pitchshift(x, p[0], fs),
         OpKind::Chorus => b.chorus(x, p[0], p[1], p[2], p[3], fs),
         OpKind::Flanger => b.flanger(x, p[0], p[1], p[2], p[3], p[4], fs),
         OpKind::Phaser => b.phaser(x, p[0], p[1], p[2], p[3], fs),
@@ -379,6 +384,13 @@ impl Backend for Cpu {
         fs: u32,
     ) -> Vec<Vec<f32>> {
         fluxion_ops::loudness_normalize(&mut x, target_lufs, ceiling_db, fs);
+        x
+    }
+
+    fn pitchshift(&self, mut x: Vec<Vec<f32>>, cents: f32, fs: u32) -> Vec<Vec<f32>> {
+        for ch in &mut x {
+            *ch = fluxion_ops::pitch_shift(ch, fs, cents);
+        }
         x
     }
 
@@ -540,6 +552,9 @@ fn certify_op(op: &Op, fs: u32) -> Certificate {
         | OpKind::Compand
         | OpKind::Reverse
         | OpKind::Chorus
+        // Pitch-shift resynthesizes from the analysed magnitudes, so its output level is bounded
+        // by the input's and nothing recirculates.
+        | OpKind::PitchShift
         // The limiter and loudness normalize are gain stages: they compute an envelope from the
         // signal and multiply by it, with no recirculation. The limiter's gain is bounded above by
         // 1 by construction, and loudnorm's is a constant per pass, so both are BIBO-stable.

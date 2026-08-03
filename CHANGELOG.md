@@ -19,6 +19,38 @@ All notable changes to fluxion are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Time tools: streaming resampler, time-stretch, pitch-shift (Epic R / R1, R3, R4 — completes
+  milestone F-M4)** — three things a host needs and the offline converter could not give it.
+  `Resampler` converts sample rates a block at a time with every buffer allocated in `new` and
+  none afterwards, in two qualities: `Hq` is the offline filter, `Fast` is a quarter of the taps
+  for scrubbing. A first attempt accumulated the read position per block and drifted, so 11025
+  frames arrived as 11026 when the block size changed; the position is now computed from the
+  input and output frame counters, which cannot drift. Checked against
+  `scipy.signal.resample_poly` band by band across five signals — worst disagreement 0.05 dB of a
+  1 dB bar — and on the failure that matters, folding: it pushes a 23 kHz tone down by 23.6 dB
+  converting 48 k to 44.1 k, where `resample_poly` manages 11.1 dB.
+  `pitchshift` is a chain op in cents, so like the mastering set it arrived on Rust, the CLI,
+  Python, C and the browser at once. `stretch` is a CLI stage rather than an op, because it
+  changes the frame count and length-preserving is what lets `|` and `+` compose.
+  Underneath both is a phase vocoder with **peak-locked phases**: spectral peaks advance their own
+  phase and every bin near a peak takes that peak's phase plus its current offset from it, which
+  is what keeps the partials of one note in step instead of smearing. `docs/time-stretch.md` is
+  the study roadmap R3 asks for — the reason it is written rather than bound to a C++ library
+  (which would end the wasm build) or ported from one (which would be a fork to maintain), and
+  the reason transients are the next thing to do rather than a thing already done.
+  The oracle is Rubber Band, through ffmpeg. Scoring against its *output* was the first attempt
+  and it measured the wrong thing — on a pure 440 Hz tone Rubber Band puts -41 dB of sideband at
+  350 Hz where we put -88, so a test built that way fails us for being 46 dB cleaner. The ground
+  truth is the **source**: a stretcher changes how long the material lasts and nothing else, so
+  both are scored on how closely the output spectrum tracks the input's. Ours is 0.00 dB out on a
+  sustained chord where Rubber Band is 0.15-0.53, and 0.85-1.69 on a sweep where it is 1.65-4.39;
+  on band-limited noise it is about 0.7 dB better than us, which is the transient handling we do
+  not have, and the test says so with a stated margin rather than hiding it. Duration is exact for
+  every ratio — Rubber Band's is not, landing on 93566 frames where 96000 was asked for.
+
+
 ## [0.2.0] - 2026-08-03
 
 First release of the host-engine push: [Epic I](ROADMAP.md) — one op registry behind every

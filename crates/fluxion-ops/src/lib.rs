@@ -27,6 +27,7 @@ pub mod rbj;
 pub mod resample;
 pub mod reverb;
 pub mod stability;
+pub mod stretch;
 pub mod transform;
 
 pub use chebyshev::{
@@ -58,3 +59,4 @@ pub use stability::{
     Certificate, Verdict, certify_biquad, certify_sos, project_stable, project_stable_flat,
     small_gain_certify,
 };
+pub use stretch::{pitch_shift, time_stretch};

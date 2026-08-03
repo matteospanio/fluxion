@@ -27,6 +27,7 @@ __all__ = [
     "Normalize",
     "Overdrive",
     "Phaser",
+    "PitchShift",
     "Reverb",
     "Reverse",
     "Tremolo",
@@ -228,3 +229,15 @@ class Phaser(Chain):
 
     def __new__(cls, rate: float = 0.5, depth: float = 0.5, feedback: float = 0.5, mix: float = 0.5) -> "Phaser":
         return _make(cls, "phaser", rate, depth, feedback, mix)
+
+
+class PitchShift(Chain):
+    """Pitch-shift by `cents`, keeping the length: 1200 cents is an octave up, -1200 an octave down. A
+    phase vocoder stretches the material by the pitch ratio and a resampler plays it back that much
+    faster, so the duration change cancels and the pitch change does not.
+
+    cents: default 0.0, range -2400.0..2400.0
+    """
+
+    def __new__(cls, cents: float = 0.0) -> "PitchShift":
+        return _make(cls, "pitchshift", cents)

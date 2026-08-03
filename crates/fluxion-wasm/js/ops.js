@@ -211,6 +211,13 @@ export const OPS = Object.freeze({
     doc: "Phaser: an LFO-swept cascade of first-order all-pass stages (`rate` Hz, `depth`) with `feedback`, blended by `mix`. Length-preserving.",
     params: [{ name: "rate", unit: "hz", default: 0.5, min: 0.0, max: 100.0 }, { name: "depth", unit: "linear", default: 0.5, min: 0.0, max: 1.0 }, { name: "feedback", unit: "linear", default: 0.5, min: -0.95, max: 0.95 }, { name: "mix", unit: "linear", default: 0.5, min: 0.0, max: 1.0 }],
   },
+  "pitchshift": {
+    name: "pitchshift",
+    group: "effect",
+    variadic: false,
+    doc: "Pitch-shift by `cents`, keeping the length: 1200 cents is an octave up, -1200 an octave down. A phase vocoder stretches the material by the pitch ratio and a resampler plays it back that much faster, so the duration change cancels and the pitch change does not.",
+    params: [{ name: "cents", unit: "linear", default: 0.0, min: -2400.0, max: 2400.0 }],
+  },
 });
 
 /** Every op name, in catalog order. */

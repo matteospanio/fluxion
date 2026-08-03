@@ -230,6 +230,11 @@ pub mod prelude {
         Graph::op(OpKind::Loudnorm, [target_lufs, ceiling_db])
     }
 
+    /// Pitch-shift by `cents`, keeping the length. 1200 cents is an octave up.
+    pub fn pitchshift(cents: f32) -> Graph {
+        Graph::op(OpKind::PitchShift, [cents])
+    }
+
     /// Phaser: LFO-swept all-pass cascade with feedback — `rate` Hz, `depth` (0..1), `feedback`,
     /// `mix` (0..1).
     pub fn phaser(rate_hz: f32, depth: f32, feedback: f32, mix: f32) -> Graph {

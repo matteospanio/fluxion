@@ -119,6 +119,15 @@ pub(crate) static STAGES: &[StageDoc] = &[
         }],
     },
     StageDoc {
+        name: "stretch",
+        summary: "change tempo, not pitch; keeps fs",
+        flags: &[StageFlag {
+            flag: "factor",
+            kind: "lin",
+            note: "required; >1 faster",
+        }],
+    },
+    StageDoc {
         name: "repeat",
         summary: "concatenate the signal with itself count times",
         flags: &[StageFlag {
@@ -214,6 +223,8 @@ pub(crate) enum Stage {
     Rate { fs: u32 },
     /// Change speed (pitch+tempo) by `factor`.
     Speed { factor: f32 },
+    /// Change tempo without changing pitch.
+    Stretch { factor: f32 },
     /// Repeat the signal `count` times.
     Repeat { count: usize },
     /// Trim near-silence below `threshold_db`, keeping `min_s` of guard band.
@@ -248,6 +259,7 @@ impl Stage {
             Stage::Pad { start, end } => transform::pad(&sig, *start, *end),
             Stage::Rate { fs } => transform::resample(&sig, *fs),
             Stage::Speed { factor } => transform::speed(&sig, *factor),
+            Stage::Stretch { factor } => transform::stretch(&sig, *factor),
             Stage::Repeat { count } => transform::repeat(&sig, *count),
             Stage::Silence {
                 threshold_db,
@@ -344,6 +356,7 @@ impl Stage {
             Stage::Pad { .. } => "pad",
             Stage::Rate { .. } => "rate",
             Stage::Speed { .. } => "speed",
+            Stage::Stretch { .. } => "stretch",
             Stage::Repeat { .. } => "repeat",
             Stage::Silence { .. } => "silence",
             Stage::Channels { .. } => "channels",
@@ -539,6 +552,14 @@ fn parse_stage(name: &str, tokens: &[String], start: usize) -> Result<(Stage, us
                 return Err(format!("speed --factor must be positive, got {factor}"));
             }
             Stage::Speed { factor }
+        }
+        "stretch" => {
+            let factor = req_num(&flags, "factor", "stretch")?;
+            // As with `speed`, a non-positive factor is an out-of-memory rather than an error.
+            if factor <= 0.0 || !factor.is_finite() {
+                return Err(format!("stretch --factor must be positive, got {factor}"));
+            }
+            Stage::Stretch { factor }
         }
         "repeat" => Stage::Repeat {
             count: req_int(&flags, "count", "repeat")?,

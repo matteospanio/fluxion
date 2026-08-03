@@ -323,6 +323,13 @@ ops! {
         ParamSpec::new("feedback", Unit::Linear, 0.5, -0.95, 0.95),
         ParamSpec::new("mix", Unit::Linear, 0.5, 0.0, 1.0),
     ];
+
+    /// Pitch-shift by `cents`, keeping the length: 1200 cents is an octave up, -1200 an octave
+    /// down. A phase vocoder stretches the material by the pitch ratio and a resampler plays it
+    /// back that much faster, so the duration change cancels and the pitch change does not.
+    PitchShift => "pitchshift", Effect, [
+        ParamSpec::new("cents", Unit::Linear, 0.0, -2400.0, 2400.0),
+    ];
 }
 
 impl OpKind {

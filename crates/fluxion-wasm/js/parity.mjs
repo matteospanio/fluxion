@@ -54,28 +54,32 @@ function compare(actual, expected) {
 }
 
 const results = [];
-for (const { name, chain, expected } of cases) {
-  const actual = Chain.fromText(chain).process(input, fs);
-  results.push({ name, chain, ...compare(actual, expected), actual, expected });
+for (const c of cases) {
+  const actual = Chain.fromText(c.chain).process(input, fs);
+  // A case may name its own bound; see `tolerance_for` in parity.rs for the one that does.
+  const bound = c.tolerance ?? tolerance;
+  results.push({ ...c, bound, ...compare(actual, c.expected), actual });
 }
 
-const failed = results.filter((r) => !(r.worst <= tolerance));
+const failed = results.filter((r) => !(r.worst <= r.bound));
 if (failed.length > 0) {
   console.error(`wasm diverged from native on ${failed.length} of ${results.length} cases:\n`);
   for (const r of failed) {
     const detail =
       r.note ?? `worst ${r.worst.toExponential(3)} at sample ${r.at} ` +
       `(wasm ${r.actual[r.at]}, native ${r.expected[r.at]})`;
-    console.error(`  ${r.name.padEnd(18)} ${detail}\n    ${r.chain}`);
+    console.error(`  ${r.name.padEnd(18)} ${detail}\n    ${r.chain} (tolerance ${r.bound})`);
   }
-  console.error(`\ntolerance is ${tolerance}`);
   process.exit(1);
 }
 
 // What it actually measures, reported rather than assumed — a suite that silently loosened would
 // still print "ok".
-const worst = results.reduce((m, r) => Math.max(m, r.worst), 0);
+// Reported as a fraction of each case's own bound, since one case sets its own — a raw worst next
+// to the shared tolerance would read as a near-miss when it is not being measured against it.
+const worst = results.reduce((m, r) => Math.max(m, r.worst / r.bound), 0);
 const exact = results.filter((r) => r.worst === 0).length;
+const custom = results.filter((r) => r.bound !== tolerance);
 
 // The coverage the other doors check too: every op reachable from its bare name.
 for (const name of ops()) {
@@ -100,8 +104,9 @@ if (!threw) throw new Error("a misspelled op should throw with a suggestion");
 console.log(
   `fluxion wasm parity OK (v${version()}) — ${results.length} cases covering ${ops().length} ops, ` +
     `${frames} frames each\n` +
-    `  ${exact}/${results.length} bit-identical to native, worst difference ` +
-    `${worst.toExponential(2)} (tolerance ${tolerance})`,
+    `  ${exact}/${results.length} bit-identical to native, worst case uses ` +
+    `${(worst * 100).toFixed(0)}% of its tolerance (shared bound ${tolerance}` +
+    `${custom.map((r) => `, ${r.name} ${r.bound}`).join("")})`,
 );
 
 // Name the ones that are not exact. They are the ops that call a transcendental per sample, where

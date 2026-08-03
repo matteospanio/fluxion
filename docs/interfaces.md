@@ -86,7 +86,8 @@ playback needs the worklet, the lock-free ring and the no-allocation guarantee (
 loading a frozen `.fxg` in the browser is W3. The offline `Chain` is the same class both extend, so
 these are methods to add rather than a design to redo.
 
-**The geometry stages** — `trim`, `pad`, `rate`, `speed`, `repeat`, `silence`, `channels`, `remix`
+**The geometry stages** — `trim`, `pad`, `rate`, `speed`, `stretch`, `repeat`, `silence`,
+`channels`, `remix`
 — are CLI-only. They are not in the op registry because they *cannot* be: every graph op is
 per-channel, length-preserving and rate-preserving, which is exactly what makes `|` and `+` compose
 without bookkeeping, and every one of these changes the frame count, the sample rate or the channel
