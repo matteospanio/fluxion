@@ -21,6 +21,14 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Changed
 
+- **`Graph`'s text rendering is now canonical (Epic I / I2)** — `Display` used to print
+  `Series(Series(a,b),c)` and `Series(a,Series(b,c))` identically, and a `Named` node wrapping a
+  composite lost track of where the label ended. Both are now bracketed: a same-kind child is
+  parenthesized when it is the *right* operand (the operators parse left-associative, so only that
+  side is ambiguous), and `name:` brackets a composite child. Mixed nesting is unchanged, and so is
+  every string the crate printed before — this only adds parens where two different graphs used to
+  render alike. That makes the rendering a canonical form, which is what lets the chain-text parser
+  be its exact inverse.
 - **One declarative op table (Epic I / I2)** — the op catalog in `fluxion-core` is now declared
   once, in a single `ops!` table: one row per op carrying its doc comment, Rust variant, stable
   text name, catalogue group and parameter schema. `OpKind::name`, `group`, `params` and `all` are
