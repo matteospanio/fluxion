@@ -21,6 +21,21 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Changed
 
+- **CLI help and errors that help (Epic I / I4)** — `fluxion --help` used to list ten global flags
+  and nothing else: no verbs, no ops, no chain syntax. It now fits one screen (39 lines, 80
+  columns — asserted) and names the verbs, the two self-describing commands and the chain syntax.
+  Running `fluxion` bare or `fluxion help` prints that same screen and exits 0 instead of a usage
+  error; `fluxion help <op>` describes the op. `fluxion lowpass` used to fail with `probing
+  'lowpass': No such file or directory` because the op name was treated as an input file — it now
+  describes the op. Errors suggest a fix: `unknown effect or stage 'hipass' — did you mean
+  'highpass'?`, `effect 'lowpass' has no parameter '--cutof' — did you mean '--cutoff'?`, and a
+  missing input says `no such file 'nope.wav'` rather than leaking a probe error. New `--chain
+  "highpass(80, 4) | gain(-3dB)"` accepts the shared text form, and `--dry-run` prints the chain
+  that would run — in canonical form, so it can be pasted straight back into `--chain`, Python or
+  the browser (asserted). Long files get a progress readout, off unless stderr is a terminal so it
+  can never contaminate a log. Sixteen committed snapshots pin the help screen and the ten common
+  mistakes; `UPDATE_EXPECT=1 cargo test -p fluxion-cli` accepts a deliberate change. No snapshot
+  library was added.
 - **Breaking: the Python API is now torchfx-shaped (Epic I / I3)** — `fluxion.Wave` carries the
   sample rate, so `fs` leaves user code entirely: `wave | fx.filter.Highpass(80, order=4) |
   fx.effect.Gain(fx.db(-3))`, then `.save()`. `|` is series and `+` is parallel, the same algebra

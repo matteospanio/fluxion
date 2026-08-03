@@ -1,0 +1,3 @@
+in : in.wav
+run: highpass(80, 4) | gain(0.70794576)
+out: out.wav

@@ -26,8 +26,19 @@ pub use fluxion_backend::{
     process, process_batch, sos_filter_batch,
 };
 pub use fluxion_core::{
-    FORMAT_VERSION, Graph, Group, LoadError, Op, OpError, OpKind, ParamSpec, Signal, Unit, fxg,
+    FORMAT_VERSION, Graph, Group, LoadError, Op, OpError, OpKind, ParamSpec, ParseError, Signal,
+    Unit, fxg,
 };
+
+/// The shared chain text syntax — `"highpass(80, 4) | gain(-3dB)".parse::<Graph>()`, and the
+/// [`ParseError`] it reports, whose `render` draws a caret under the offending token. The same
+/// grammar the CLI's `--chain`, Python's `fluxion.chain()`, C's `fx_chain_from_text` and the
+/// browser read. See `docs/chain-syntax.md`.
+pub use fluxion_core::parse;
+
+/// "Did you mean …?" — the edit-distance helper behind every name error, exposed so a host built
+/// on fluxion can give the same suggestion for its own names.
+pub use fluxion_core::suggest;
 
 /// Geometry transforms on a whole [`Signal`] — trim / pad / repeat / silence-trim / resample / speed
 /// / remix / channels and the multi-input concat / mix. Deliberately **not** graph ops: they change

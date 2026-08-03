@@ -1,0 +1,7 @@
+  compand
+      --attack       <s>   [0.01]
+      --release      <s>   [0.1]
+      --threshold    <dB>   [-20]
+      --ratio        <lin>   [4]
+      --knee         <dB>   [6]
+      --makeup       <dB>   [0]

@@ -108,10 +108,21 @@ pub(crate) fn cmd_process(
     rate: Option<u32>,
     mix_inputs: bool,
     enc: WavEncoding,
+    chain_text: Option<&str>,
+    dry_run: bool,
 ) -> Result<(), String> {
+    // An effect name where an input file belongs is a discovery attempt, not a pipeline: say what
+    // the op is instead of failing to open it as audio.
+    if let Some(first) = args.first()
+        && let Some(kind) = OpKind::from_name(first)
+        && args.len() < 2
+    {
+        return cmd_effects(std::slice::from_ref(&kind.name().to_string()));
+    }
     if args.len() < 2 {
         return Err(
-            "usage: fluxion [--mix] [--rate HZ] <in.wav|->... [effect|stage ...] <out.wav|-|-n>"
+            "usage: fluxion [--mix] [--rate HZ] <in.wav|->... [effect|stage ...] <out.wav|-|-n>\n\
+             run `fluxion --help` for the verbs, or `fluxion effects` for the ops"
                 .into(),
         );
     }
@@ -124,6 +135,31 @@ pub(crate) fn cmd_process(
         n += 1;
     }
     let (inputs, effects) = body.split_at(n);
+
+    // `--chain "..."` and the argv tokens describe the same thing; accepting both would leave the
+    // order between them undefined, so it is an error rather than a guess.
+    let stages = match chain_text {
+        Some(text) if !effects.is_empty() => {
+            return Err(format!(
+                "--chain and the inline effects both describe a chain; use one or the other\n\
+                 (--chain {text:?}, inline: {})",
+                effects.join(" ")
+            ));
+        }
+        Some(text) => vec![Stage::Graph(parse_chain_text(text)?)],
+        None => parse_stages(effects)?,
+    };
+
+    if dry_run {
+        print_dry_run(inputs, &stages, output);
+        return Ok(());
+    }
+
+    for inp in inputs {
+        if !is_stream(inp) && !std::path::Path::new(inp).exists() {
+            return Err(format!("no such file '{inp}'"));
+        }
+    }
 
     // Refuse to overwrite any input in place (file paths only; `-`/`-n` are fine).
     for inp in inputs {
@@ -140,7 +176,7 @@ pub(crate) fn cmd_process(
     // The streaming executor is block-size invariant and the streamed WAV writer is
     // byte-identical to the buffered one, so the output matches the buffered path.
     if rate.is_none() && !mix_inputs && inputs.len() == 1 {
-        let streamed = try_stream_process(&inputs[0], effects, output, fs, enc)?;
+        let streamed = try_stream_process(&inputs[0], &stages, output, fs, enc)?;
         if streamed {
             return Ok(());
         }
@@ -170,9 +206,31 @@ pub(crate) fn cmd_process(
         }
     };
 
-    let stages = parse_stages(effects)?;
     let out = run_stages(&stages, combined);
     write_output(output, &out, enc)
+}
+
+/// Parse a `--chain` string, rendering a syntax error with its caret.
+fn parse_chain_text(text: &str) -> Result<Graph, String> {
+    fluxion::parse::chain(text).map_err(|e| e.render(text))
+}
+
+/// `--dry-run`: what would run, in the canonical chain text, and nothing else.
+fn print_dry_run(inputs: &[String], stages: &[Stage], output: &str) {
+    println!("in : {}", inputs.join(" "));
+    for stage in stages {
+        match stage {
+            // The graph prints in the shared syntax, so this line can be pasted back into
+            // `--chain`, into Python, or into the browser.
+            Stage::Graph(g) => println!("run: {g}"),
+            // Geometry stages have no text form yet (docs/interfaces.md, "Not yet").
+            other => println!("run: {other:?}"),
+        }
+    }
+    if stages.is_empty() {
+        println!("run: id");
+    }
+    println!("out: {output}");
 }
 
 /// Bring inputs to a common sample rate. With `--rate`, resample every input to it; without it,
@@ -781,7 +839,7 @@ const STREAM_BLOCK: usize = 65_536;
 /// path — and `Ok(true)` after the file has been fully processed and written.
 fn try_stream_process(
     input: &str,
-    effects: &[String],
+    stages: &[Stage],
     output: &str,
     fs_override: Option<u32>,
     enc: WavEncoding,
@@ -789,10 +847,9 @@ fn try_stream_process(
     if is_stream(input) || output == "-" {
         return Ok(false); // stdin/stdout need the buffered path (seekable-sink WAV header)
     }
-    let stages = parse_stages(effects)?;
     // Only effect stages stream; geometry stages (trim/pad/rate/…) need the whole signal.
     let mut graph: Option<fluxion::Graph> = None;
-    for st in &stages {
+    for st in stages {
         match st {
             Stage::Graph(g) => {
                 graph = Some(match graph {
@@ -823,16 +880,82 @@ fn try_stream_process(
         return Ok(false); // unknown rate, or a stage that is not realtime-lowerable
     }
 
+    let total_frames = if is_wav {
+        probe_wav(input).map(|i| i.frames as usize).unwrap_or(0)
+    } else {
+        probe(input)
+            .map(|i| i.frames.unwrap_or(0) as usize)
+            .unwrap_or(0)
+    };
+    let mut progress = Progress::new(total_frames, fs);
+
     if is_wav {
         let blocks = read_wav_blocks(input, STREAM_BLOCK)
             .map_err(|e| format!("reading '{input}': {e}"))?
             .map(|r| r.map_err(|e| format!("reading '{input}': {e}")));
-        stream_blocks(blocks, &graph, fs, output, enc)
+        stream_blocks(blocks, &graph, fs, output, enc, &mut progress)
     } else {
         let blocks = decode_blocks(input, STREAM_BLOCK)
             .map_err(|e| format!("decoding '{input}': {e}"))?
             .map(|r| r.map_err(|e| format!("decoding '{input}': {e}")));
-        stream_blocks(blocks, &graph, fs, output, enc)
+        stream_blocks(blocks, &graph, fs, output, enc, &mut progress)
+    }
+}
+
+/// A one-line progress readout for long files.
+///
+/// Off unless stderr is a terminal, so a redirect or a CI log never collects carriage returns —
+/// and the snapshot tests stay clean. Off for short files too: a bar that finishes instantly is
+/// noise. Writes to stderr so `fluxion in.wav ... -` stays a usable pipe.
+struct Progress {
+    total_frames: usize,
+    fs: u32,
+    done: usize,
+    last_percent: usize,
+    show: bool,
+}
+
+impl Progress {
+    /// Anything under this many seconds of audio finishes before a reader could read the line.
+    const MIN_SECONDS: f32 = 10.0;
+
+    fn new(total_frames: usize, fs: u32) -> Progress {
+        use std::io::IsTerminal;
+        let seconds = if fs > 0 {
+            total_frames as f32 / fs as f32
+        } else {
+            0.0
+        };
+        Progress {
+            total_frames,
+            fs,
+            done: 0,
+            last_percent: usize::MAX,
+            show: std::io::stderr().is_terminal() && seconds >= Self::MIN_SECONDS,
+        }
+    }
+
+    fn advance(&mut self, frames: usize) {
+        self.done += frames;
+        if !self.show || self.total_frames == 0 {
+            return;
+        }
+        let percent = (self.done * 100 / self.total_frames).min(100);
+        if percent == self.last_percent {
+            return;
+        }
+        self.last_percent = percent;
+        eprint!(
+            "\r  {percent:>3}%  {:.1}s / {:.1}s",
+            self.done as f32 / self.fs as f32,
+            self.total_frames as f32 / self.fs as f32,
+        );
+    }
+
+    fn finish(&self) {
+        if self.show {
+            eprintln!();
+        }
     }
 }
 
@@ -844,6 +967,7 @@ fn stream_blocks(
     fs: u32,
     output: &str,
     enc: WavEncoding,
+    progress: &mut Progress,
 ) -> Result<bool, String> {
     let mut graphs: Vec<fluxion::RtGraph> = Vec::new();
     let mut writer: Option<WavBlockWriter> = None;
@@ -881,7 +1005,9 @@ fn stream_blocks(
             w.write_block(&outs)
                 .map_err(|e| format!("writing '{output}': {e}"))?;
         }
+        progress.advance(sig.frames());
     }
+    progress.finish();
     if let Some(w) = writer.take() {
         w.finalize()
             .map_err(|e| format!("writing '{output}': {e}"))?;

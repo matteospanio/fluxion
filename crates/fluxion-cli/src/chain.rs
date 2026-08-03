@@ -16,6 +16,7 @@
 //!   (`--gain` / peak still accept a linear value directly).
 //! * `fir --taps 0.5,0.3,0.2` supplies the whole (variadic) tap vector.
 
+use fluxion::suggest;
 use fluxion::{Graph, Op, OpKind, Signal, fxg, process, transform};
 
 /// Parse a numeric CLI value: a plain float, optionally with a `k`/`K` SI suffix (`×1000`).
@@ -193,6 +194,11 @@ fn stage_bool_flags(name: &str) -> Vec<&'static str> {
 // --- stage model -----------------------------------------------------------------------------
 
 /// One pipeline stage: a coalesced graph pass or a geometry transform.
+///
+/// `Debug` is what `--dry-run` prints for a geometry stage. They have no text form of their own
+/// yet (see the "Not yet" section of `docs/interfaces.md`), so the struct fields are the honest
+/// description — the graph stages print in the shared chain syntax instead.
+#[derive(Debug)]
 pub(crate) enum Stage {
     /// A filter pass — the fused series graph of adjacent effects.
     Graph(Graph),
@@ -288,7 +294,18 @@ pub(crate) fn parse_stages(tokens: &[String]) -> Result<Vec<Stage>, String> {
             graph = if graph.is_empty() { node } else { graph | node };
             i += 1;
         } else {
-            return Err(format!("unknown effect or stage '{name}'"));
+            // Suggest across both catalogs: from a user's side `trim` and `lowpass` are the same
+            // kind of token, so a typo in either should get the same help.
+            let candidates = OpKind::all()
+                .iter()
+                .map(|k| k.name())
+                .chain(STAGES.iter().map(|s| s.name));
+            return Err(match suggest::closest(name, candidates) {
+                Some(near) => format!("unknown effect or stage '{name}' — did you mean '{near}'?"),
+                None => {
+                    format!("unknown effect or stage '{name}' — run `fluxion effects` to list them")
+                }
+            });
         }
     }
     if !graph.is_empty() {
@@ -363,10 +380,20 @@ fn parse_op(
             i += 2;
             continue;
         }
-        let idx = specs
-            .iter()
-            .position(|s| s.name == flag)
-            .ok_or_else(|| format!("effect '{name}' has no parameter '--{flag}'"))?;
+        let idx = specs.iter().position(|s| s.name == flag).ok_or_else(|| {
+            let known: Vec<&str> = specs.iter().map(|s| s.name).collect();
+            match suggest::closest(flag, known.iter().copied()) {
+                Some(near) => {
+                    format!(
+                        "effect '{name}' has no parameter '--{flag}' — did you mean '--{near}'?"
+                    )
+                }
+                None => format!(
+                    "effect '{name}' has no parameter '--{flag}' (it takes: --{})",
+                    known.join(", --")
+                ),
+            }
+        })?;
         params[idx] = parse_value(value)?;
         i += 2;
     }

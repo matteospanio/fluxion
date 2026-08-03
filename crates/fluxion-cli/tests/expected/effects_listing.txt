@@ -1,0 +1,128 @@
+effects (graph ops — compose with the geometry stages below):
+  gain
+      --gain         <lin>   [1]
+      --db <dB>            (dB alias for the linear param)
+  lowpass
+      --cutoff       <Hz>   [1000]
+      --order        <lin>   [2]
+  highpass
+      --cutoff       <Hz>   [1000]
+      --order        <lin>   [2]
+  normalize
+      --peak         <lin>   [1]
+      --db <dB>            (dB alias for the linear param)
+  peaking
+      --frequency    <Hz>   [1000]
+      --gain         <dB>   [0]
+      --q            <Q>   [0.707]
+  lowshelf
+      --frequency    <Hz>   [1000]
+      --gain         <dB>   [0]
+      --q            <Q>   [0.707]
+  highshelf
+      --frequency    <Hz>   [1000]
+      --gain         <dB>   [0]
+      --q            <Q>   [0.707]
+  notch
+      --frequency    <Hz>   [1000]
+      --q            <Q>   [0.707]
+  bandpass
+      --frequency    <Hz>   [1000]
+      --q            <Q>   [0.707]
+  allpass
+      --frequency    <Hz>   [1000]
+      --q            <Q>   [0.707]
+  delay
+      --time         <s>   [0.25]
+      --mix          <lin>   [0.5]
+  echo
+      --time         <s>   [0.25]
+      --feedback     <lin>   [0.3]
+      --wet          <lin>   [0.5]
+  cheby1_lowpass
+      --cutoff       <Hz>   [1000]
+      --order        <lin>   [4]
+      --ripple       <dB>   [1]
+  cheby1_highpass
+      --cutoff       <Hz>   [1000]
+      --order        <lin>   [4]
+      --ripple       <dB>   [1]
+  cheby2_lowpass
+      --cutoff       <Hz>   [1000]
+      --order        <lin>   [4]
+      --atten        <dB>   [40]
+  cheby2_highpass
+      --cutoff       <Hz>   [1000]
+      --order        <lin>   [4]
+      --atten        <dB>   [40]
+  reverb
+      --room         <lin>   [0.5]
+      --damping      <lin>   [0.3]
+      --mix          <lin>   [0.3]
+  fir
+      --taps <lin,lin,...>   [1]   (variadic tap vector)
+  fade
+      --fadein       <s>   [0]
+      --fadeout      <s>   [0]
+      --shape        <lin>   [1]
+  tremolo
+      --rate         <Hz>   [5]
+      --depth        <lin>   [0.5]
+  overdrive
+      --gain         <dB>   [20]
+      --colour       <lin>   [0.2]
+  compand
+      --attack       <s>   [0.01]
+      --release      <s>   [0.1]
+      --threshold    <dB>   [-20]
+      --ratio        <lin>   [4]
+      --knee         <dB>   [6]
+      --makeup       <dB>   [0]
+  reverse
+      (no parameters)
+  biquad
+      --b0           <lin>   [1]
+      --b1           <lin>   [0]
+      --b2           <lin>   [0]
+      --a1           <lin>   [0]
+      --a2           <lin>   [0]
+  chorus
+      --rate         <Hz>   [1.5]
+      --depth        <s>   [0.002]
+      --delay        <s>   [0.025]
+      --mix          <lin>   [0.5]
+  flanger
+      --rate         <Hz>   [0.5]
+      --depth        <s>   [0.002]
+      --delay        <s>   [0.001]
+      --feedback     <lin>   [0.5]
+      --mix          <lin>   [0.5]
+  phaser
+      --rate         <Hz>   [0.5]
+      --depth        <lin>   [0.5]
+      --feedback     <lin>   [0.5]
+      --mix          <lin>   [0.5]
+
+geometry stages (change frames / rate / channels):
+  trim — keep a [start, start+len) window (or [start, end)); drops the rest
+      --start        <s>   default 0
+      --len          <s>   default: to end
+      --end          <s>   alternative to --len
+  pad — prepend/append silence
+      --start        <s>   default 0
+      --end          <s>   default 0
+  rate — resample to a new sample rate (windowed-sinc SRC)
+      --fs           <Hz>   required
+  speed — change speed (pitch+tempo together); keeps fs
+      --factor       <lin>   required; >1 faster
+  repeat — concatenate the signal with itself count times
+      --count        <int>   required
+  silence — trim leading/trailing near-silence
+      --threshold-db <dB>   default -60
+      --min          <s>   guard band, default 0
+      --leading      (flag)   trim the front
+      --trailing     (flag)   trim the tail
+  channels — up/down-mix to count channels (energy-preserving)
+      --count        <int>   required
+  remix — rebuild channels from a 1-based map, e.g. "1,2" or "1-2,3"
+      --map          <spec>   required
