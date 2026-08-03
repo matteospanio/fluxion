@@ -18,7 +18,7 @@ pub use fluxion_backend::{
     process, process_batch, sos_filter_batch,
 };
 pub use fluxion_core::{
-    FORMAT_VERSION, Graph, LoadError, Op, OpError, OpKind, ParamSpec, Signal, Unit, fxg,
+    FORMAT_VERSION, Graph, Group, LoadError, Op, OpError, OpKind, ParamSpec, Signal, Unit, fxg,
 };
 
 /// Geometry transforms on a whole [`Signal`] — trim / pad / repeat / silence-trim / resample / speed

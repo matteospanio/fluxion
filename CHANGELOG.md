@@ -21,6 +21,19 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Changed
 
+- **One declarative op table (Epic I / I2)** — the op catalog in `fluxion-core` is now declared
+  once, in a single `ops!` table: one row per op carrying its doc comment, Rust variant, stable
+  text name, catalogue group and parameter schema. `OpKind::name`, `group`, `params` and `all` are
+  generated from that row, replacing four hand-kept parallel lists and twenty `static X_PARAMS`
+  tables that nothing kept in sync. Adding an op is one edit. `OpKind` stays a real
+  `#[non_exhaustive]` enum, so the backend's exhaustive matching and the serde representation are
+  unchanged. New: `OpKind::group() -> Group` (`filter` / `effect`), the catalogue split that drives
+  `fluxion.filter` vs `fluxion.effect` in Python and the sections of the generated op docs.
+  `.fxg` keys on the Rust variant identifier, not the text name, so a committed
+  `tests/fixtures/all_ops_v1.fxg` holding one op of every kind now guards the format against a
+  variant rename — the one refactor that would silently orphan saved graphs. New registry
+  invariants are asserted too: op names are unique and identifier-shaped, parameter names are
+  unique per op and identifier-shaped, and every default sits inside its own bounds.
 - **CPU batch kernel: set-spreading tile** — `sos_filter_batch`'s AVX2 8-row path now
   bounces each time block through a small padded-pitch scratch instead of loading the
   planar rows at their raw stride. Power-of-two row strides (e.g. the 64×524k paper

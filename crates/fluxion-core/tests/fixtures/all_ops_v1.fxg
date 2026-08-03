@@ -1,0 +1,389 @@
+{
+  "version": 1,
+  "kind": "graph",
+  "payload": {
+    "Feedback": {
+      "forward": {
+        "Named": {
+          "name": "all",
+          "node": {
+            "Parallel": [
+              {
+                "Series": [
+                  {
+                    "Series": [
+                      {
+                        "Series": [
+                          {
+                            "Series": [
+                              {
+                                "Series": [
+                                  {
+                                    "Series": [
+                                      {
+                                        "Series": [
+                                          {
+                                            "Series": [
+                                              {
+                                                "Series": [
+                                                  {
+                                                    "Series": [
+                                                      {
+                                                        "Series": [
+                                                          {
+                                                            "Series": [
+                                                              {
+                                                                "Series": [
+                                                                  {
+                                                                    "Series": [
+                                                                      {
+                                                                        "Series": [
+                                                                          {
+                                                                            "Series": [
+                                                                              {
+                                                                                "Series": [
+                                                                                  {
+                                                                                    "Series": [
+                                                                                      {
+                                                                                        "Series": [
+                                                                                          {
+                                                                                            "Series": [
+                                                                                              {
+                                                                                                "Series": [
+                                                                                                  {
+                                                                                                    "Series": [
+                                                                                                      {
+                                                                                                        "Series": [
+                                                                                                          {
+                                                                                                            "Series": [
+                                                                                                              {
+                                                                                                                "Series": [
+                                                                                                                  {
+                                                                                                                    "Series": [
+                                                                                                                      {
+                                                                                                                        "Series": [
+                                                                                                                          "Id",
+                                                                                                                          {
+                                                                                                                            "Op": {
+                                                                                                                              "kind": "Gain",
+                                                                                                                              "params": [
+                                                                                                                                1.0
+                                                                                                                              ]
+                                                                                                                            }
+                                                                                                                          }
+                                                                                                                        ]
+                                                                                                                      },
+                                                                                                                      {
+                                                                                                                        "Op": {
+                                                                                                                          "kind": "Lowpass",
+                                                                                                                          "params": [
+                                                                                                                            1000.0,
+                                                                                                                            2.0
+                                                                                                                          ]
+                                                                                                                        }
+                                                                                                                      }
+                                                                                                                    ]
+                                                                                                                  },
+                                                                                                                  {
+                                                                                                                    "Op": {
+                                                                                                                      "kind": "Highpass",
+                                                                                                                      "params": [
+                                                                                                                        1000.0,
+                                                                                                                        2.0
+                                                                                                                      ]
+                                                                                                                    }
+                                                                                                                  }
+                                                                                                                ]
+                                                                                                              },
+                                                                                                              {
+                                                                                                                "Op": {
+                                                                                                                  "kind": "Normalize",
+                                                                                                                  "params": [
+                                                                                                                    1.0
+                                                                                                                  ]
+                                                                                                                }
+                                                                                                              }
+                                                                                                            ]
+                                                                                                          },
+                                                                                                          {
+                                                                                                            "Op": {
+                                                                                                              "kind": "Peaking",
+                                                                                                              "params": [
+                                                                                                                1000.0,
+                                                                                                                0.0,
+                                                                                                                0.707
+                                                                                                              ]
+                                                                                                            }
+                                                                                                          }
+                                                                                                        ]
+                                                                                                      },
+                                                                                                      {
+                                                                                                        "Op": {
+                                                                                                          "kind": "LowShelf",
+                                                                                                          "params": [
+                                                                                                            1000.0,
+                                                                                                            0.0,
+                                                                                                            0.707
+                                                                                                          ]
+                                                                                                        }
+                                                                                                      }
+                                                                                                    ]
+                                                                                                  },
+                                                                                                  {
+                                                                                                    "Op": {
+                                                                                                      "kind": "HighShelf",
+                                                                                                      "params": [
+                                                                                                        1000.0,
+                                                                                                        0.0,
+                                                                                                        0.707
+                                                                                                      ]
+                                                                                                    }
+                                                                                                  }
+                                                                                                ]
+                                                                                              },
+                                                                                              {
+                                                                                                "Op": {
+                                                                                                  "kind": "Notch",
+                                                                                                  "params": [
+                                                                                                    1000.0,
+                                                                                                    0.707
+                                                                                                  ]
+                                                                                                }
+                                                                                              }
+                                                                                            ]
+                                                                                          },
+                                                                                          {
+                                                                                            "Op": {
+                                                                                              "kind": "Bandpass",
+                                                                                              "params": [
+                                                                                                1000.0,
+                                                                                                0.707
+                                                                                              ]
+                                                                                            }
+                                                                                          }
+                                                                                        ]
+                                                                                      },
+                                                                                      {
+                                                                                        "Op": {
+                                                                                          "kind": "Allpass",
+                                                                                          "params": [
+                                                                                            1000.0,
+                                                                                            0.707
+                                                                                          ]
+                                                                                        }
+                                                                                      }
+                                                                                    ]
+                                                                                  },
+                                                                                  {
+                                                                                    "Op": {
+                                                                                      "kind": "Delay",
+                                                                                      "params": [
+                                                                                        0.25,
+                                                                                        0.5
+                                                                                      ]
+                                                                                    }
+                                                                                  }
+                                                                                ]
+                                                                              },
+                                                                              {
+                                                                                "Op": {
+                                                                                  "kind": "Echo",
+                                                                                  "params": [
+                                                                                    0.25,
+                                                                                    0.3,
+                                                                                    0.5
+                                                                                  ]
+                                                                                }
+                                                                              }
+                                                                            ]
+                                                                          },
+                                                                          {
+                                                                            "Op": {
+                                                                              "kind": "Cheby1Lowpass",
+                                                                              "params": [
+                                                                                1000.0,
+                                                                                4.0,
+                                                                                1.0
+                                                                              ]
+                                                                            }
+                                                                          }
+                                                                        ]
+                                                                      },
+                                                                      {
+                                                                        "Op": {
+                                                                          "kind": "Cheby1Highpass",
+                                                                          "params": [
+                                                                            1000.0,
+                                                                            4.0,
+                                                                            1.0
+                                                                          ]
+                                                                        }
+                                                                      }
+                                                                    ]
+                                                                  },
+                                                                  {
+                                                                    "Op": {
+                                                                      "kind": "Cheby2Lowpass",
+                                                                      "params": [
+                                                                        1000.0,
+                                                                        4.0,
+                                                                        40.0
+                                                                      ]
+                                                                    }
+                                                                  }
+                                                                ]
+                                                              },
+                                                              {
+                                                                "Op": {
+                                                                  "kind": "Cheby2Highpass",
+                                                                  "params": [
+                                                                    1000.0,
+                                                                    4.0,
+                                                                    40.0
+                                                                  ]
+                                                                }
+                                                              }
+                                                            ]
+                                                          },
+                                                          {
+                                                            "Op": {
+                                                              "kind": "Reverb",
+                                                              "params": [
+                                                                0.5,
+                                                                0.3,
+                                                                0.3
+                                                              ]
+                                                            }
+                                                          }
+                                                        ]
+                                                      },
+                                                      {
+                                                        "Op": {
+                                                          "kind": "Fir",
+                                                          "params": [
+                                                            1.0
+                                                          ]
+                                                        }
+                                                      }
+                                                    ]
+                                                  },
+                                                  {
+                                                    "Op": {
+                                                      "kind": "Fade",
+                                                      "params": [
+                                                        0.0,
+                                                        0.0,
+                                                        1.0
+                                                      ]
+                                                    }
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "Op": {
+                                                  "kind": "Tremolo",
+                                                  "params": [
+                                                    5.0,
+                                                    0.5
+                                                  ]
+                                                }
+                                              }
+                                            ]
+                                          },
+                                          {
+                                            "Op": {
+                                              "kind": "Overdrive",
+                                              "params": [
+                                                20.0,
+                                                0.2
+                                              ]
+                                            }
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "Op": {
+                                          "kind": "Compand",
+                                          "params": [
+                                            0.01,
+                                            0.1,
+                                            -20.0,
+                                            4.0,
+                                            6.0,
+                                            0.0
+                                          ]
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "Op": {
+                                      "kind": "Reverse",
+                                      "params": []
+                                    }
+                                  }
+                                ]
+                              },
+                              {
+                                "Op": {
+                                  "kind": "Biquad",
+                                  "params": [
+                                    1.0,
+                                    0.0,
+                                    0.0,
+                                    0.0,
+                                    0.0
+                                  ]
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "Op": {
+                              "kind": "Chorus",
+                              "params": [
+                                1.5,
+                                0.002,
+                                0.025,
+                                0.5
+                              ]
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "Op": {
+                          "kind": "Flanger",
+                          "params": [
+                            0.5,
+                            0.002,
+                            0.001,
+                            0.5,
+                            0.5
+                          ]
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "Op": {
+                      "kind": "Phaser",
+                      "params": [
+                        0.5,
+                        0.5,
+                        0.5,
+                        0.5
+                      ]
+                    }
+                  }
+                ]
+              },
+              "Id"
+            ]
+          }
+        }
+      },
+      "feedback": "Id"
+    }
+  }
+}

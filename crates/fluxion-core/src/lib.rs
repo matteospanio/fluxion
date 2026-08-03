@@ -26,6 +26,6 @@ pub mod signal;
 pub use envelope::{Envelope, EnvelopeError, FORMAT_VERSION, LoadError};
 pub use frozen::FrozenSos;
 pub use graph::Graph;
-pub use op::{Op, OpError, OpKind};
+pub use op::{Group, Op, OpError, OpKind};
 pub use param::{ParamSpec, Unit};
 pub use signal::Signal;
