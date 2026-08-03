@@ -1,0 +1,65 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>fluxion — AudioWorklet playback</title>
+<h1>fluxion in an AudioWorklet</h1>
+<p>The same chain the CLI, Python and C run, rendering 128-frame blocks on the audio thread.</p>
+<button id="play">play 2 s</button>
+<pre id="out">idle</pre>
+<script type="module">
+  import { attachWorklet } from "./worklet-loader.mjs";
+  import init, { Chain } from "./index.mjs";
+
+  const log = (m) => (document.getElementById("out").textContent = m);
+
+  /** Deterministic noise, so a failure is reproducible. */
+  function source(frames) {
+    let state = 0x1234_5678;
+    return Float32Array.from({ length: frames }, () => {
+      state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+      return ((state >>> 8) / 16_777_216) * 1.2 - 0.6;
+    });
+  }
+
+  // Live playback, for a human with speakers.
+  document.getElementById("play").onclick = async () => {
+    log("playing…");
+    const ctx = new AudioContext({ sampleRate: 48000 });
+    await ctx.resume();
+    const node = await attachWorklet(ctx, "highpass(80, 4) | gain(0.8)", { ringFrames: 48000 * 3 });
+    node.connect(ctx.destination);
+    node.port.postMessage({ type: "audio", samples: source(48000 * 2) });
+    setTimeout(() => node.port.postMessage({ type: "gain", value: 0.2, rampMs: 30 }), 1000);
+    log("playing 2 s, ducking 12 dB after 1 s");
+  };
+
+  // What the browser test drives: a real AudioWorklet on a real audio thread, rendered offline so
+  // it needs no audio device and finishes deterministically.
+  window.fluxionOfflineRender = async ({ chain, seconds }) => {
+    const fs = 48000;
+    const frames = Math.floor(fs * seconds);
+    const samples = source(frames);
+
+    const ctx = new OfflineAudioContext({ numberOfChannels: 1, length: frames, sampleRate: fs });
+    const node = await attachWorklet(ctx, chain, {
+      ringFrames: frames + 4096,
+      prime: samples,
+    });
+    node.connect(ctx.destination);
+
+    const rendered = (await ctx.startRendering()).getChannelData(0);
+
+    // The claim the whole browser story rests on: the worklet and the offline renderer are the
+    // same DSP. Compare them here, inside the browser, rather than taking it on trust.
+    // Built with --omit-default-module-path, so init needs to be told where the wasm is.
+    await init({ module_or_path: new URL("./pkg/fluxion_wasm_bg.wasm", import.meta.url) });
+    const offline = Chain.fromText(chain).process(samples, fs);
+
+    let peak = 0;
+    let worst = 0;
+    for (let i = 0; i < frames; i++) {
+      peak = Math.max(peak, Math.abs(rendered[i]));
+      worst = Math.max(worst, Math.abs(rendered[i] - offline[i]));
+    }
+    return { frames, peak, worst };
+  };
+</script>

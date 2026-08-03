@@ -63,11 +63,34 @@ error: unknown op 'hipass'
   ^^^^^^ did you mean 'highpass'?
 ```
 
+## Live playback
+
+The same chain text, on the audio thread:
+
+```js
+import { attachWorklet } from "fluxion/worklet";
+
+const ctx = new AudioContext();
+const node = await attachWorklet(ctx, "highpass(80, 4) | gain(-3dB)");
+node.connect(ctx.destination);
+
+node.port.postMessage({ type: "audio", samples });          // feed it
+node.port.postMessage({ type: "gain", value: 0.2, rampMs: 30 });  // ramped, not stepped
+```
+
+Audio moves through a lock-free ring, so the page and the audio thread never wait on each other.
+Once started, the wasm side allocates nothing — asserted, not assumed: the module counts its own
+allocations and the test requires the count not to move across five seconds of playback. A
+parameter change is a ramp, because a gain that jumps between blocks is a click.
+
+`crates/fluxion-wasm/js/demo.html` is a working page.
+
+Playing offline instead — for a waveform, or a bounce — is the `Chain` API above. The two produce
+identical samples, which is checked in CI both in Node and inside a browser.
+
 ## Not yet
 
-`Chain` renders **offline** — enough for waveforms, previews and bounces. Live playback through an
-AudioWorklet is roadmap task W4; it extends this same class rather than replacing it. The WebGPU
-path is W8.
+Loading a frozen `.fxg` graph in the browser is roadmap task W3; the WebGPU path is W8.
 
 ## Building from source
 

@@ -25,8 +25,13 @@ crate-type = ["cdylib", "rlib"]
 wasm-bindgen = "0.2"
 # The facade, which is wasm-clean: it does not pull fluxion-io (Symphonia/hound), and CubeCL is
 # behind the `cuda` feature. WebGPU via wgpu arrives with the GPU path (roadmap W8).
-fluxion = { path = "../fluxion-facade", version = "0.2.0" }
+# `realtime` brings in the allocation-free block executor and the lock-free ring the
+# worklet runs on. It does not pull cpal — that is a separate feature of fluxion-rt — so
+# the tree stays wasm-clean.
+fluxion = { path = "../fluxion-facade", version = "0.2.0", features = ["realtime"] }
 # Panics become readable console messages instead of "unreachable executed".
+# The lock-free ring and the smoothed parameter, used directly by the player.
+fluxion-rt = { path = "../fluxion-rt", version = "0.2.0" }
 console_error_panic_hook = "0.1"
 
 [dev-dependencies]

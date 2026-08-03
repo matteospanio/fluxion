@@ -290,10 +290,35 @@ jobs:
       - name: wasm output matches native, for every op
         working-directory: crates/fluxion-wasm/js
         run: node parity.mjs
+      # ROADMAP W4/W5: 128-frame blocks through the chain, nothing allocated once started, and a
+      # 40 dB parameter jump arriving as a ramp. Driven directly rather than through a browser, so
+      # the decision is the same on every run — the browser leg below answers a different question.
+      - name: worklet path (allocations, dropped blocks, parameter ramp)
+        working-directory: crates/fluxion-wasm/js
+        run: node worklet.test.mjs
+      # ROADMAP W7: hard limits on download size and on the cost of one block.
+      - name: size and speed budget
+        working-directory: crates/fluxion-wasm/js
+        run: node budget.test.mjs
       # ROADMAP I7: the JS quickstart runs, so it cannot rot.
       - name: JS quickstart
         working-directory: crates/fluxion-wasm/js
         run: node quickstart.mjs
+
+      # The part only a browser can answer: that an AudioWorklet can host this at all — module
+      # registration, synchronous wasm instantiation on the audio thread, and `process()` on the
+      # real 128-frame quantum. Rendered through an OfflineAudioContext so it needs no audio
+      # device and finishes deterministically.
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
+      - name: install the browser driver
+        working-directory: crates/fluxion-wasm/js
+        run: npm install --no-audit --no-fund
+      - name: AudioWorklet in a real browser
+        working-directory: crates/fluxion-wasm/js
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: node browser.test.mjs
 
   cuda:
     name: cuda check (API drift, no GPU)
