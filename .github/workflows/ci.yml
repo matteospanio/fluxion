@@ -49,6 +49,22 @@ jobs:
       # would otherwise collide with the facade lib's doc output).
       - run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --lib --locked
 
+  # docs/ops.md and the generated interface bindings are copies of the op registry. Regenerate them
+  # and fail if anything moved: that is what turns "an op ships on every interface" (docs/
+  # interfaces.md) into a check rather than a promise. A hand edit to a generated file fails here
+  # too, which is the point.
+  contract:
+    name: interface contract (generated docs & bindings)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p fluxion-cli --locked
+      - run: python3 scripts/gen_interfaces.py
+      - name: generated files are up to date
+        run: git diff --exit-code -- docs/ crates/fluxion-py/python/ crates/fluxion-wasm/js/
+
   autodiff:
     name: autodiff (Burn CPU)
     runs-on: ubuntu-latest

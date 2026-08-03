@@ -2661,6 +2661,7 @@ dependencies = [
  "fluxion-rt",
  "glob",
  "hound",
+ "serde_json",
 ]
 
 [[package]]

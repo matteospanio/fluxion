@@ -501,6 +501,10 @@ pub(crate) fn cmd_import(args: &[String], fs: Option<u32>, force: bool) -> Resul
 /// describe just one. This is the discoverability fix (`trailing_var_arg` swallows `--help`).
 pub(crate) fn cmd_effects(args: &[String]) -> Result<(), String> {
     match args.first().map(String::as_str) {
+        Some("--json") => {
+            println!("{}", registry_json());
+            Ok(())
+        }
         None => {
             println!("effects (graph ops — compose with the geometry stages below):");
             for &kind in OpKind::all() {
@@ -525,6 +529,69 @@ pub(crate) fn cmd_effects(args: &[String]) -> Result<(), String> {
             }
         }
     }
+}
+
+/// The whole catalog as JSON — the machine-readable form of `fluxion effects`.
+///
+/// This is the one place the op registry leaves the Rust world, and `scripts/gen_interfaces.py`
+/// reads it to write `docs/ops.md`, the Python classes and their stubs, and the TypeScript types.
+/// Generating those from here rather than from a hand-kept list is what makes "one name
+/// everywhere" a check instead of a promise.
+///
+/// Infinite bounds become `null`, since JSON has no infinity. The geometry stages are included
+/// too, marked as what they are: CLI-only, because they change frame count, rate or channel layout
+/// and so cannot be `OpKind`s.
+fn registry_json() -> String {
+    use serde_json::{Value, json};
+
+    // Go through `f32`'s shortest round-tripping decimal before widening, or JSON inherits the
+    // f32→f64 tail: `0.707` would come out as `0.7070000171661377`.
+    let num = |v: f32| -> Value {
+        json!(
+            v.to_string()
+                .parse::<f64>()
+                .expect("a finite f32 always reparses")
+        )
+    };
+    let bound = |v: f32| -> Value { if v.is_finite() { num(v) } else { Value::Null } };
+
+    let ops: Vec<Value> = OpKind::all()
+        .iter()
+        .map(|&kind| {
+            json!({
+                "name": kind.name(),
+                "class": kind.variant(),
+                "group": kind.group().as_str(),
+                "variadic": kind.is_variadic(),
+                "doc": kind.doc().iter().map(|l| l.trim()).collect::<Vec<_>>().join(" "),
+                "params": kind.params().iter().map(|p| json!({
+                    "name": p.name,
+                    "unit": p.unit.as_str(),
+                    "default": num(p.default),
+                    "min": bound(p.min),
+                    "max": bound(p.max),
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+
+    let stages: Vec<Value> = STAGES
+        .iter()
+        .map(|doc| {
+            json!({
+                "name": doc.name,
+                "summary": doc.summary,
+                "flags": doc.flags.iter().map(|f| json!({
+                    "name": f.flag,
+                    "kind": f.kind,
+                    "note": f.note,
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+
+    serde_json::to_string_pretty(&json!({ "version": 1, "ops": ops, "stages": stages }))
+        .expect("the registry is always serializable")
 }
 
 /// Short unit label for the `effects` listing.

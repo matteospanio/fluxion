@@ -27,6 +27,19 @@ impl Unit {
             Unit::Q => "Q",
         }
     }
+
+    /// Machine-readable tag, e.g. `"hz"` — the form used in generated output (`effects --json`,
+    /// the typed stubs, `docs/ops.md`). Unlike [`suffix`](Unit::suffix) every unit has one, so a
+    /// generator never has to special-case the dimensionless case.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Unit::Hz => "hz",
+            Unit::Db => "db",
+            Unit::Linear => "linear",
+            Unit::Seconds => "seconds",
+            Unit::Q => "q",
+        }
+    }
 }
 
 /// Static description of one op parameter: name, unit, default, and inclusive bounds.

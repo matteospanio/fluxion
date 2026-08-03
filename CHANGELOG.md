@@ -63,6 +63,21 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Added
 
+- **The interface contract, in `docs/` (Epic I / I1)** — a new `docs/` directory carrying the
+  agreement between Fluxion's five doors. [`docs/interfaces.md`](docs/interfaces.md) states the
+  rule the epic exists to enforce — *an op ships on every interface, or this document says why
+  not* — plus who each interface is for, the definition of done a PR is held to, the ten-line
+  quickstart rule and how a line is counted, and an honest "Not yet" section for the gaps that
+  remain (the AudioWorklet half of the JS package, the geometry stages, `.to(device)`, alias
+  spellings) with the reason for each rather than just the absence.
+  [`docs/chain-syntax.md`](docs/chain-syntax.md) documents the shared text form.
+  [`docs/ops.md`](docs/ops.md) is **generated** — every op, what it does, its parameters, ranges
+  and its name on each interface — by `scripts/gen_interfaces.py`, which reads the registry through
+  the new `fluxion effects --json`. A `contract` CI job regenerates and runs `git diff
+  --exit-code`, so a hand edit or an op added without regenerating fails the build. The registry
+  gained `OpKind::variant()` (the Rust identifier, which is also the Python class name) and
+  `OpKind::doc()` (the catalog's doc comment), so an op's documentation is written once and used
+  three times: rustdoc, the generated table, and the Python docstring.
 - **The chain text syntax (Epic I / I2)** — `"highpass(80, 4) | gain(-3dB)".parse::<Graph>()`. One
   grammar, in `fluxion-core`, that is the exact inverse of what `Graph` prints: whatever the library
   renders parses back to the identical graph, asserted over a corpus covering every op, both

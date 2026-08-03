@@ -51,7 +51,7 @@ impl fmt::Display for Group {
 /// Kept private — it is an implementation detail of this module, not public API.
 macro_rules! ops {
     ($(
-        $(#[$meta:meta])*
+        $(#[doc = $doc:literal])*
         $variant:ident => $dsl:literal, $group:ident, [ $($spec:expr),* $(,)? ];
     )+) => {
         /// The kind of a DSP leaf op. Each kind has a fixed parameter schema ([`OpKind::params`]).
@@ -62,7 +62,7 @@ macro_rules! ops {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
         #[non_exhaustive]
         pub enum OpKind {
-            $( $(#[$meta])* $variant, )+
+            $( $(#[doc = $doc])* $variant, )+
         }
 
         impl OpKind {
@@ -72,6 +72,24 @@ macro_rules! ops {
             /// identifier), so this string can be corrected without breaking saved graphs.
             pub fn name(self) -> &'static str {
                 match self { $( OpKind::$variant => $dsl, )+ }
+            }
+
+            /// The Rust variant identifier — e.g. `"LowShelf"`.
+            ///
+            /// This is what `.fxg` stores, and what interfaces that spell ops as classes use as the
+            /// class name (`fluxion.filter.LowShelf` in Python). Deriving it from the same table row
+            /// as [`name`](OpKind::name) is what keeps the two from drifting.
+            pub fn variant(self) -> &'static str {
+                match self { $( OpKind::$variant => stringify!($variant), )+ }
+            }
+
+            /// The op's documentation, one entry per line of the catalog's doc comment.
+            ///
+            /// Written once, in the table, and used twice: rustdoc renders it on the variant, and
+            /// the interface generator turns it into the Python docstring and the row in
+            /// `docs/ops.md`. Lines keep rustdoc's leading space; trim before rendering.
+            pub fn doc(self) -> &'static [&'static str] {
+                match self { $( OpKind::$variant => &[ $($doc),* ], )+ }
             }
 
             /// Which catalogue section this op belongs to. See [`Group`].
@@ -205,8 +223,8 @@ ops! {
     ];
 
     /// Direct-form FIR filter: `y[n] = Σ_k taps[k]·x[n-k]`. **Variadic** — its parameters are the
-    /// tap vector itself (≥ 1), the realtime/graph form of a trained/frozen FIR (see
-    /// [`OpKind::is_variadic`]). The single spec below is the prototype for one tap.
+    /// tap vector itself (one or more), the realtime/graph form of a trained or frozen FIR. The one
+    /// parameter listed is the prototype for a single tap.
     Fir => "fir", Filter, [
         ParamSpec::new("tap", Unit::Linear, 1.0, f32::NEG_INFINITY, f32::INFINITY),
     ];
