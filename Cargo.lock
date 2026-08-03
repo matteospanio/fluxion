@@ -2668,6 +2668,7 @@ dependencies = [
  "clap",
  "fluxion",
  "fluxion-io",
+ "fluxion-ops",
  "fluxion-rt",
  "glob",
  "hound",

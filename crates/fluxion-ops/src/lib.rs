@@ -21,6 +21,7 @@ pub mod dynamics;
 pub mod effect;
 pub mod fir;
 pub mod iir;
+pub mod loudness;
 pub mod modulation;
 pub mod rbj;
 pub mod reverb;
@@ -43,6 +44,10 @@ pub use iir::{
     Biquad, BiquadGrad, Sos, biquad_forward, biquad_vjp, butterworth_highpass, butterworth_lowpass,
     sos_filter, sos_filter_in_place, sos_filter_interleaved, sos_filter_interleaved_chunk,
     sos_input_grad, sos_is_stable, sos_magnitude, sos_vjp,
+};
+pub use loudness::{
+    channel_weights, integrated_loudness, k_weighting, loudness_range, sample_peak,
+    short_term_loudness, true_peak,
 };
 pub use modulation::{chorus, flanger, phaser};
 pub use rbj::{allpass, bandpass, high_shelf, low_shelf, notch, peaking};
