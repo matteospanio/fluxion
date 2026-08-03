@@ -105,7 +105,98 @@ pub unsafe extern "C" fn fx_graph_load_fxg(path: *const c_char) -> *mut FxGraph 
     }
 }
 
-/// Free a graph handle returned by [`fx_graph_load_fxg`]. NULL is a no-op; double-free is undefined.
+/// Build a graph from the shared chain text, e.g. `"highpass(80, 4) | gain(-3dB)"`.
+///
+/// This is the whole op catalog, reachable from C without one ABI symbol per op: the same string
+/// the CLI's `--chain`, Python's `fluxion.chain()` and the browser's `Chain.fromText` accept. See
+/// `docs/chain-syntax.md` for the grammar and `docs/ops.md` for the ops.
+///
+/// Returns an owning handle, or NULL on error — [`fx_last_error`] then holds a message with a
+/// caret under the offending character, and a suggestion when the mistake looks like a typo. Free
+/// the handle with [`fx_graph_free`].
+///
+/// # Safety
+/// `text` must be either NULL or a valid pointer to a NUL-terminated C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fx_chain_from_text(text: *const c_char) -> *mut FxGraph {
+    clear_last_error();
+    if text.is_null() {
+        set_last_error("fx_chain_from_text: text is NULL");
+        return ptr::null_mut();
+    }
+    let parsed = catch_unwind(AssertUnwindSafe(|| {
+        let c = unsafe { CStr::from_ptr(text) };
+        let source = c
+            .to_str()
+            .map_err(|_| "fx_chain_from_text: text is not valid UTF-8".to_string())?;
+        fluxion_core::parse::chain(source).map_err(|e| e.render(source))
+    }));
+    match parsed {
+        Ok(Ok(graph)) => Box::into_raw(Box::new(FxGraph { graph })),
+        Ok(Err(msg)) => {
+            set_last_error(msg);
+            ptr::null_mut()
+        }
+        Err(_) => {
+            set_last_error("fx_chain_from_text: panic while parsing chain");
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Write the graph's canonical chain text into `buf`, NUL-terminated and truncated to `cap`.
+///
+/// Returns the length the full string needs **excluding** the NUL — like `snprintf`, so a return
+/// value `>= cap` means the output was truncated and tells you the buffer to allocate. Pass
+/// `cap == 0` (with `buf` NULL) to ask for the size first. On failure returns a negative
+/// `FX_ERR_*`.
+///
+/// The text round-trips: feeding it back to [`fx_chain_from_text`] rebuilds the same graph. That is
+/// what makes a `.fxg` loaded from disk inspectable, and it is the same string every other
+/// interface prints.
+///
+/// A caller-owned buffer rather than a borrowed pointer is deliberate: [`fx_last_error`]'s
+/// "valid until the next call" rule is fine for a message you print immediately and wrong for a
+/// value you want to keep.
+///
+/// # Safety
+/// `graph` must be a live handle. If `cap > 0`, `buf` must point to at least `cap` writable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fx_graph_to_text(
+    graph: *const FxGraph,
+    buf: *mut c_char,
+    cap: usize,
+) -> c_int {
+    clear_last_error();
+    if graph.is_null() || (cap > 0 && buf.is_null()) {
+        set_last_error("fx_graph_to_text: graph or buf is NULL");
+        return FX_ERR_NULL_ARG;
+    }
+    let written = catch_unwind(AssertUnwindSafe(|| {
+        let text = unsafe { &*graph }.graph.to_string();
+        let bytes = text.as_bytes();
+        if cap > 0 {
+            // Truncate on a char boundary is unnecessary here (the syntax is ASCII), but copy at
+            // most `cap - 1` bytes so there is always room for the terminator.
+            let n = bytes.len().min(cap - 1);
+            unsafe {
+                ptr::copy_nonoverlapping(bytes.as_ptr(), buf.cast::<u8>(), n);
+                *buf.add(n) = 0;
+            }
+        }
+        bytes.len()
+    }));
+    match written {
+        Ok(len) => c_int::try_from(len).unwrap_or(c_int::MAX),
+        Err(_) => {
+            set_last_error("fx_graph_to_text: panic while rendering graph");
+            FX_ERR_PANIC
+        }
+    }
+}
+
+/// Free a graph handle returned by [`fx_graph_load_fxg`] or [`fx_chain_from_text`]. NULL is a
+/// no-op; double-free is undefined.
 ///
 /// # Safety
 /// `graph` must be NULL or a pointer previously returned by [`fx_graph_load_fxg`] and not yet freed.
@@ -514,6 +605,98 @@ mod tests {
     #[test]
     fn abi_smoke_links() {
         assert_eq!(fx_abi_smoke(), 2);
+    }
+
+    /// Pre-condition: a chain written as text, the way every other interface writes it.
+    /// Post-condition: C gets the same graph, and can print it back in a form that reparses.
+    #[test]
+    fn chain_from_text_round_trips_through_c() {
+        let text = CString::new("highpass(80, 4) | gain(-3dB)").unwrap();
+        let graph = unsafe { fx_chain_from_text(text.as_ptr()) };
+        assert!(!graph.is_null(), "parsing a valid chain returned NULL");
+
+        // snprintf semantics: ask for the size first, then fill a buffer of that size.
+        let needed = unsafe { fx_graph_to_text(graph, ptr::null_mut(), 0) };
+        assert!(needed > 0);
+        let mut buf = vec![0 as c_char; needed as usize + 1];
+        let written = unsafe { fx_graph_to_text(graph, buf.as_mut_ptr(), buf.len()) };
+        assert_eq!(written, needed);
+
+        let rendered = unsafe { CStr::from_ptr(buf.as_ptr()) }.to_str().unwrap();
+        assert_eq!(rendered, "highpass(80, 4) | gain(0.70794576)");
+        // And it is a chain C can hand straight back.
+        let again = CString::new(rendered).unwrap();
+        let reparsed = unsafe { fx_chain_from_text(again.as_ptr()) };
+        assert!(!reparsed.is_null());
+        assert_eq!(unsafe { &*reparsed }.graph, unsafe { &*graph }.graph);
+
+        unsafe {
+            fx_graph_free(graph);
+            fx_graph_free(reparsed);
+        }
+    }
+
+    /// A truncating write must still NUL-terminate, and still report the full length — otherwise a
+    /// C caller cannot tell it needs a bigger buffer.
+    #[test]
+    fn chain_text_truncates_like_snprintf() {
+        let text = CString::new("gain(0.5)").unwrap();
+        let graph = unsafe { fx_chain_from_text(text.as_ptr()) };
+        let mut buf = [0 as c_char; 5];
+        let needed = unsafe { fx_graph_to_text(graph, buf.as_mut_ptr(), buf.len()) };
+        assert_eq!(needed, "gain(0.5)".len() as c_int);
+        assert_eq!(
+            unsafe { CStr::from_ptr(buf.as_ptr()) }.to_str().unwrap(),
+            "gain"
+        );
+        unsafe { fx_graph_free(graph) };
+    }
+
+    /// Bad input is refused with a message, never a NULL dereference and never an unwind into C.
+    #[test]
+    fn chain_from_text_refuses_bad_input_without_unwinding() {
+        for bad in [
+            "hipass=80",
+            "gain(",
+            "",
+            "gain(1) ~ gain(2) ~ gain(3)",
+            "lowpass(-5)",
+        ] {
+            let text = CString::new(bad).unwrap();
+            let graph = unsafe { fx_chain_from_text(text.as_ptr()) };
+            assert!(graph.is_null(), "`{bad}` should not have parsed");
+            let msg = unsafe { CStr::from_ptr(fx_last_error()) }.to_str().unwrap();
+            assert!(!msg.is_empty(), "`{bad}` gave no error message");
+        }
+        // The typo suggestion reaches C too.
+        let text = CString::new("hipass=80").unwrap();
+        assert!(unsafe { fx_chain_from_text(text.as_ptr()) }.is_null());
+        let msg = unsafe { CStr::from_ptr(fx_last_error()) }.to_str().unwrap();
+        assert!(msg.contains("did you mean 'highpass'"), "{msg}");
+
+        // NULL is an error, not a crash.
+        assert!(unsafe { fx_chain_from_text(ptr::null()) }.is_null());
+        assert_eq!(
+            unsafe { fx_graph_to_text(ptr::null(), ptr::null_mut(), 0) },
+            FX_ERR_NULL_ARG
+        );
+    }
+
+    /// The C door reaches the whole catalog through text — this is the check behind the "via chain
+    /// text" column in `docs/ops.md`.
+    #[test]
+    fn every_op_is_reachable_from_c() {
+        for &kind in OpKind::all() {
+            let text = CString::new(kind.name()).unwrap();
+            let graph = unsafe { fx_chain_from_text(text.as_ptr()) };
+            assert!(
+                !graph.is_null(),
+                "op '{}' is not reachable from fx_chain_from_text: {}",
+                kind.name(),
+                unsafe { CStr::from_ptr(fx_last_error()) }.to_string_lossy()
+            );
+            unsafe { fx_graph_free(graph) };
+        }
     }
 
     #[test]

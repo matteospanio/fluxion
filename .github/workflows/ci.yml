@@ -181,24 +181,67 @@ jobs:
       # actually measuring (benches are a local tool, this is just a build tripwire).
       - run: cargo bench --no-run -p fluxion-ops -p fluxion-backend --locked
 
+  # ROADMAP I5: "CI compiles and runs the C example on the three systems". Passing the archive as a
+  # plain file path rather than `-l:libfluxion_ffi.a` is what makes that possible — `-l:` is a
+  # GNU-ld extension that Apple's ld64 rejects and MSVC has no concept of.
   ffi:
-    name: C ABI (staticlib + smoke.c)
-    runs-on: ubuntu-latest
+    name: C ABI (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+      - if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
       - run: cargo test -p fluxion-ffi --locked
       - run: cargo build -p fluxion-ffi --locked
-      # Prove the C ABI links and round-trips from actual C: compile the smoke test against the
-      # checked-in header and the staticlib (-l:libfluxion_ffi.a forces static, not the .so), then run it.
-      - name: compile & run the C smoke test
+
+      # Prove the ABI links and works from actual C, on every system a host might use.
+      - name: compile & run the C examples (Linux)
+        if: runner.os == 'Linux'
         run: |
-          cc crates/fluxion-ffi/examples/smoke.c \
-            -I crates/fluxion-ffi/include \
-            -L target/debug -l:libfluxion_ffi.a \
-            -lpthread -lm -ldl -o smoke
-          ./smoke
+          for example in smoke quickstart; do
+            cc crates/fluxion-ffi/examples/$example.c -I crates/fluxion-ffi/include \
+               target/debug/libfluxion_ffi.a -lpthread -lm -ldl -o $example
+            ./$example
+          done
+      - name: compile & run the C examples (macOS)
+        if: runner.os == 'macOS'
+        # No libdl on macOS — its dlopen lives in libSystem.
+        run: |
+          for example in smoke quickstart; do
+            cc crates/fluxion-ffi/examples/$example.c -I crates/fluxion-ffi/include \
+               target/debug/libfluxion_ffi.a -lpthread -lm -o $example
+            ./$example
+          done
+      - name: compile & run the C examples (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        # If this system-library list ever rots, the authoritative source is:
+        #   cargo rustc -p fluxion-ffi --crate-type staticlib -- --print native-static-libs
+        run: |
+          for %%e in (smoke quickstart) do (
+            cl /nologo crates\fluxion-ffi\examples\%%e.c /I crates\fluxion-ffi\include ^
+               target\debug\fluxion_ffi.lib ws2_32.lib userenv.lib ntdll.lib bcrypt.lib advapi32.lib ^
+               /Fe:%%e.exe || exit /b 1
+            %%e.exe || exit /b 1
+          )
+
+      # The header is committed so consumers build with no Rust toolchain in the loop. That only
+      # works if it actually matches the source, which nothing checked before.
+      - name: header is in sync with the source
+        if: runner.os == 'Linux'
+        run: |
+          cargo install --locked cbindgen@0.29.4
+          cbindgen --config crates/fluxion-ffi/cbindgen.toml --crate fluxion-ffi \
+                   --output "$RUNNER_TEMP/fluxion.h"
+          diff -u crates/fluxion-ffi/include/fluxion.h "$RUNNER_TEMP/fluxion.h"
 
   cuda:
     name: cuda check (API drift, no GPU)

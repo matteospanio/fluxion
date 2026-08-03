@@ -1,7 +1,11 @@
 # cbindgen configuration for fluxion-ffi — the stable C ABI header.
 #
 # Regenerate the checked-in header (requires `cargo install cbindgen`):
+#   cargo install --locked cbindgen@0.29.4
 #   cbindgen --config cbindgen.toml --crate fluxion-ffi --output include/fluxion.h
+#
+# The version is pinned because cbindgen's formatting varies between releases; the
+# `ffi` CI job regenerates with the same version and diffs, so a stale header fails.
 #
 # The header is committed so C / C++ / Swift / JS consumers (and the CI smoke step) build against the
 # staticlib with no Rust toolchain in the loop. Keep it in sync when the ABI changes.

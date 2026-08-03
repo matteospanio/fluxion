@@ -99,6 +99,19 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Added
 
+- **C: build a chain from text (Epic I / I5)** — `fx_chain_from_text("highpass(80, 4) |
+  gain(-3dB)")` reaches the whole op catalog from C, and `fx_graph_to_text` prints a graph back in
+  the same form (snprintf semantics: caller-owned buffer, returns the length needed). Before this,
+  the only way into the C door was loading a `.fxg` file produced elsewhere — zero of the 27 ops
+  were reachable. Two symbols rather than one per op is deliberate: the roadmap's contract for C is
+  "the stable core … small on purpose", and every ABI symbol is permanent. A test asserts every
+  registry op parses from C, which is what the "via chain text" column in `docs/ops.md` means.
+  Errors, including the caret rendering and the did-you-mean suggestion, come through
+  `fx_last_error`. The `ffi` CI job is now a Linux/macOS/Windows matrix — it was Linux-only, and
+  its link line used `-l:libfluxion_ffi.a`, a GNU-ld extension that Apple's ld64 rejects and MSVC
+  does not have; passing the archive as a plain file path works everywhere. A new step regenerates
+  `fluxion.h` with a pinned cbindgen and diffs it, so the committed header can no longer drift from
+  the source it claims to describe.
 - **The interface contract, in `docs/` (Epic I / I1)** — a new `docs/` directory carrying the
   agreement between Fluxion's five doors. [`docs/interfaces.md`](docs/interfaces.md) states the
   rule the epic exists to enforce — *an op ships on every interface, or this document says why
