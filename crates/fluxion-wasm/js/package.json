@@ -1,0 +1,45 @@
+{
+  "name": "fluxion",
+  "version": "0.2.0",
+  "description": "Differentiable, cross-vendor audio DSP in the browser — the same engine as the Rust library, the CLI and the Python package.",
+  "type": "module",
+  "main": "./index.mjs",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.mjs"
+    },
+    "./ops": {
+      "types": "./ops.d.ts",
+      "default": "./ops.js"
+    }
+  },
+  "files": [
+    "index.mjs",
+    "index.d.ts",
+    "ops.js",
+    "ops.d.ts",
+    "pkg/fluxion_wasm.js",
+    "pkg/fluxion_wasm.d.ts",
+    "pkg/fluxion_wasm_bg.wasm",
+    "pkg/fluxion_wasm_bg.wasm.d.ts",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/matteospanio/fluxion.git",
+    "directory": "crates/fluxion-wasm/js"
+  },
+  "homepage": "https://github.com/matteospanio/fluxion",
+  "keywords": ["audio", "dsp", "wasm", "webassembly", "filter", "realtime"],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "../../../scripts/build-wasm.sh",
+    "test": "node smoke.mjs && node parity.mjs && node quickstart.mjs"
+  }
+}

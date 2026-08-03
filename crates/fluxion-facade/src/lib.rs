@@ -4,22 +4,41 @@
 //! This is the **facade** crate: it re-exports the public surface and a [`prelude`] of ergonomic
 //! node constructors.
 //!
+//! The Rust quickstart. It is a doctest, so `cargo test` runs it — see `docs/interfaces.md` for
+//! the ten-line rule it is held to.
+//!
+//! <!-- quickstart:start -->
 //! ```
 //! use fluxion::prelude::*;
 //!
-//! let chain = lowpass(800.0) | gain(0.5);        // `|` = series
-//! let eq    = lowpass(800.0) + highpass(80.0);   // `+` = parallel (summed)
-//! assert_eq!(chain.leaf_count(), 2);
-//! assert_eq!(eq.leaf_count(), 2);
+//! let chain = highpass(80.0, 4) | gain(0.708);  // `|` = series, `+` = parallel (summed)
+//! let dry = Signal::new(48_000, vec![vec![0.0; 480]]);
+//! let wet = process(&chain, &dry);
+//! assert_eq!(wet.frames(), 480);
+//!
+//! // The same chain in the text syntax the CLI, Python, C and JS all read.
+//! assert_eq!("highpass(80, 4) | gain(0.708)".parse::<Graph>().unwrap(), chain);
 //! ```
+//! <!-- quickstart:end -->
 
 pub use fluxion_backend::{
     Backend, Certificate, Cpu, Verdict, certify_graph, eval, graph_to_sos, is_differentiable,
     process, process_batch, sos_filter_batch,
 };
 pub use fluxion_core::{
-    FORMAT_VERSION, Graph, LoadError, Op, OpError, OpKind, ParamSpec, Signal, Unit, fxg,
+    FORMAT_VERSION, Graph, Group, LoadError, Op, OpError, OpKind, ParamSpec, ParseError, Signal,
+    Unit, fxg,
 };
+
+/// The shared chain text syntax — `"highpass(80, 4) | gain(-3dB)".parse::<Graph>()`, and the
+/// [`ParseError`] it reports, whose `render` draws a caret under the offending token. The same
+/// grammar the CLI's `--chain`, Python's `fluxion.chain()`, C's `fx_chain_from_text` and the
+/// browser read. See `docs/chain-syntax.md`.
+pub use fluxion_core::parse;
+
+/// "Did you mean …?" — the edit-distance helper behind every name error, exposed so a host built
+/// on fluxion can give the same suggestion for its own names.
+pub use fluxion_core::suggest;
 
 /// Geometry transforms on a whole [`Signal`] — trim / pad / repeat / silence-trim / resample / speed
 /// / remix / channels and the multi-input concat / mix. Deliberately **not** graph ops: they change
@@ -60,23 +79,13 @@ pub mod prelude {
         Graph::op(OpKind::Gain, [g])
     }
 
-    /// A 2nd-order Butterworth low-pass with the given cutoff in Hz.
-    pub fn lowpass(cutoff_hz: f32) -> Graph {
-        lowpass_n(cutoff_hz, 2)
-    }
-
     /// A Butterworth low-pass of the given cutoff (Hz) and order.
-    pub fn lowpass_n(cutoff_hz: f32, order: u32) -> Graph {
+    pub fn lowpass(cutoff_hz: f32, order: u32) -> Graph {
         Graph::op(OpKind::Lowpass, [cutoff_hz, order as f32])
     }
 
-    /// A 2nd-order Butterworth high-pass with the given cutoff in Hz.
-    pub fn highpass(cutoff_hz: f32) -> Graph {
-        highpass_n(cutoff_hz, 2)
-    }
-
     /// A Butterworth high-pass of the given cutoff (Hz) and order.
-    pub fn highpass_n(cutoff_hz: f32, order: u32) -> Graph {
+    pub fn highpass(cutoff_hz: f32, order: u32) -> Graph {
         Graph::op(OpKind::Highpass, [cutoff_hz, order as f32])
     }
 
@@ -140,6 +149,21 @@ pub mod prelude {
     /// Chebyshev Type I high-pass: `cutoff` Hz, `order`, passband `ripple` dB.
     pub fn cheby1_highpass(cutoff_hz: f32, order: u32, ripple_db: f32) -> Graph {
         Graph::op(OpKind::Cheby1Highpass, [cutoff_hz, order as f32, ripple_db])
+    }
+
+    /// Chebyshev Type II low-pass: `cutoff` = stopband edge Hz, `order`, stopband `atten` dB.
+    pub fn cheby2_lowpass(cutoff_hz: f32, order: u32, atten_db: f32) -> Graph {
+        Graph::op(OpKind::Cheby2Lowpass, [cutoff_hz, order as f32, atten_db])
+    }
+
+    /// Chebyshev Type II high-pass: `cutoff` = stopband edge Hz, `order`, stopband `atten` dB.
+    pub fn cheby2_highpass(cutoff_hz: f32, order: u32, atten_db: f32) -> Graph {
+        Graph::op(OpKind::Cheby2Highpass, [cutoff_hz, order as f32, atten_db])
+    }
+
+    /// Schroeder–Moorer reverb: `room` size, `damping`, wet/dry `mix` (all 0..1).
+    pub fn reverb(room: f32, damping: f32, mix: f32) -> Graph {
+        Graph::op(OpKind::Reverb, [room, damping, mix])
     }
 
     /// Amplitude fade: `fadein`/`fadeout` seconds with a `shape` curve (0 = linear, 1 = quarter-sine
@@ -221,8 +245,14 @@ mod tests {
     #[test]
     fn prelude_constructors_build_the_right_ops() {
         assert_op(gain(0.5), OpKind::Gain, &[0.5]);
-        assert_op(lowpass(800.0), OpKind::Lowpass, &[800.0, 2.0]);
-        assert_op(highpass_n(80.0, 4), OpKind::Highpass, &[80.0, 4.0]);
+        assert_op(lowpass(800.0, 2), OpKind::Lowpass, &[800.0, 2.0]);
+        assert_op(highpass(80.0, 4), OpKind::Highpass, &[80.0, 4.0]);
+        assert_op(reverb(0.5, 0.3, 0.3), OpKind::Reverb, &[0.5, 0.3, 0.3]);
+        assert_op(
+            cheby2_lowpass(1000.0, 4, 40.0),
+            OpKind::Cheby2Lowpass,
+            &[1000.0, 4.0, 40.0],
+        );
         assert_op(
             peaking(1_000.0, 6.0, 1.5),
             OpKind::Peaking,

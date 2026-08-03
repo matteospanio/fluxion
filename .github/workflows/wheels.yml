@@ -64,7 +64,7 @@ jobs:
   # GPU wheel — built with the CUDA toolkit + the `cuda` feature on a self-hosted CUDA runner
   # (label `cuda`); GitHub-hosted runners have no CUDA toolkit. maturin-action's manylinux container
   # also lacks CUDA, so we build directly on the runner. The wheel carries a `+cu12` local version so
-  # it's distinguishable from the CPU wheel (`pip install fluxion==0.0.0+cu12` for the GPU build).
+  # it's distinguishable from the CPU wheel (`pip install fluxion==X.Y.Z+cu12` for the GPU build).
   # It is a GitHub artifact ONLY — PEP 440 local versions can't be uploaded to PyPI, so the `publish`
   # job below deliberately excludes it (and does not depend on this job).
   gpu-wheel:
@@ -77,8 +77,11 @@ jobs:
           source "$HOME/.cargo/env"
           export CUDA_PATH=/usr/local/cuda PATH=/usr/local/cuda/bin:$PATH
           # Version is single-sourced from Cargo.toml (pyproject uses dynamic version); tag the +cu12
-          # local version there so maturin stamps the GPU wheel with it.
-          sed -i 's/^version = "0.0.0"/version = "0.0.0+cu12"/' crates/fluxion-py/Cargo.toml
+          # local version there so maturin stamps the GPU wheel with it. Matching the version
+          # rather than a literal matters: a hard-coded one silently stops matching after a bump,
+          # and the GPU wheel would then be indistinguishable from the CPU one.
+          sed -i -E '0,/^version = "([0-9]+\.[0-9]+\.[0-9]+)"/s//version = "\1+cu12"/' crates/fluxion-py/Cargo.toml
+          grep -q '+cu12' crates/fluxion-py/Cargo.toml  # fail loudly if the pattern ever stops matching
           python3 -m venv /tmp/gpuwheel-venv
           /tmp/gpuwheel-venv/bin/pip install -q --upgrade pip "maturin>=1.5,<2"
           /tmp/gpuwheel-venv/bin/maturin build --release --features cuda \

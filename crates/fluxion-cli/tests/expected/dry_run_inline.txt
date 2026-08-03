@@ -1,0 +1,3 @@
+in : in.wav
+run: lowpass(1000, 2) | gain(0.5011872)
+out: out.wav

@@ -1,3 +1,6 @@
 [toolchain]
 channel = "stable"
+# wasm32 for the browser bindings (crates/fluxion-wasm); `cargo build --target wasm32-unknown-unknown`
+# works out of the box after a checkout rather than needing a separate `rustup target add`.
+targets = ["wasm32-unknown-unknown"]
 components = ["rustfmt", "clippy"]

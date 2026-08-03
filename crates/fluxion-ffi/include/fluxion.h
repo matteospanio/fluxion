@@ -91,7 +91,45 @@ const char *fx_last_error(void);
 FxGraph *fx_graph_load_fxg(const char *path);
 
 /**
- * Free a graph handle returned by [`fx_graph_load_fxg`]. NULL is a no-op; double-free is undefined.
+ * Build a graph from the shared chain text, e.g. `"highpass(80, 4) | gain(-3dB)"`.
+ *
+ * This is the whole op catalog, reachable from C without one ABI symbol per op: the same string
+ * the CLI's `--chain`, Python's `fluxion.chain()` and the browser's `Chain.fromText` accept. See
+ * `docs/chain-syntax.md` for the grammar and `docs/ops.md` for the ops.
+ *
+ * Returns an owning handle, or NULL on error — [`fx_last_error`] then holds a message with a
+ * caret under the offending character, and a suggestion when the mistake looks like a typo. Free
+ * the handle with [`fx_graph_free`].
+ *
+ * # Safety
+ * `text` must be either NULL or a valid pointer to a NUL-terminated C string.
+ */
+FxGraph *fx_chain_from_text(const char *text);
+
+/**
+ * Write the graph's canonical chain text into `buf`, NUL-terminated and truncated to `cap`.
+ *
+ * Returns the length the full string needs **excluding** the NUL — like `snprintf`, so a return
+ * value `>= cap` means the output was truncated and tells you the buffer to allocate. Pass
+ * `cap == 0` (with `buf` NULL) to ask for the size first. On failure returns a negative
+ * `FX_ERR_*`.
+ *
+ * The text round-trips: feeding it back to [`fx_chain_from_text`] rebuilds the same graph. That is
+ * what makes a `.fxg` loaded from disk inspectable, and it is the same string every other
+ * interface prints.
+ *
+ * A caller-owned buffer rather than a borrowed pointer is deliberate: [`fx_last_error`]'s
+ * "valid until the next call" rule is fine for a message you print immediately and wrong for a
+ * value you want to keep.
+ *
+ * # Safety
+ * `graph` must be a live handle. If `cap > 0`, `buf` must point to at least `cap` writable bytes.
+ */
+int fx_graph_to_text(const FxGraph *graph, char *buf, uintptr_t cap);
+
+/**
+ * Free a graph handle returned by [`fx_graph_load_fxg`] or [`fx_chain_from_text`]. NULL is a
+ * no-op; double-free is undefined.
  *
  * # Safety
  * `graph` must be NULL or a pointer previously returned by [`fx_graph_load_fxg`] and not yet freed.

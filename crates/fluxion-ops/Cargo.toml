@@ -16,7 +16,7 @@ categories.workspace = true
 workspace = true
 
 [dependencies]
-fluxion-core = { path = "../fluxion-core", version = "0.0.0" }
+fluxion-core = { path = "../fluxion-core", version = "0.2.0" }
 rustfft = "6"  # FFT linear convolution for long FIR kernels (D5)
 # Burn/CubeCL backends are added in later milestones.
 

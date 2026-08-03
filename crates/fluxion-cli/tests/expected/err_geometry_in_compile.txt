@@ -1,0 +1,1 @@
+fluxion: geometry stage 'trim' can't run here — it changes frames/rate/channels; use it in the `<in> ... <out>` pipeline instead

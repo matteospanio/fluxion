@@ -1,0 +1,2 @@
+fluxion: --chain and the inline effects both describe a chain; use one or the other
+(--chain "gain(2)", inline: lowpass)

@@ -1,0 +1,3 @@
+  lowpass
+      --cutoff       <Hz>   [1000]
+      --order        <lin>   [2]

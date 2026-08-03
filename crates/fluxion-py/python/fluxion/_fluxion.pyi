@@ -6,8 +6,20 @@ from numpy.typing import NDArray
 F32 = NDArray[float32]
 
 class Chain:
-    """A lazy effect chain (a DSP graph). Compose with ``|``/``+``, apply with ``process``."""
+    """A lazy effect chain (a DSP graph). Compose with ``|``/``+``, apply by calling it.
 
+    Constructed by name from the op registry — the generated classes in :mod:`fluxion.filter` and
+    :mod:`fluxion.effect` are one ``__new__`` each over this. Parameters you leave out take their
+    registry defaults; ``Chain()`` is the pass-through.
+    """
+
+    def __new__(cls, name: str | None = ..., *params: float) -> Chain: ...
+    def __call__(self, x: F32, fs: int) -> F32:
+        """Apply the chain at ``fs`` — the same thing as :meth:`process`, so a chain is callable."""
+        ...
+    def __str__(self) -> str:
+        """The canonical chain text, which :func:`chain` reads back."""
+        ...
     def process(self, x: F32, fs: int) -> F32:
         """Apply the chain at ``fs`` to a 1-D ``(T,)`` or 2-D ``(C, T)`` float32 array (same shape out)."""
         ...
@@ -33,6 +45,30 @@ class Chain:
     def __or__(self, other: Chain) -> Chain: ...
     def __add__(self, other: Chain) -> Chain: ...
     def __repr__(self) -> str: ...
+
+def chain(text: str) -> Chain:
+    """Build a chain from the shared text syntax, e.g. ``"highpass(80, 4) | gain(-3dB)"``.
+
+    The same string the CLI's ``--chain``, C's ``fx_chain_from_text`` and the browser accept. A
+    syntax or name error raises ``ValueError`` with a caret pointing at the problem.
+    """
+    ...
+
+def ops_table() -> list[dict]:
+    """The op registry: ``name``, ``class``, ``group``, ``variadic``, ``doc``, ``params``.
+
+    What :mod:`fluxion.filter` and :mod:`fluxion.effect` are generated from, and what the
+    conformance test compares them against.
+    """
+    ...
+
+def read_audio(path: str) -> tuple[F32, int]:
+    """Read an audio file as ``((channels, frames) float32, fs)``. WAV, FLAC, MP3, OGG."""
+    ...
+
+def write_audio(path: str, data: F32, fs: int, bits: int | None = ...) -> None:
+    """Write a WAV file. ``bits`` is ``None`` for 32-bit float, or 16 / 24 / 32 for PCM."""
+    ...
 
 class RtChain:
     """A realtime, stateful executor for a :class:`Chain`: streams a signal block-by-block.

@@ -35,15 +35,22 @@ from Training GPU to Real-Time Edge* (IS² 2026) — see [Citation](#citation) a
 > across CLI, Python, C and the browser — is planned task-by-task, with dependencies and
 > verifiable milestones, in [ROADMAP.md](ROADMAP.md).
 
-One codebase, four ways in:
+One codebase, five ways in:
 
 - **Rust library** — `fluxion` on crates.io: compose effects with `|` (series) and `+`
   (parallel), run them batched on CPU/GPU, differentiate them, or freeze them for realtime.
 - **CLI** — `fluxion`, a SoX substitute with named effects and long flags (not SoX's interface,
   most of SoX's jobs).
-- **Python** — `fluxion` on PyPI: a torchaudio-style eager API, zero-copy DLPack interop,
-  torch/JAX autograd adapters, batched data augmentation.
+- **Python** — `fluxion` on PyPI: a torchfx-style API (`Wave`, effect classes, `|` and `+`),
+  zero-copy DLPack interop, torch/JAX autograd adapters, batched data augmentation.
 - **C ABI** — a small panic-safe surface (`fluxion.h`) for C/C++/Swift consumers.
+- **Browser** — `npm install fluxion`: the same engine as WebAssembly, offline render today,
+  AudioWorklet playback next. Its output is checked against the native library in CI.
+
+All of them build the same graph and share one text form for it —
+`"highpass(80, 4) | gain(-3dB)"` means the same thing everywhere. See
+[docs/interfaces.md](docs/interfaces.md) for the contract between them and
+[docs/ops.md](docs/ops.md) for every op's name on every interface.
 
 ## Install
 
@@ -71,7 +78,11 @@ behind the feature flags that need them.
 use fluxion::prelude::*;
 
 // `|` = series, `+` = parallel (outputs summed) — the same algebra everywhere.
-let chain = (lowpass(800.0) + highpass(4000.0)) | compand(0.01, 0.1, -20.0, 4.0, 6.0, 0.0) | gain(0.5);
+let chain = (lowpass(800.0, 2) + highpass(4000.0, 2)) | compand(0.01, 0.1, -20.0, 4.0, 6.0, 0.0) | gain(0.5);
+
+// The same chain, written in the text syntax the CLI, Python, C and JS all share.
+let same: Graph = "(lowpass(800, 2) + highpass(4000, 2)) | compand(0.01, 0.1, -20, 4, 6, 0) | gain(0.5)".parse()?;
+assert_eq!(same, chain);
 
 let wet = process(&chain, &signal);              // batch: any channels, allocates freely
 ```
@@ -129,7 +140,8 @@ fluxion import ckpt.safetensors model.fxg
 ```
 
 **Effects** (graph ops): `gain`, `lowpass`/`highpass` (Butterworth, any order),
-`cheby1low`/`cheby1high`/`cheby2low`/`cheby2high`, RBJ `peaking`/`lowshelf`/`highshelf`/
+`cheby1_lowpass`/`cheby1_highpass`/`cheby2_lowpass`/`cheby2_highpass`, RBJ
+`peaking`/`lowshelf`/`highshelf`/
 `notch`/`bandpass`/`allpass`, raw `biquad`, `fir --taps …`, `normalize`, `delay`, `echo`,
 `reverb`, `fade`, `tremolo`, `overdrive`, `compand`, `reverse`, `chorus`, `flanger`, `phaser`.
 **Geometry stages**: `trim`, `pad`, `rate`, `speed`, `repeat`, `silence`, `channels`, `remix`.
@@ -141,15 +153,20 @@ Not ported from SoX (yet or ever): `tempo`/`pitch` (time-stretch), `spectrogram`
 ## Python
 
 ```python
-import numpy as np, fluxion
+import fluxion as fx
 from fluxion import Compose, RandomChain
 
-chain = fluxion.lowpass(8000) | fluxion.gain(0.5)     # same algebra
-y  = chain.process(x, fs=48_000)                      # (T,) or (C, T); numpy/torch/jax in via DLPack
-ys = chain.process_batch(batch, fs=48_000)            # (B, T) batched
+# Wave carries fs, so it never appears in the chain. `|` is series, `+` is parallel.
+wave = fx.Wave.from_file("in.wav")
+(wave | fx.filter.Highpass(80, order=4) | fx.effect.Gain(fx.db(-3))).save("out.wav")
+
+chain = fx.filter.Lowpass(8000) | fx.effect.Gain(0.5)  # same algebra as Rust and the CLI
+chain = fx.chain("lowpass(8000) | gain(0.5)")          # ...or the shared text form
+y  = chain(x, fs=48_000)                               # (T,) or (C, T); numpy/torch/jax via DLPack
+ys = chain.process_batch(batch, fs=48_000)             # (B, T) batched
 
 # Data augmentation: stochastic chains, seeded.
-aug = Compose([RandomChain(fluxion.lowpass, cutoff=(2_000, 16_000), p=0.8)])
+aug = Compose([RandomChain(fx.filter.Lowpass, cutoff=(2_000, 16_000), p=0.8)])
 x_aug = aug(x, fs=48_000)
 
 # Dataset IO (extra: fluxion[dataset]) — Parquet, same schema as the Rust side, streamed.
@@ -162,7 +179,7 @@ from fluxion.torch import SosModule
 mod = SosModule.from_chain(chain, fs=48_000)
 
 # Import a FLAMO-trained SISO biquad cascade (extra: fluxion[interop]).
-coeffs = fluxion.interop.load_flamo_sos("checkpoint.safetensors")
+coeffs = fx.interop.load_flamo_sos("checkpoint.safetensors")
 ```
 
 ## Workspace
@@ -179,7 +196,7 @@ coeffs = fluxion.interop.load_flamo_sos("checkpoint.safetensors")
 | `fluxion-cli` | The `fluxion` binary (feature `realtime` for play/record) |
 | `fluxion-py` | PyO3/maturin package `fluxion` (abi3, numpy-only hard dep; extras: torch/jax/interop/dataset) |
 | `fluxion-ffi` | C ABI (`include/fluxion.h`, cbindgen), panic-safe; `publish = false` |
-| `fluxion-wasm` | wasm-bindgen (CPU + WebGPU) — stub, deferred to 1.x; `publish = false` |
+| `fluxion-wasm` | wasm-bindgen browser bindings: chain from text + offline render (CPU). AudioWorklet and WebGPU deferred; `publish = false` |
 
 GPU status: CUDA forward + backward kernels are implemented and validated on NVIDIA hardware;
 Apple Metal / AMD ROCm validation via CubeCL is pending, so GPU stays behind the `cuda` feature.

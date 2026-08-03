@@ -1,0 +1,5 @@
+in : in.wav
+run: Trim { start: 0.5, len: None, end: None }
+run: Rate { fs: 44100 }
+run: lowpass(1000, 2)
+out: out.wav

@@ -188,28 +188,44 @@ impl fmt::Display for Graph {
                 Ok(())
             }
             Graph::Series(a, b) => {
-                write_child(f, a, true)?;
+                write_child(f, a, true, false)?;
                 f.write_str(" | ")?;
-                write_child(f, b, true)
+                write_child(f, b, true, true)
             }
             Graph::Parallel(a, b) => {
-                write_child(f, a, false)?;
+                write_child(f, a, false, false)?;
                 f.write_str(" + ")?;
-                write_child(f, b, false)
+                write_child(f, b, false, true)
             }
-            Graph::Named { name, node } => write!(f, "{name}: {node}"),
+            // `name:` binds tighter than every operator, so a label on a primary needs no parens;
+            // anything composite must say where it ends. `Feedback` already brackets itself.
+            Graph::Named { name, node } => match **node {
+                Graph::Id | Graph::Op(_) | Graph::Named { .. } | Graph::Feedback { .. } => {
+                    write!(f, "{name}: {node}")
+                }
+                _ => write!(f, "{name}: ({node})"),
+            },
             Graph::Feedback { forward, feedback } => write!(f, "({forward} ~ {feedback})"),
         }
     }
 }
 
-/// Parenthesize a child only when the operator precedence would otherwise be ambiguous
-/// (a parallel inside a series, or a series inside a parallel).
-fn write_child(f: &mut fmt::Formatter<'_>, g: &Graph, in_series: bool) -> fmt::Result {
-    let needs_parens = matches!(
-        (g, in_series),
-        (Graph::Parallel(..), true) | (Graph::Series(..), false)
-    );
+/// Parenthesize a child only when the rendering would otherwise be ambiguous: a different operator
+/// (a parallel inside a series, or a series inside a parallel), or the **same** operator on the
+/// right — since both parse left-associative, `a | (b | c)` needs its parens to survive a reparse
+/// while `(a | b) | c` does not.
+fn write_child(
+    f: &mut fmt::Formatter<'_>,
+    g: &Graph,
+    parent_series: bool,
+    right: bool,
+) -> fmt::Result {
+    let needs_parens = match g {
+        Graph::Series(..) => !parent_series || right,
+        Graph::Parallel(..) => parent_series || right,
+        // Leaves, labels and feedback loops are already unambiguous on their own.
+        _ => false,
+    };
     if needs_parens {
         write!(f, "({g})")
     } else {
@@ -295,6 +311,52 @@ mod tests {
     }
 
     // --- B6: Display ---
+
+    /// Pre-condition: nesting shapes the writer used to flatten or leave unlabelled.
+    /// Post-condition: exactly one tree can produce each string — the precondition for a parser.
+    #[test]
+    fn display_is_unambiguous() {
+        let (a, b, c) = (gain(1.0), gain(2.0), gain(3.0));
+
+        // Both operators parse left-associative, so only a same-kind *right* operand needs parens.
+        let ab_c = (a.clone() | b.clone()) | c.clone();
+        let a_bc = a.clone() | (b.clone() | c.clone());
+        assert_eq!(ab_c.to_string(), "gain(1) | gain(2) | gain(3)");
+        assert_eq!(a_bc.to_string(), "gain(1) | (gain(2) | gain(3))");
+        assert_ne!(ab_c.to_string(), a_bc.to_string());
+
+        let ab_c = (a.clone() + b.clone()) + c.clone();
+        let a_bc = a.clone() + (b.clone() + c.clone());
+        assert_eq!(ab_c.to_string(), "gain(1) + gain(2) + gain(3)");
+        assert_eq!(a_bc.to_string(), "gain(1) + (gain(2) + gain(3))");
+        assert_ne!(ab_c.to_string(), a_bc.to_string());
+
+        // Mixed nesting keeps its parens, on either side.
+        assert_eq!(
+            ((a.clone() + b.clone()) | c.clone()).to_string(),
+            "(gain(1) + gain(2)) | gain(3)"
+        );
+        assert_eq!(
+            ((a.clone() | b.clone()) + c.clone()).to_string(),
+            "(gain(1) | gain(2)) + gain(3)"
+        );
+
+        // `name:` binds tighter than any operator, so a label on a leaf needs nothing...
+        assert_eq!(
+            (Graph::named("lp", a.clone()) | b.clone()).to_string(),
+            "lp: gain(1) | gain(2)"
+        );
+        // ...and a label on a composite must say where it ends.
+        assert_eq!(
+            Graph::named("mix", a.clone() | b.clone()).to_string(),
+            "mix: (gain(1) | gain(2))"
+        );
+        // Feedback already parenthesizes itself; a label must not double up.
+        assert_eq!(
+            Graph::named("fb", a.clone().feedback(b.clone())).to_string(),
+            "fb: (gain(1) ~ gain(2))"
+        );
+    }
 
     #[test]
     fn display_renders_dsl() {

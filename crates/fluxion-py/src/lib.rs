@@ -111,8 +111,11 @@ fn to_sos(coeffs: &[f32]) -> PyResult<Vec<Biquad>> {
         .collect())
 }
 
-/// A lazy effect chain — a DSP graph. Compose with `|`, apply with `.process(x, fs)`.
-#[pyclass]
+/// A lazy effect chain — a DSP graph. Compose with `|` and `+`, apply with `chain(x, fs)`.
+///
+/// `subclass` so the generated per-op classes (`fluxion.filter.Lowpass`, …) can inherit it: they
+/// are one `__new__` each, forwarding to this class's registry-driven constructor.
+#[pyclass(subclass)]
 #[derive(Clone)]
 struct Chain {
     graph: Graph,
@@ -120,6 +123,58 @@ struct Chain {
 
 #[pymethods]
 impl Chain {
+    /// `Chain(name, *params)` — one op, by its registry name.
+    ///
+    /// This is the single constructor every generated op class goes through, which is why there is
+    /// no per-op entry point in this module any more: `fluxion.filter.Lowpass(800, 4)` is
+    /// `Chain("lowpass", 800.0, 4.0)` with a nicer name and a docstring. Missing parameters take
+    /// their registry defaults; `Chain()` is the pass-through.
+    #[new]
+    #[pyo3(signature = (name=None, *params))]
+    fn new(name: Option<&str>, params: Vec<f32>) -> PyResult<Chain> {
+        let Some(name) = name else {
+            return Ok(Chain { graph: Graph::Id });
+        };
+        let kind = OpKind::from_name(name).ok_or_else(|| {
+            let help = fluxion_core::suggest::closest(name, OpKind::all().iter().map(|k| k.name()))
+                .map(|s| format!(" — did you mean '{s}'?"))
+                .unwrap_or_default();
+            PyValueError::new_err(format!("unknown op '{name}'{help}"))
+        })?;
+        // Fill trailing parameters from the registry defaults, exactly as the chain text does.
+        let mut values = kind.defaults();
+        if kind.is_variadic() && !params.is_empty() {
+            values = params;
+        } else {
+            if params.len() > values.len() {
+                return Err(PyValueError::new_err(format!(
+                    "op '{name}' takes {} parameter(s), got {}",
+                    values.len(),
+                    params.len()
+                )));
+            }
+            values[..params.len()].copy_from_slice(&params);
+        }
+        make(kind, values)
+    }
+
+    /// `chain(x, fs)` — apply the chain, so a chain is simply callable. Same contract as
+    /// [`process`](Self::process).
+    fn __call__<'py>(
+        &self,
+        py: Python<'py>,
+        x: &Bound<'py, PyAny>,
+        fs: u32,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.process(py, x, fs)
+    }
+
+    /// The canonical chain text — the same string the CLI's `--chain`, `fluxion.chain()`, C's
+    /// `fx_chain_from_text` and the browser accept, so `fluxion.chain(str(c)) == c`.
+    fn __str__(&self) -> String {
+        self.graph.to_string()
+    }
+
     /// Apply the chain at sample rate `fs`, returning a new `float32` array of the same shape.
     /// Accepts a 1-D `(T,)` signal or a 2-D `(C, T)` multichannel signal (channels-first, last axis =
     /// time) — any DLPack tensor (numpy / torch / jax CPU) or array-like. For a *batch* of independent
@@ -231,82 +286,121 @@ impl Chain {
     }
 }
 
-// --- effect/filter constructors (torchaudio-style) -------------------------------------------
+// --- the registry, and the two ways into it ---------------------------------------------------
 
+/// Build a chain from the shared text syntax — the same string the CLI's `--chain`, C's
+/// `fx_chain_from_text` and the browser's `Chain.fromText` accept.
+///
+/// ```python
+/// fx.chain("highpass(80, 4) | gain(-3dB)")
+/// ```
+///
+/// A syntax or name error raises `ValueError` with the caret rendering, so the message points at
+/// the character that is wrong and suggests a fix where there is one.
 #[pyfunction]
-fn lowpass(cutoff: f32, order: u32) -> PyResult<Chain> {
-    make(OpKind::Lowpass, vec![cutoff, order as f32])
+fn chain(text: &str) -> PyResult<Chain> {
+    match fluxion_core::parse::chain(text) {
+        Ok(graph) => Ok(Chain { graph }),
+        Err(e) => Err(PyValueError::new_err(e.render(text))),
+    }
 }
+
+/// The op registry as a list of dicts: `name`, `class`, `group`, `variadic`, `doc`, `params`.
+///
+/// This is what `scripts/gen_interfaces.py` generates `fluxion.filter` / `fluxion.effect` and their
+/// stubs from, and what the conformance test compares those modules against — so a new op cannot
+/// reach Rust without reaching Python.
 #[pyfunction]
-fn highpass(cutoff: f32, order: u32) -> PyResult<Chain> {
-    make(OpKind::Highpass, vec![cutoff, order as f32])
+fn ops_table(py: Python<'_>) -> PyResult<Vec<Py<PyDict>>> {
+    // JSON has no infinity; Python does, so bounds come through as real floats here.
+    let mut out = Vec::with_capacity(OpKind::all().len());
+    for &kind in OpKind::all() {
+        let params: Vec<Py<PyDict>> = kind
+            .params()
+            .iter()
+            .map(|p| -> PyResult<Py<PyDict>> {
+                let d = PyDict::new_bound(py);
+                d.set_item("name", p.name)?;
+                d.set_item("unit", p.unit.as_str())?;
+                d.set_item("default", p.default)?;
+                d.set_item("min", p.min)?;
+                d.set_item("max", p.max)?;
+                Ok(d.unbind())
+            })
+            .collect::<PyResult<_>>()?;
+
+        let d = PyDict::new_bound(py);
+        d.set_item("name", kind.name())?;
+        d.set_item("class", kind.variant())?;
+        d.set_item("group", kind.group().as_str())?;
+        d.set_item("variadic", kind.is_variadic())?;
+        d.set_item(
+            "doc",
+            kind.doc()
+                .iter()
+                .map(|l| l.trim())
+                .collect::<Vec<_>>()
+                .join(" "),
+        )?;
+        d.set_item("params", params)?;
+        out.push(d.unbind());
+    }
+    Ok(out)
 }
+
+// --- audio files ------------------------------------------------------------------------------
+
+/// Read an audio file as `(samples, fs)`: a `(channels, frames)` `float32` array and its sample
+/// rate. WAV goes through hound, everything else (FLAC / MP3 / OGG / …) through Symphonia — the
+/// same readers the CLI uses, so Python and the terminal decode a file identically.
+///
+/// This is what backs `fluxion.Wave.from_file`, and it is why the wheel needs no `soundfile`.
 #[pyfunction]
-fn cheby1_lowpass(cutoff: f32, order: u32, ripple_db: f32) -> PyResult<Chain> {
-    make(OpKind::Cheby1Lowpass, vec![cutoff, order as f32, ripple_db])
+fn read_audio(py: Python<'_>, path: &str) -> PyResult<(Py<PyArray2<f32>>, u32)> {
+    let is_wav = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("wav"));
+    let signal = if is_wav {
+        fluxion_io::read_wav(path)
+            .map_err(|e| PyValueError::new_err(format!("reading '{path}': {e}")))?
+    } else {
+        fluxion_io::decode(path)
+            .map_err(|e| PyValueError::new_err(format!("decoding '{path}': {e}")))?
+    };
+    let fs = signal.fs;
+    let arr = PyArray2::from_vec2_bound(py, &signal.channels)
+        .map_err(|e| PyValueError::new_err(format!("channels are ragged: {e}")))?;
+    Ok((arr.unbind(), fs))
 }
+
+/// Write a `(channels, frames)` (or 1-D) array to a WAV file at `fs`.
+///
+/// `bits` is `None` for 32-bit float (lossless, the default) or 16 / 24 / 32 for dithered integer
+/// PCM — the same choices as the CLI's `--bits` / `--float`.
 #[pyfunction]
-fn cheby1_highpass(cutoff: f32, order: u32, ripple_db: f32) -> PyResult<Chain> {
-    make(
-        OpKind::Cheby1Highpass,
-        vec![cutoff, order as f32, ripple_db],
-    )
-}
-#[pyfunction]
-fn cheby2_lowpass(cutoff: f32, order: u32, atten_db: f32) -> PyResult<Chain> {
-    make(OpKind::Cheby2Lowpass, vec![cutoff, order as f32, atten_db])
-}
-#[pyfunction]
-fn cheby2_highpass(cutoff: f32, order: u32, atten_db: f32) -> PyResult<Chain> {
-    make(OpKind::Cheby2Highpass, vec![cutoff, order as f32, atten_db])
-}
-#[pyfunction]
-fn reverb(room: f32, damping: f32, mix: f32) -> PyResult<Chain> {
-    make(OpKind::Reverb, vec![room, damping, mix])
-}
-#[pyfunction]
-fn peaking(frequency: f32, gain: f32, q: f32) -> PyResult<Chain> {
-    make(OpKind::Peaking, vec![frequency, gain, q])
-}
-#[pyfunction]
-fn low_shelf(cutoff: f32, gain: f32, q: f32) -> PyResult<Chain> {
-    make(OpKind::LowShelf, vec![cutoff, gain, q])
-}
-#[pyfunction]
-fn high_shelf(cutoff: f32, gain: f32, q: f32) -> PyResult<Chain> {
-    make(OpKind::HighShelf, vec![cutoff, gain, q])
-}
-#[pyfunction]
-fn notch(frequency: f32, q: f32) -> PyResult<Chain> {
-    make(OpKind::Notch, vec![frequency, q])
-}
-#[pyfunction]
-fn bandpass(frequency: f32, q: f32) -> PyResult<Chain> {
-    make(OpKind::Bandpass, vec![frequency, q])
-}
-#[pyfunction]
-fn allpass(frequency: f32, q: f32) -> PyResult<Chain> {
-    make(OpKind::Allpass, vec![frequency, q])
-}
-#[pyfunction]
-fn gain(value: f32) -> PyResult<Chain> {
-    make(OpKind::Gain, vec![value])
-}
-#[pyfunction]
-fn normalize(peak: f32) -> PyResult<Chain> {
-    make(OpKind::Normalize, vec![peak])
-}
-#[pyfunction]
-fn delay(seconds: f32, mix: f32) -> PyResult<Chain> {
-    make(OpKind::Delay, vec![seconds, mix])
-}
-#[pyfunction]
-fn echo(seconds: f32, feedback: f32, wet: f32) -> PyResult<Chain> {
-    make(OpKind::Echo, vec![seconds, feedback, wet])
-}
-#[pyfunction]
-fn fir(taps: Vec<f32>) -> PyResult<Chain> {
-    make(OpKind::Fir, taps) // a trained/frozen FIR: y[n] = Σ_k taps[k]·x[n-k]
+#[pyo3(signature = (path, data, fs, bits=None))]
+fn write_audio(path: &str, data: &Bound<'_, PyAny>, fs: u32, bits: Option<u16>) -> PyResult<()> {
+    let (channels, _) = as_channels(data)?;
+    let encoding = match bits {
+        None => fluxion_io::WavEncoding {
+            bits: 32,
+            float: true,
+            dither: false,
+        },
+        Some(b @ (16 | 24 | 32)) => fluxion_io::WavEncoding {
+            bits: b,
+            float: false,
+            dither: true,
+        },
+        Some(b) => {
+            return Err(PyValueError::new_err(format!(
+                "bits must be 16, 24 or 32 (got {b})"
+            )));
+        }
+    };
+    fluxion_io::write_wav_encoded(path, &Signal::new(fs, channels), encoding)
+        .map_err(|e| PyValueError::new_err(format!("writing '{path}': {e}")))
 }
 
 // --- differentiable SOS primitives (wrapped by the Python autograd adapter) -------------------
@@ -383,7 +477,10 @@ fn ckpt_options(
     eq_f_hi: f64,
     eq_max_gain_db: f64,
 ) -> PyResult<ImportOptions> {
-    let mut opts = ImportOptions { fs, ..ImportOptions::default() };
+    let mut opts = ImportOptions {
+        fs,
+        ..ImportOptions::default()
+    };
     opts.kind = CkptKind::from_name(kind)
         .ok_or_else(|| PyValueError::new_err(format!("unknown kind '{kind}'")))?;
     opts.svf_type = SvfType::from_name(svf_type)
@@ -419,7 +516,15 @@ fn import_state_dict<'py>(
     eq_max_gain_db: f64,
     project_stable: bool,
 ) -> PyResult<(Bound<'py, PyArray2<f32>>, String, f32, Option<u32>)> {
-    let opts = ckpt_options(kind, fs, svf_type, biquad_type, eq_f_lo, eq_f_hi, eq_max_gain_db)?;
+    let opts = ckpt_options(
+        kind,
+        fs,
+        svf_type,
+        biquad_type,
+        eq_f_lo,
+        eq_f_hi,
+        eq_max_gain_db,
+    )?;
 
     // Any array-like / DLPack value -> contiguous float32 n-D numpy -> (shape, flat data).
     let np = py.import_bound("numpy")?;
@@ -440,7 +545,10 @@ fn import_state_dict<'py>(
         let ro = arr.readonly();
         sd.insert(
             key,
-            CkptTensor { shape: ro.shape().to_vec(), data: ro.as_slice()?.to_vec() },
+            CkptTensor {
+                shape: ro.shape().to_vec(),
+                data: ro.as_slice()?.to_vec(),
+            },
         );
     }
 
@@ -456,7 +564,10 @@ fn import_state_dict<'py>(
     let n = coeffs.len() / 5;
     let arr = numpy::PyArray2::from_vec2_bound(
         py,
-        &coeffs.chunks_exact(5).map(|c| c.to_vec()).collect::<Vec<_>>(),
+        &coeffs
+            .chunks_exact(5)
+            .map(|c| c.to_vec())
+            .collect::<Vec<_>>(),
     )
     .map_err(|e| PyValueError::new_err(e.to_string()))?;
     debug_assert_eq!(arr.shape(), [n, 5]);
@@ -521,25 +632,13 @@ fn _fluxion(m: &Bound<'_, PyModule>) -> PyResult<()> {
     macro_rules! add {
         ($($f:ident),* $(,)?) => { $( m.add_function(wrap_pyfunction!($f, m)?)?; )* };
     }
+    // No per-op entry points: every op reaches Python as a generated class over `Chain`, named
+    // from `ops_table()`. That is why this list is short and cannot drift.
     add!(
-        lowpass,
-        highpass,
-        cheby1_lowpass,
-        cheby1_highpass,
-        cheby2_lowpass,
-        cheby2_highpass,
-        reverb,
-        peaking,
-        low_shelf,
-        high_shelf,
-        notch,
-        bandpass,
-        allpass,
-        gain,
-        normalize,
-        delay,
-        echo,
-        fir,
+        chain,
+        ops_table,
+        read_audio,
+        write_audio,
         sos_forward,
         sos_backward,
         import_state_dict,

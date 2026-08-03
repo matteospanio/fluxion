@@ -7,7 +7,7 @@ exclude = ["crates/fluxion-py"]
 
 # Shared metadata inherited by every member crate via `field.workspace = true`.
 [workspace.package]
-version = "0.0.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"

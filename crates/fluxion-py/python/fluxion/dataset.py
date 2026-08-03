@@ -24,7 +24,7 @@ bounded memory (a generator in, a generator out)::
 
     import fluxion
     from fluxion.dataset import iter_parquet, write_parquet
-    aug = fluxion.augment.RandomChain(fluxion.lowpass, cutoff=(500.0, 8000.0), rng=0)
+    aug = fluxion.augment.RandomChain(fluxion.filter.Lowpass, cutoff=(500.0, 8000.0), rng=0)
     write_parquet("out.parquet", ((aug(x, fs), fs) for x, fs in iter_parquet("in.parquet")))
 """
 
