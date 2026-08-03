@@ -80,7 +80,8 @@ API. This is the one rule in this document whose whole purpose is to push back o
 Honest gaps, with the reason. Each is a thing the rule above would otherwise require.
 
 **The AudioWorklet half of the JS package.** `Chain` renders offline in the browser today — enough
-for waveforms, previews and bounces, and checked sample-for-sample against native in CI. Live
+for waveforms, previews and bounces, and checked against native in CI across all 27 ops and five
+chain topologies (roadmap W6), 26 of 32 cases bit-identical. Live
 playback needs the worklet, the lock-free ring and the no-allocation guarantee (roadmap W4), and
 loading a frozen `.fxg` in the browser is W3. The offline `Chain` is the same class both extend, so
 these are methods to add rather than a design to redo.

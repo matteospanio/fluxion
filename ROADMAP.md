@@ -166,7 +166,7 @@ everywhere" story.
 | [ ] W3 | Frozen graphs (`.fxg`) in the browser: load, verify, refuse broken files — the same checks as on a device | W2 | Node test: a good file loads and renders; a corrupted one is rejected with the same error as native |
 | [ ] W4 | AudioWorklet playback: the chain runs in 128-frame blocks, a lock-free ring moves audio in and out, no memory allocation once started | W2 | Browser test (Playwright): 5 s of playback, no dropped blocks, the wasm-side allocation counter stays at 0 |
 | [ ] W5 | Live parameter changes from the page to the worklet, smoothed like the native realtime engine, no clicks | W4 | Browser test: a 40 dB gain jump renders as a smooth ramp |
-| [ ] W6 | Same-output tests: every op exposed to wasm is rendered native and wasm on the same inputs and compared, with written tolerances, in CI | W2 | The comparison suite itself — red until every op matches |
+| [x] W6 | Same-output tests: every op exposed to wasm is rendered native and wasm on the same inputs and compared, with written tolerances, in CI | W2 | The comparison suite itself — red until every op matches |
 | [ ] W7 | Budget: wasm file ≤ 1.5 MB gzipped (trim the op set behind features if needed), one block costs ≤ 30% of its deadline on a mid laptop, both enforced in CI | W4 | A size check and a speed check with hard limits |
 | [ ] W8 | *(later)* WebGPU lowering of the batch engine | W6 | — |
 
@@ -259,13 +259,25 @@ engine, once, with tests.
 
 | ID | Milestone | How we know it is true | What it opens |
 |----|-----------|------------------------|---------------|
-| F-M1 | **wasm renders** | A browser or Node loads the module, builds a chain, renders a buffer; the wasm-vs-native suite is green | Waveforms and bounces in any web host |
+| ✅ F-M1 | **wasm renders** | A browser or Node loads the module, builds a chain, renders a buffer; the wasm-vs-native suite is green | Waveforms and bounces in any web host |
 | F-M2 | **worklet plays** | Live playback, 128-frame blocks, smooth parameter changes, zero allocations, size and speed budgets enforced | Live preview with the same DSP as the final render |
-| F-M7 | **easy everywhere** | Four ten-line quickstarts run in CI; names come from one registry; `pip install` works without a Rust toolchain | The library people actually pick up |
+| ✅ F-M7 | **easy everywhere** | Four ten-line quickstarts run in CI; names come from one registry; `pip install` works without a Rust toolchain | The library people actually pick up |
 | F-M3 | **mastering complete** | Loudness, true peak, limiter and normalize as ops, ±0.1 LU vs ffmpeg | A full mastering chain with no external tool |
 | F-M4 | **time tools** | Streaming rate conversion on every input; stretch and pitch as separate controls, tested against a reference | Import at any rate, scrubbing, tempo and pitch edits |
 | F-M5 | **routing and taps** | A keyed gate works end to end; spectrum and meter taps are provably invisible to the audio | Duckers, keyed dynamics, live analysers |
 | F-M6 | **host-render ready** | Epic D done: a timeline of clips, fades and automation renders bit-exact, in one pass or in pieces, native and wasm | Fluxion as the single engine behind a timeline |
+
+**Reached so far.**
+
+- **F-M1 — wasm renders.** Node loads the module, builds a chain from the shared text and renders a
+  buffer; the wasm-vs-native suite covers all 27 ops plus five chain topologies, and 26 of the 32
+  cases are bit-identical to native. The six that are not are the ops calling a transcendental per
+  sample (`overdrive`, `phaser`, `compand`, `fade`, `tremolo`), where wasm's libm and the
+  platform's differ in the last bit — at most two ULP, tabulated in
+  `crates/fluxion-wasm/tests/parity.rs`.
+- **F-M7 — easy everywhere.** Five ten-line quickstarts run in CI (six lines to ten, against a
+  budget of ten); every name comes from the one registry in `fluxion-core/src/op.rs`; `pip install`
+  works with no Rust toolchain on Linux, macOS and Windows. See [docs/interfaces.md](docs/interfaces.md).
 
 With one person: W1–W2 first (they unblock the most), I1–I2 the same week (they are cheap and
 change every later task's definition of done), then M1 next to W4, then follow the graph. With

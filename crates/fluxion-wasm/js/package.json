@@ -40,6 +40,6 @@
   },
   "scripts": {
     "build": "../../../scripts/build-wasm.sh",
-    "test": "node smoke.mjs && node parity.mjs && node quickstart.mjs"
+    "test": "cargo test -p fluxion-wasm --test parity -- --ignored write_reference && node smoke.mjs && node parity.mjs && node quickstart.mjs"
   }
 }

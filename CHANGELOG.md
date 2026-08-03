@@ -105,6 +105,24 @@ WebAssembly build and the browser chain API (roadmap W1–W2).
 
 ### Added
 
+- **The wasm-vs-native suite, over every op (roadmap W6 — completes milestone F-M1)** — W2 compared
+  one chain; this compares all 27 ops plus five chain topologies (series, parallel, nested, a
+  labelled node, and feedback — the one construct a series/parallel tree cannot encode), 4096
+  frames each, on one bit-exact input. **26 of the 32 cases are bit-identical to native.** The six
+  that are not are exactly the ops that call a transcendental *per sample*, where wasm's `libm` and
+  the platform's differ in the last bit: `overdrive` (`tanh`) and `phaser` (`sin` LFO) at 2.4e-7,
+  `compand` (`exp`/`ln`) at 1.2e-7, `fade` at 6.0e-8, `tremolo` at 4.5e-8. f32's epsilon is 1.2e-7,
+  so the worst of those is two ULP. Every *designed* filter is bit-identical, which says the two
+  libms agree on the trigonometry the coefficient design calls; only the per-sample calls diverge.
+  The tolerance is 1e-6 with the measurements tabulated beside it, and the suite prints what it
+  actually measured on every run, so drift toward the bound is visible instead of hidden behind a
+  pass. A coverage test fails the build if an op has no case, so a new op cannot skip the
+  comparison, and each case must demonstrably change the signal — parameters that happen to be a
+  no-op would otherwise pass while proving nothing.
+  The native reference is now **generated at test time rather than committed**. The wasm job builds
+  the module, so it has a Rust toolchain by definition; comparing against current native costs
+  nothing and removes both the staleness risk and the second, looser tolerance the committed
+  fixture needed to survive the difference between glibc's and Apple's `sin`.
 - **The JS package and five executed quickstarts (Epic I / I6, I7)** — `crates/fluxion-wasm/js`
   is an npm package: `import init, { Chain } from "fluxion"`. TypeScript types are generated from
   the registry, including `OpName` as a literal union, so a misspelled op is a compile error rather

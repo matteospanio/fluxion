@@ -258,10 +258,9 @@ jobs:
 
   # ROADMAP W1: the crate builds for wasm32 on every PR, and Node loads the module and calls into
   # it. The build has to keep working or the browser story quietly stops being true.
-  # Linux only, deliberately. The parity fixture below is a *native* rendering, and glibc and
-  # Apple's libm differ by an ULP or two in the trigonometry the filter design calls — enough that
-  # a 1e-6 wasm-vs-fixture comparison would be measuring the host's libm rather than fluxion.
-  # Comparing wasm against one fixed reference is the claim W2 actually makes.
+  # Linux only. The comparison is wasm against the *host's* native build, so running it on more
+  # systems would mostly re-measure each host's libm; the claim W6 makes is that the two builds of
+  # fluxion agree, and one host answers that.
   wasm:
     name: wasm (build + Node)
     runs-on: ubuntu-latest
@@ -282,10 +281,13 @@ jobs:
       - name: Node loads the module
         working-directory: crates/fluxion-wasm/js
         run: node smoke.mjs
-      # ROADMAP W2: the same chain on the same input has to give the same samples as native,
-      # within a written tolerance. The reference is a committed fixture that `cargo test`
-      # re-verifies against native, so this side needs no Rust toolchain.
-      - name: wasm output matches native
+      # ROADMAP W6 (and the last piece of F-M1): every op, rendered native and wasm on the same
+      # input and compared with written tolerances. The reference is generated here rather than
+      # committed — this job has a Rust toolchain by definition, since it just built the module —
+      # so the comparison is always against current native and can never go stale.
+      - name: render the native reference
+        run: cargo test -p fluxion-wasm --test parity --locked -- --ignored write_reference
+      - name: wasm output matches native, for every op
         working-directory: crates/fluxion-wasm/js
         run: node parity.mjs
       # ROADMAP I7: the JS quickstart runs, so it cannot rot.
