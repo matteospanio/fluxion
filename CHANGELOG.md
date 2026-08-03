@@ -99,6 +99,18 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Added
 
+- **The JS package and five executed quickstarts (Epic I / I6, I7)** — `crates/fluxion-wasm/js`
+  is an npm package: `import init, { Chain } from "fluxion"`. TypeScript types are generated from
+  the registry, including `OpName` as a literal union, so a misspelled op is a compile error rather
+  than a runtime throw; the catalog also ships as data at `fluxion/ops` (a bundler can drop it,
+  which is not true of anything compiled into the wasm module). The AudioWorklet half of I6 waits
+  on W4 and is recorded as such — the offline `Chain` is the class it will extend.
+  Each of the five interfaces now has a quickstart that CI **runs**: a Rust doctest, a shell script,
+  a Python script in a fresh virtualenv on three systems, a C program compiled on three systems,
+  and a Node script. None exceeds ten code lines (6, 5, 8, 10, 8), and the budget is enforced by
+  one function in the generator so all five are measured the same way. If one grows past ten, the
+  generator fails the build — the roadmap's stated signal that the API, not the quickstart, is
+  wrong.
 - **The chain API in the browser (roadmap W2)** — `Chain.fromText("highpass(80, 4) | gain(-3dB)")`,
   `.process(samples, fs)`, `.toText()`, plus `ops()` and `version()`. The same graph, from the same
   string, as the native library — and the parity check that says so is committed: a fixture holds a

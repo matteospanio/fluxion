@@ -35,7 +35,7 @@ from Training GPU to Real-Time Edge* (IS² 2026) — see [Citation](#citation) a
 > across CLI, Python, C and the browser — is planned task-by-task, with dependencies and
 > verifiable milestones, in [ROADMAP.md](ROADMAP.md).
 
-One codebase, four ways in:
+One codebase, five ways in:
 
 - **Rust library** — `fluxion` on crates.io: compose effects with `|` (series) and `+`
   (parallel), run them batched on CPU/GPU, differentiate them, or freeze them for realtime.
@@ -44,6 +44,8 @@ One codebase, four ways in:
 - **Python** — `fluxion` on PyPI: a torchfx-style API (`Wave`, effect classes, `|` and `+`),
   zero-copy DLPack interop, torch/JAX autograd adapters, batched data augmentation.
 - **C ABI** — a small panic-safe surface (`fluxion.h`) for C/C++/Swift consumers.
+- **Browser** — `npm install fluxion`: the same engine as WebAssembly, offline render today,
+  AudioWorklet playback next. Its output is checked against the native library in CI.
 
 All of them build the same graph and share one text form for it —
 `"highpass(80, 4) | gain(-3dB)"` means the same thing everywhere. See

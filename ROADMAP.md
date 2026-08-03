@@ -140,13 +140,17 @@ are cheap; their value is that they become the *definition of done* for everythi
 
 | # | Task | Depends on | The check written first |
 |---|------|-----------|--------------------------|
-| [ ] I1 | Write the interface contract (a short doc in `docs/`): the table above, plus the rule "an op ships on all interfaces or explains why not". From then on it is part of every task's definition of done | — | CI check: every op in the registry appears in the contract table (generated, not hand-kept) |
-| [ ] I2 | One name everywhere: a single op registry drives CLI verb names, Python function names, C symbols and JS exports. No synonyms, no surprises | I1 | A generated cross-name table; the build fails if an interface drifts from the registry |
-| [ ] I3 | Python install and feel: prebuilt wheels for Linux/macOS/Windows (no Rust toolchain needed), `import fluxion as fx` → `fx.highpass(x, fs, 80)` or `fx.chain("highpass=80 \| gain=-3")(x, fs)`, typed stubs, errors that name the parameter and the valid range | — | CI: a fresh virtualenv on all three systems installs the wheel and runs the quickstart |
-| [ ] I4 | CLI help and errors: `--help` fits one screen, every error suggests a fix ("unknown effect `hipass`, did you mean `highpass`?"), `--dry-run` prints the chain it would run, progress on long files | — | Snapshot tests on help and on ten common mistakes |
-| [ ] I5 | C header, small and safe: one `.h`, no panics across the boundary, a compiling example in the repo | — | CI compiles and runs the C example on the three systems |
-| [ ] I6 | JS package: `npm install`, one `Chain` class that works both offline and in the worklet, TypeScript types generated from the registry | W2 | CI: the Node quickstart runs green |
-| [ ] I7 | Ten-line quickstarts, one per interface, executed in CI so they can never rot. If one grows past ten lines, that is a bug in the API | I3, I4, I5, I6 | The quickstarts themselves, run on every PR |
+| [x] I1 | Write the interface contract (a short doc in `docs/`): the table above, plus the rule "an op ships on all interfaces or explains why not". From then on it is part of every task's definition of done | — | CI check: every op in the registry appears in the contract table (generated, not hand-kept) |
+| [x] I2 | One name everywhere: a single op registry drives CLI verb names, Python function names, C symbols and JS exports. No synonyms, no surprises | I1 | A generated cross-name table; the build fails if an interface drifts from the registry |
+| [x] I3 | Python install and feel: prebuilt wheels for Linux/macOS/Windows (no Rust toolchain needed), `import fluxion as fx` → `fx.Wave.from_file(...) \| fx.filter.Highpass(80)` (torchfx-shaped: `Wave` carries `fs`, one class per op) or `fx.chain("highpass=80 \| gain=-3")(x, fs)`, typed stubs, errors that name the parameter and the valid range | — | CI: a fresh virtualenv on all three systems installs the wheel and runs the quickstart |
+| [x] I4 | CLI help and errors: `--help` fits one screen, every error suggests a fix ("unknown effect `hipass`, did you mean `highpass`?"), `--dry-run` prints the chain it would run, progress on long files | — | Snapshot tests on help and on ten common mistakes |
+| [x] I5 | C header, small and safe: one `.h`, no panics across the boundary, a compiling example in the repo | — | CI compiles and runs the C example on the three systems |
+| [~] I6 | JS package: `npm install`, one `Chain` class that works both offline and in the worklet, TypeScript types generated from the registry | W2 | CI: the Node quickstart runs green |
+
+> I6 is `[~]`, not `[x]`: the package, the generated TypeScript types and the offline `Chain`
+> ship and the Node quickstart is green, but the worklet half of that one class waits on W4.
+> See the "Not yet" section of [docs/interfaces.md](docs/interfaces.md).
+| [x] I7 | Ten-line quickstarts, one per interface, executed in CI so they can never rot. If one grows past ten lines, that is a bug in the API | I3, I4, I5, I6 | The quickstarts themselves, run on every PR |
 
 ## Epic W — WebAssembly first
 
@@ -157,8 +161,8 @@ everywhere" story.
 
 | # | Task | Depends on | The check written first |
 |---|------|-----------|--------------------------|
-| [ ] W1 | Build setup: `cdylib` + wasm-bindgen, wasm target in the toolchain file, a build script, a CI job that compiles on every PR | — | CI: the crate builds; a Node smoke test loads the module and calls `version()` |
-| [ ] W2 | Chain API in the browser: build a chain from the same text/JSON the CLI accepts, run it over a `Float32Array` at a given sample rate, get the buffer back | W1 | Node test: `highpass=80 \| gain=-3` on a fixture sine matches the native CLI output within 1e-6 |
+| [x] W1 | Build setup: `cdylib` + wasm-bindgen, wasm target in the toolchain file, a build script, a CI job that compiles on every PR | — | CI: the crate builds; a Node smoke test loads the module and calls `version()` |
+| [x] W2 | Chain API in the browser: build a chain from the same text/JSON the CLI accepts, run it over a `Float32Array` at a given sample rate, get the buffer back | W1 | Node test: `highpass=80 \| gain=-3` on a fixture sine matches the native CLI output within 1e-6 |
 | [ ] W3 | Frozen graphs (`.fxg`) in the browser: load, verify, refuse broken files — the same checks as on a device | W2 | Node test: a good file loads and renders; a corrupted one is rejected with the same error as native |
 | [ ] W4 | AudioWorklet playback: the chain runs in 128-frame blocks, a lock-free ring moves audio in and out, no memory allocation once started | W2 | Browser test (Playwright): 5 s of playback, no dropped blocks, the wasm-side allocation counter stays at 0 |
 | [ ] W5 | Live parameter changes from the page to the worklet, smoothed like the native realtime engine, no clicks | W4 | Browser test: a 40 dB gain jump renders as a smooth ramp |

@@ -29,7 +29,9 @@ derives its spelling from that row; none of them keeps its own list.
 - **C and JS** do **not** get one symbol per op, deliberately. They build chains from
   [text](chain-syntax.md): `fx_chain_from_text("lowpass(800, 4) | gain(-3dB)")`,
   `Chain.fromText(...)`. The C header stays small on purpose, and a per-op ABI symbol is a
-  commitment that never expires. The coverage check for these two is
+  commitment that never expires. JS additionally gets the catalog as *data* — `fluxion/ops`, with
+  `OpName` as a TypeScript literal union — because a bundler can drop it if unused, which is not
+  true of anything compiled into the wasm module. The coverage check for these two is
   `every_registry_op_parses_from_its_bare_name` in
   [`crates/fluxion-core/tests/parse_roundtrip.rs`](../crates/fluxion-core/tests/parse_roundtrip.rs):
   if an op is not reachable from its bare name, it is not on those interfaces, whatever
@@ -77,10 +79,11 @@ API. This is the one rule in this document whose whole purpose is to push back o
 
 Honest gaps, with the reason. Each is a thing the rule above would otherwise require.
 
-**The AudioWorklet half of the JS package.** `Chain` renders offline in the browser today. Live
-playback needs the worklet, the lock-free ring and the no-allocation guarantee — roadmap task W4.
-The offline `Chain` is the same class the worklet will use, so this is a method to add, not a
-design to redo.
+**The AudioWorklet half of the JS package.** `Chain` renders offline in the browser today — enough
+for waveforms, previews and bounces, and checked sample-for-sample against native in CI. Live
+playback needs the worklet, the lock-free ring and the no-allocation guarantee (roadmap W4), and
+loading a frozen `.fxg` in the browser is W3. The offline `Chain` is the same class both extend, so
+these are methods to add rather than a design to redo.
 
 **The geometry stages** — `trim`, `pad`, `rate`, `speed`, `repeat`, `silence`, `channels`, `remix`
 — are CLI-only. They are not in the op registry because they *cannot* be: every graph op is

@@ -271,6 +271,10 @@ jobs:
       - name: wasm output matches native
         working-directory: crates/fluxion-wasm/js
         run: node parity.mjs
+      # ROADMAP I7: the JS quickstart runs, so it cannot rot.
+      - name: JS quickstart
+        working-directory: crates/fluxion-wasm/js
+        run: node quickstart.mjs
 
   cuda:
     name: cuda check (API drift, no GPU)
