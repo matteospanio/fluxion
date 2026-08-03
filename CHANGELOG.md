@@ -105,6 +105,26 @@ WebAssembly build and the browser chain API (roadmap W1–W2).
 
 ### Added
 
+- **AudioWorklet playback (roadmap W4, W5, W7 — completes milestone F-M2, and I6 with it)** —
+  `attachWorklet(context, chain)` runs a chain on the audio thread, 128 frames at a time, fed
+  through the lock-free SPSC ring and the allocation-free block executor `fluxion-rt` already had.
+  The claims are measured rather than asserted. Five seconds of playback allocates **nothing** on
+  the wasm side — the module counts its own allocations through a wrapping global allocator, and
+  the test requires the count not to move; a 40 dB gain change arrives as a ramp whose largest
+  per-sample step is 1e-3, against the 0.99 a step would give; the module is 193 KB gzipped of the
+  1.5 MB budget; and a five-filter mastering chain costs 2.8 us per block, 0.11% of its 2.67 ms
+  deadline. Block-by-block playback is bit-identical to the offline render, checked in Node and
+  again inside a real browser — which is the concrete form of "preview and export come from the
+  same DSP".
+  Two things a browser makes you find out the hard way. `AudioWorkletGlobalScope` has no
+  `TextDecoder` or `TextEncoder`, and wasm-bindgen's glue builds one at its top level, so the
+  worklet script dies before `registerProcessor` and the only symptom is a processor that "is not
+  defined"; a small UTF-8 shim is prepended for that reason. And an `OfflineAudioContext` can
+  finish rendering before a `postMessage` is delivered, so audio that must be present for the first
+  block arrives through `processorOptions` instead.
+  A chain that cannot run in a callback — `reverse`, `normalize`, `limiter`, `loudnorm` all need
+  the whole signal — is refused when the player is built, with a message saying which and what to
+  use instead, rather than failing part-way through playback.
 - **The mastering set (Epic M / M1-M4 — completes milestone F-M3)** — a mastering chain needed
   four things the dynamics module did not have. `stat` now reports integrated loudness, loudness
   range and true peak; `limiter` and `loudnorm` are chain ops, so they arrived on Rust, the CLI,

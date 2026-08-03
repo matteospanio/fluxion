@@ -1,7 +1,7 @@
 {
   "name": "fluxion",
   "version": "0.2.0",
-  "description": "Differentiable, cross-vendor audio DSP in the browser — the same engine as the Rust library, the CLI and the Python package.",
+  "description": "Differentiable, cross-vendor audio DSP in the browser \u2014 the same engine as the Rust library, the CLI and the Python package.",
   "type": "module",
   "main": "./index.mjs",
   "types": "./index.d.ts",
@@ -13,6 +13,9 @@
     "./ops": {
       "types": "./ops.d.ts",
       "default": "./ops.js"
+    },
+    "./worklet": {
+      "default": "./worklet-loader.mjs"
     }
   },
   "files": [
@@ -24,7 +27,11 @@
     "pkg/fluxion_wasm.d.ts",
     "pkg/fluxion_wasm_bg.wasm",
     "pkg/fluxion_wasm_bg.wasm.d.ts",
-    "README.md"
+    "README.md",
+    "worklet-loader.mjs",
+    "fluxion-worklet.js",
+    "worklet-textcodec.js",
+    "pkg/no-modules/fluxion_wasm.js"
   ],
   "sideEffects": false,
   "license": "MIT",
@@ -34,12 +41,23 @@
     "directory": "crates/fluxion-wasm/js"
   },
   "homepage": "https://github.com/matteospanio/fluxion",
-  "keywords": ["audio", "dsp", "wasm", "webassembly", "filter", "realtime"],
+  "keywords": [
+    "audio",
+    "dsp",
+    "wasm",
+    "webassembly",
+    "filter",
+    "realtime"
+  ],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
     "build": "../../../scripts/build-wasm.sh",
-    "test": "cargo test -p fluxion-wasm --test parity -- --ignored write_reference && node smoke.mjs && node parity.mjs && node quickstart.mjs"
+    "test": "cargo test -p fluxion-wasm --test parity -- --ignored write_reference && node smoke.mjs && node parity.mjs && node worklet.test.mjs && node budget.test.mjs && node quickstart.mjs",
+    "test:browser": "node browser.test.mjs"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^25.4.0"
   }
 }

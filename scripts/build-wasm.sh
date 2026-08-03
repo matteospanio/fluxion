@@ -47,4 +47,9 @@ wasm="$root/target/wasm32-unknown-unknown/$profile/fluxion_wasm.wasm"
 echo "running wasm-bindgen -> $out"
 wasm-bindgen "$wasm" --out-dir "$out" --target web --omit-default-module-path
 
+# A second binding of the *same* .wasm as a classic script. An AudioWorklet has no module loader
+# and no fetch, so the ES-module glue above cannot be used inside one; `no-modules` produces a
+# script the page can read as text and hand to `addModule` alongside the processor.
+wasm-bindgen "$wasm" --out-dir "$out/no-modules" --target no-modules --out-name fluxion_wasm
+
 ls -l "$out"

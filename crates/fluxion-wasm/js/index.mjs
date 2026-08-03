@@ -9,5 +9,13 @@
 // `init` loads the WebAssembly. In a browser it fetches the .wasm next to this file; in Node,
 // hand it the bytes: `await init({ module_or_path: await readFile(url) })`.
 
-export { default, default as init, Chain, ops, version } from "./pkg/fluxion_wasm.js";
+export {
+  default,
+  default as init,
+  Chain,
+  Player,
+  allocations,
+  ops,
+  version,
+} from "./pkg/fluxion_wasm.js";
 export { OPS, OP_NAMES } from "./ops.js";
