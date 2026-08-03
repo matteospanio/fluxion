@@ -22,7 +22,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --all-targets --locked
-      - run: cargo test --workspace --locked
+      # --no-fail-fast: cargo otherwise stops at the first failing test binary, so a
+      # platform-specific break hides everything after it and each CI round reveals one.
+      - run: cargo test --workspace --locked --no-fail-fast
 
   lint:
     name: fmt & clippy
@@ -145,7 +147,10 @@ jobs:
           key: ${{ matrix.os }}
       # torch / jax are not installed (heavy); those adapter tests skip — the API, the analytic
       # gradcheck, and scipy filter-design parity are the guards here.
-      - run: pip install --upgrade pip maturin numpy pytest scipy array_api_strict array-api-compat
+      # `python -m pip`, not `pip`: on Windows pip.exe cannot replace itself while it is running,
+      # so `pip install --upgrade pip` fails with "To modify pip, please run ...". Harmless
+      # everywhere else, and the same invocation on all three systems.
+      - run: python -m pip install --upgrade pip maturin numpy pytest scipy array_api_strict array-api-compat
       - run: maturin build --release -m crates/fluxion-py/Cargo.toml --out dist
 
       # A *fresh* venv, in a scratch directory: the quickstart has to work against nothing but the
@@ -162,17 +167,21 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          python -m venv "$env:RUNNER_TEMP\fxvenv"
-          & "$env:RUNNER_TEMP\fxvenv\Scripts\pip" install --quiet (Get-ChildItem dist\*.whl)
+          $venv = "$env:RUNNER_TEMP\fxvenv"
+          python -m venv $venv
+          # .FullName, not the FileInfo object: how PowerShell stringifies one is not something to
+          # rely on when the result is a path handed to another program.
+          $wheel = (Get-ChildItem dist\*.whl | Select-Object -First 1).FullName
+          & "$venv\Scripts\python.exe" -m pip install --quiet $wheel
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\quickstart" | Out-Null
           Set-Location "$env:RUNNER_TEMP\quickstart"
-          & "$env:RUNNER_TEMP\fxvenv\Scripts\python" "$env:GITHUB_WORKSPACE\crates\fluxion-py\tests\quickstart.py"
+          & "$venv\Scripts\python.exe" "$env:GITHUB_WORKSPACE\crates\fluxion-py\tests\quickstart.py"
 
       - name: install the wheel and run the suite
         shell: bash
         run: |
-          pip install dist/*.whl
-          pytest crates/fluxion-py/tests/ -v
+          python -m pip install dist/*.whl
+          python -m pytest crates/fluxion-py/tests/ -v
 
   benches:
     name: benches (compile-check only)
@@ -249,6 +258,10 @@ jobs:
 
   # ROADMAP W1: the crate builds for wasm32 on every PR, and Node loads the module and calls into
   # it. The build has to keep working or the browser story quietly stops being true.
+  # Linux only, deliberately. The parity fixture below is a *native* rendering, and glibc and
+  # Apple's libm differ by an ULP or two in the trigonometry the filter design calls — enough that
+  # a 1e-6 wasm-vs-fixture comparison would be measuring the host's libm rather than fluxion.
+  # Comparing wasm against one fixed reference is the claim W2 actually makes.
   wasm:
     name: wasm (build + Node)
     runs-on: ubuntu-latest
