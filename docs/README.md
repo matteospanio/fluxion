@@ -5,6 +5,9 @@
   says why not, and the definition of done a pull request is held to.
 - **[chain-syntax.md](chain-syntax.md)** — the one text form for a chain, shared by every
   interface. Operators, parameters, units, errors, grammar.
+- **[time-stretch.md](time-stretch.md)** — the short study roadmap R3 asks for: why the stretcher
+  is written rather than bound or ported, what it does, what it deliberately does not do yet, and
+  how it is checked against Rubber Band.
 - **[ops.md](ops.md)** — *generated.* Every op, what it does, its parameters and ranges, and its
   name on each interface. Regenerate with `python scripts/gen_interfaces.py`; CI fails on a hand
   edit.

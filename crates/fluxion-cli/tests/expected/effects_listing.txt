@@ -109,6 +109,8 @@ effects (graph ops — compose with the geometry stages below):
       --depth        <lin>   [0.5]
       --feedback     <lin>   [0.5]
       --mix          <lin>   [0.5]
+  pitchshift
+      --cents        <lin>   [0]
 
 geometry stages (change frames / rate / channels):
   trim — keep a [start, start+len) window (or [start, end)); drops the rest
@@ -121,6 +123,8 @@ geometry stages (change frames / rate / channels):
   rate — resample to a new sample rate (windowed-sinc SRC)
       --fs           <Hz>   required
   speed — change speed (pitch+tempo together); keeps fs
+      --factor       <lin>   required; >1 faster
+  stretch — change tempo, not pitch; keeps fs
       --factor       <lin>   required; >1 faster
   repeat — concatenate the signal with itself count times
       --count        <int>   required

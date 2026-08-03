@@ -42,6 +42,7 @@ fn every_builder() -> Vec<Graph> {
         phaser(0.5, 0.5, 0.5, 0.5),
         limiter(-1.0, 0.005, 0.05),
         loudnorm(-14.0, -1.0),
+        pitchshift(0.0),
     ]
 }
 

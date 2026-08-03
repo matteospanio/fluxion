@@ -46,3 +46,6 @@ class Loudnorm(Chain):
 
 class Phaser(Chain):
     def __new__(cls, rate: float = ..., depth: float = ..., feedback: float = ..., mix: float = ...) -> Phaser: ...
+
+class PitchShift(Chain):
+    def __new__(cls, cents: float = ...) -> PitchShift: ...

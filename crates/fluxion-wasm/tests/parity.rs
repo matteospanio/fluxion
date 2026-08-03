@@ -54,6 +54,22 @@ const FRAMES: usize = 24_000;
 /// drift toward the bound is visible rather than hidden behind a pass.
 const TOLERANCE: f32 = 1e-6;
 
+/// Per-case tolerance, for the one case where the shared bound measures the wrong thing.
+///
+/// `pitchshift` is the only entry and its reason is structural, not rounding. A phase vocoder
+/// decides **which bins are spectral peaks** by comparing magnitudes, then locks every other bin's
+/// phase to the peak it belongs to. That is a discrete decision taken on a continuous quantity, so
+/// one last-bit difference between two libms' `cos` can move a peak by a bin and re-assign a whole
+/// region's phases for that frame. The measured worst is 2.1e-5 — 7e-5 of the sample it sits on,
+/// about -83 dB, and inaudible — but it is not a last-bit difference, and stretching the shared
+/// bound to cover it would stop the other 34 cases from watching for anything.
+fn tolerance_for(name: &str) -> f32 {
+    match name {
+        "pitchshift" => 1e-4,
+        _ => TOLERANCE,
+    }
+}
+
 /// One comparison: an op (or a chain shape) and the text that builds it.
 struct Case {
     /// What this covers — an op name from the registry, or `chain:<shape>` for a topology.
@@ -188,6 +204,11 @@ const CASES: &[Case] = &[
     Case {
         name: "loudnorm",
         chain: "loudnorm(-20, -3)",
+    },
+    Case {
+        // A whole octave, so the parity check is against a shift that unmistakably happened.
+        name: "pitchshift",
+        chain: "pitchshift(1200)",
     },
     // --- topologies, not ops: the algebra has to survive the trip too ---
     Case {
@@ -331,6 +352,7 @@ fn write_reference() {
             serde_json::json!({
                 "name": c.name,
                 "chain": c.chain,
+                "tolerance": tolerance_for(c.name),
                 "expected": render(c.chain, &dry),
             })
         })

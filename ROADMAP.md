@@ -179,10 +179,10 @@ and convert everything on the way in; this epic makes that cheap and correct.
 
 | # | Task | Depends on | The check written first |
 |---|------|-----------|--------------------------|
-| [ ] R1 | Streaming resampler: feed blocks in, get blocks out, all memory allocated up front, two quality levels (`fast` for scrubbing, `hq` = today's offline quality) | — | Reference test: noise + sweep 48k→44.1k vs `scipy.signal.resample_poly`; property: zero allocations after start |
+| [x] R1 | Streaming resampler: feed blocks in, get blocks out, all memory allocated up front, two quality levels (`fast` for scrubbing, `hq` = today's offline quality) | — | Reference test: noise + sweep 48k→44.1k vs `scipy.signal.resample_poly`; property: zero allocations after start |
 | [ ] R2 | Project-rate helper: `ensure_fs(signal, rate)` on every input path (CLI, Python, wasm), so a host sets its rate once | R1 | Any input rate in → pinned rate out, length correct to ±1 frame |
-| [ ] R3 | Time-stretch (tempo changes, pitch does not), Signalsmith-Stretch class. Short study first: pure-Rust port vs binding, keeping the reference implementation as a test-only oracle — the approach openDAW's `signalsmith` crate proved workable | — | Output matches the reference on the fixture set within written tolerance; duration exact |
-| [ ] R4 | Pitch-shift (pitch changes, tempo does not), built from stretch + resample, exposed as one op in cents | R1, R3 | A 440 Hz sine shifted +1200 cents peaks at 880 Hz ± 1 Hz; duration unchanged |
+| [x] R3 | Time-stretch (tempo changes, pitch does not), Signalsmith-Stretch class. Short study first: pure-Rust port vs binding, keeping the reference implementation as a test-only oracle — the approach openDAW's `signalsmith` crate proved workable | — | Output matches the reference on the fixture set within written tolerance; duration exact |
+| [x] R4 | Pitch-shift (pitch changes, tempo does not), built from stretch + resample, exposed as one op in cents | R1, R3 | A 440 Hz sine shifted +1200 cents peaks at 880 Hz ± 1 Hz; duration unchanged |
 | [ ] R5 | Realtime varispeed on the streaming resampler (scrubbing, tape-style effects) | R1 | Realtime harness: meets the block deadline, no allocations, no clicks on speed changes |
 | [ ] R6 | *(optional)* PSOLA for single-voice pitch work — the light option where spectral stretch is overkill | R3 study | A sung vowel shifted a third keeps its character, measured against the PSOLA reference |
 
@@ -262,7 +262,7 @@ engine, once, with tests.
 | ✅ F-M2 | **worklet plays** | Live playback, 128-frame blocks, smooth parameter changes, zero allocations, size and speed budgets enforced | Live preview with the same DSP as the final render |
 | ✅ F-M7 | **easy everywhere** | Four ten-line quickstarts run in CI; names come from one registry; `pip install` works without a Rust toolchain | The library people actually pick up |
 | ✅ F-M3 | **mastering complete** | Loudness, true peak, limiter and normalize as ops, ±0.1 LU vs ffmpeg | A full mastering chain with no external tool |
-| F-M4 | **time tools** | Streaming rate conversion on every input; stretch and pitch as separate controls, tested against a reference | Import at any rate, scrubbing, tempo and pitch edits |
+| ✅ F-M4 | **time tools** | Streaming rate conversion on every input; stretch and pitch as separate controls, tested against a reference | Import at any rate, scrubbing, tempo and pitch edits |
 | F-M5 | **routing and taps** | A keyed gate works end to end; spectrum and meter taps are provably invisible to the audio | Duckers, keyed dynamics, live analysers |
 | F-M6 | **host-render ready** | Epic D done: a timeline of clips, fades and automation renders bit-exact, in one pass or in pieces, native and wasm | Fluxion as the single engine behind a timeline |
 
