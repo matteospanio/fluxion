@@ -24,6 +24,7 @@ pub mod iir;
 pub mod loudness;
 pub mod modulation;
 pub mod rbj;
+pub mod resample;
 pub mod reverb;
 pub mod stability;
 pub mod transform;
@@ -51,6 +52,7 @@ pub use loudness::{
 };
 pub use modulation::{chorus, flanger, phaser};
 pub use rbj::{allpass, bandpass, high_shelf, low_shelf, notch, peaking};
+pub use resample::{Quality, Resampler};
 pub use reverb::reverb;
 pub use stability::{
     Certificate, Verdict, certify_biquad, certify_sos, project_stable, project_stable_flat,
