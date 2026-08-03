@@ -33,6 +33,8 @@ export type OpName =
   | "biquad"
   | "chorus"
   | "flanger"
+  | "limiter"
+  | "loudnorm"
   | "phaser";
 
 /** Which section of the catalog an op belongs to. */

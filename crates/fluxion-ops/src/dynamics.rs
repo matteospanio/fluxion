@@ -124,6 +124,127 @@ pub fn compand(
         .collect()
 }
 
+// --- true-peak limiter (ROADMAP M3) ----------------------------------------------------------
+
+/// Limit the signal so its **true** peak never exceeds `ceiling_db` dBTP.
+///
+/// A sample-peak limiter leaves inter-sample overshoot behind, and that is exactly what clips in a
+/// converter or a lossy encoder — so the gain here is computed from the reconstructed waveform
+/// (see [`crate::loudness::true_peak_envelope`]), not from the samples.
+///
+/// One gain curve is applied to every channel, so a loud left channel ducks the right with it and
+/// the image does not wander.
+///
+/// `lookahead` seconds of anticipation lets the gain be already down when a peak arrives instead of
+/// clamping after the fact; `release` seconds sets how quickly it comes back. Offline this costs no
+/// latency, because the whole signal is present — a realtime lowering of the same op would carry
+/// exactly `lookahead` samples of delay.
+///
+/// ```
+/// use fluxion_ops::{limit, loudness::true_peak};
+/// let fs = 48_000;
+/// let mut loud: Vec<Vec<f32>> = vec![(0..fs)
+///     .map(|n| 0.9 * (std::f32::consts::TAU * 800.0 * n as f32 / fs as f32).sin())
+///     .collect()];
+/// limit(&mut loud, -6.0, 0.005, 0.05, fs as u32);
+/// assert!(true_peak(&loud, fs as u32) <= -6.0 + 0.1);
+/// ```
+pub fn limit(channels: &mut [Vec<f32>], ceiling_db: f32, lookahead: f32, release: f32, fs: u32) {
+    let frames = channels.iter().map(Vec::len).max().unwrap_or(0);
+    if frames == 0 {
+        return;
+    }
+    let ceiling = 10f32.powf(ceiling_db / 20.0);
+
+    // Applying a *varying* gain moves the reconstructed curve, so one pass computed from the input
+    // can leave a little overshoot behind — the gain modulation adds spectrum of its own. Each pass
+    // measures the signal it is actually about to change, and the residual falls off fast: full
+    // scale noise, the worst case found, needs two.
+    for _ in 0..PASSES {
+        if !limit_once(channels, ceiling, lookahead, release, fs, frames) {
+            return;
+        }
+    }
+
+    // Last resort. The passes above converge quickly, but M3's property is "never exceeds the
+    // ceiling, on **any** input", and a claim like that cannot rest on convergence being fast
+    // enough. If anything is still over, one flat gain across the whole signal settles it — at the
+    // cost of a little level, which is the right trade against handing back something that clips.
+    let residual = crate::loudness::true_peak_envelope(channels)
+        .into_iter()
+        .fold(0.0f32, f32::max);
+    if residual > ceiling {
+        let trim = ceiling / residual;
+        for channel in channels.iter_mut() {
+            for sample in channel.iter_mut() {
+                *sample *= trim;
+            }
+        }
+    }
+}
+
+/// How many times to re-measure and re-limit. Three is one more than the worst case measured, and
+/// each pass after the first is nearly free because there is almost nothing left to do.
+const PASSES: usize = 3;
+
+/// One pass. Returns whether anything exceeded the ceiling, i.e. whether another pass is worth it.
+fn limit_once(
+    channels: &mut [Vec<f32>],
+    ceiling: f32,
+    lookahead: f32,
+    release: f32,
+    fs: u32,
+    frames: usize,
+) -> bool {
+    // What each sample needs, from the reconstructed curve rather than the samples.
+    let envelope = crate::loudness::true_peak_envelope(channels);
+    if envelope.iter().fold(0.0f32, |m, v| m.max(*v)) <= ceiling {
+        return false;
+    }
+    let required: Vec<f32> = envelope
+        .iter()
+        .map(|&peak| if peak > ceiling { ceiling / peak } else { 1.0 })
+        .collect();
+
+    // Anticipate: the gain at n is the worst thing arriving within the lookahead window, so the
+    // reduction can be in place before the peak instead of clamping on top of it.
+    let window = ((lookahead * fs as f32).round() as usize).max(1);
+    let mut anticipated = vec![1.0f32; frames];
+    for (n, slot) in anticipated.iter_mut().enumerate() {
+        let hi = (n + window + 1).min(frames);
+        *slot = required[n..hi].iter().copied().fold(1.0f32, f32::min);
+    }
+
+    // Follow it with an asymmetric one-pole: fast enough down to complete inside the lookahead,
+    // slow up so the recovery does not pump. Smoothness is not cosmetic here — a gain that moves
+    // sample-to-sample modulates the signal and *creates* the inter-sample peaks it is meant to
+    // remove, which is what an earlier version of this did.
+    let attack = coefficient((window / 3).max(1));
+    let release_samples = ((release * fs as f32).round() as usize).max(1);
+    let release_coeff = coefficient(release_samples);
+
+    let mut gain = vec![1.0f32; frames];
+    let mut g = 1.0f32;
+    for (n, slot) in gain.iter_mut().enumerate() {
+        let target = anticipated[n];
+        let coeff = if target < g { attack } else { release_coeff };
+        g += (target - g) * coeff;
+        *slot = g;
+    }
+
+    for channel in channels.iter_mut() {
+        for (sample, g) in channel.iter_mut().zip(&gain) {
+            *sample *= g;
+        }
+    }
+    true
+}
+
+/// One-pole coefficient that settles in about `samples` steps (three time constants).
+fn coefficient(samples: usize) -> f32 {
+    1.0 - (-3.0 / samples as f32).exp()
+}
+
 #[cfg(test)]
 mod tests {
     use super::compand;

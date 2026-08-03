@@ -404,6 +404,20 @@ pub(crate) fn cmd_stat(args: &[String]) -> Result<(), String> {
     println!("  RMS           : {} dBFS", fmt_db(rms));
     println!("  DC offset     : {dc:.6}");
     println!("  crest factor  : {}", fmt_ratio(crest));
+
+    // The mastering numbers: what the level actually is to a listener, how far it moves, and
+    // whether it will clip on reconstruction. `stat` is where a terminal user looks for them.
+    let lufs = fluxion_ops::integrated_loudness(&sig.channels, fs);
+    println!("  loudness      : {} LUFS", fmt_lufs(lufs));
+    println!(
+        "  loudness range: {:.1} LU",
+        fluxion_ops::loudness_range(&sig.channels, fs)
+    );
+    println!(
+        "  true peak     : {} dBTP",
+        fmt_db_value(fluxion_ops::true_peak(&sig.channels, fs))
+    );
+
     for (i, r) in ch_rms.iter().enumerate() {
         println!("  channel {} RMS : {} dBFS", i + 1, fmt_db(*r));
     }
@@ -416,6 +430,24 @@ fn fmt_db(x: f32) -> String {
         format!("{:.2}", 20.0 * x.log10())
     } else {
         "-inf".to_string()
+    }
+}
+
+/// Format an already-logarithmic value, or `-inf` where there was no signal.
+fn fmt_db_value(db: f32) -> String {
+    if db.is_finite() {
+        format!("{db:.2}")
+    } else {
+        "-inf".to_string()
+    }
+}
+
+/// Format a loudness, distinguishing "too quiet to gate" from "shorter than a gating block".
+fn fmt_lufs(lufs: f32) -> String {
+    if lufs.is_finite() {
+        format!("{lufs:.2}")
+    } else {
+        "-inf (silent, or shorter than one 400 ms block)".to_string()
     }
 }
 

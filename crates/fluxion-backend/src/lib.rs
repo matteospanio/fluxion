@@ -120,6 +120,21 @@ pub trait Backend {
     ) -> Self::Buf {
         unimplemented!("compand is a CPU-only effect — guard with is_differentiable")
     }
+    /// True-peak limiter: hold the reconstructed waveform under `ceiling_db` dBTP.
+    fn limiter(
+        &self,
+        _x: Self::Buf,
+        _ceiling_db: f32,
+        _lookahead_s: f32,
+        _release_s: f32,
+        _fs: u32,
+    ) -> Self::Buf {
+        unimplemented!("limiter is a whole-signal effect — guard with is_differentiable")
+    }
+    /// Loudness normalize to `target_lufs`, holding the true peak under `ceiling_db`.
+    fn loudnorm(&self, _x: Self::Buf, _target_lufs: f32, _ceiling_db: f32, _fs: u32) -> Self::Buf {
+        unimplemented!("loudnorm is a whole-signal effect — guard with is_differentiable")
+    }
     /// Per-channel time reversal.
     fn reverse(&self, _x: Self::Buf) -> Self::Buf {
         unimplemented!("reverse is a whole-signal effect — guard with is_differentiable")
@@ -206,6 +221,8 @@ fn eval_op<B: Backend>(b: &B, op: &Op, x: B::Buf, fs: u32) -> B::Buf {
         OpKind::Overdrive => b.overdrive(x, p[0], p[1]),
         OpKind::Compand => b.compand(x, p[0], p[1], p[2], p[3], p[4], p[5], fs),
         OpKind::Reverse => b.reverse(x),
+        OpKind::Limiter => b.limiter(x, p[0], p[1], p[2], fs),
+        OpKind::Loudnorm => b.loudnorm(x, p[0], p[1], fs),
         OpKind::Chorus => b.chorus(x, p[0], p[1], p[2], p[3], fs),
         OpKind::Flanger => b.flanger(x, p[0], p[1], p[2], p[3], p[4], fs),
         OpKind::Phaser => b.phaser(x, p[0], p[1], p[2], p[3], fs),
@@ -342,6 +359,29 @@ impl Backend for Cpu {
         }
         x
     }
+    fn limiter(
+        &self,
+        mut x: Vec<Vec<f32>>,
+        ceiling_db: f32,
+        lookahead_s: f32,
+        release_s: f32,
+        fs: u32,
+    ) -> Vec<Vec<f32>> {
+        fluxion_ops::limit(&mut x, ceiling_db, lookahead_s, release_s, fs);
+        x
+    }
+
+    fn loudnorm(
+        &self,
+        mut x: Vec<Vec<f32>>,
+        target_lufs: f32,
+        ceiling_db: f32,
+        fs: u32,
+    ) -> Vec<Vec<f32>> {
+        fluxion_ops::loudness_normalize(&mut x, target_lufs, ceiling_db, fs);
+        x
+    }
+
     fn reverse(&self, mut x: Vec<Vec<f32>>) -> Vec<Vec<f32>> {
         for ch in &mut x {
             *ch = reverse(ch);
@@ -499,7 +539,12 @@ fn certify_op(op: &Op, fs: u32) -> Certificate {
         | OpKind::Overdrive
         | OpKind::Compand
         | OpKind::Reverse
-        | OpKind::Chorus => Certificate::certified(),
+        | OpKind::Chorus
+        // The limiter and loudness normalize are gain stages: they compute an envelope from the
+        // signal and multiply by it, with no recirculation. The limiter's gain is bounded above by
+        // 1 by construction, and loudnorm's is a constant per pass, so both are BIBO-stable.
+        | OpKind::Limiter
+        | OpKind::Loudnorm => Certificate::certified(),
         // `OpKind` is `#[non_exhaustive]`; a new op must be classified above (or in `op_sos`) rather
         // than silently blessed as stable.
         kind => panic!(

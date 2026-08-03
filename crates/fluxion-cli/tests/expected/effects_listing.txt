@@ -97,6 +97,13 @@ effects (graph ops — compose with the geometry stages below):
       --delay        <s>   [0.001]
       --feedback     <lin>   [0.5]
       --mix          <lin>   [0.5]
+  limiter
+      --ceiling      <dB>   [-1]
+      --lookahead    <s>   [0.005]
+      --release      <s>   [0.05]
+  loudnorm
+      --target       <dB>   [-14]
+      --ceiling      <dB>   [-1]
   phaser
       --rate         <Hz>   [0.5]
       --depth        <lin>   [0.5]

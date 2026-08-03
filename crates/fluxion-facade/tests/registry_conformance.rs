@@ -40,6 +40,8 @@ fn every_builder() -> Vec<Graph> {
         chorus(1.5, 0.002, 0.025, 0.5),
         flanger(0.5, 0.002, 0.001, 0.5, 0.5),
         phaser(0.5, 0.5, 0.5, 0.5),
+        limiter(-1.0, 0.005, 0.05),
+        loudnorm(-14.0, -1.0),
     ]
 }
 

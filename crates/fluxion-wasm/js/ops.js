@@ -190,6 +190,20 @@ export const OPS = Object.freeze({
     doc: "Flanger: a short LFO-modulated delay (`rate` Hz, `depth` s, `delay` s) with `feedback`, blended by `mix`. Length-preserving.",
     params: [{ name: "rate", unit: "hz", default: 0.5, min: 0.0, max: 100.0 }, { name: "depth", unit: "seconds", default: 0.002, min: 0.0, max: 1.0 }, { name: "delay", unit: "seconds", default: 0.001, min: 0.0, max: 1.0 }, { name: "feedback", unit: "linear", default: 0.5, min: -0.95, max: 0.95 }, { name: "mix", unit: "linear", default: 0.5, min: 0.0, max: 1.0 }],
   },
+  "limiter": {
+    name: "limiter",
+    group: "effect",
+    variadic: false,
+    doc: "True-peak limiter: holds the reconstructed waveform under `ceiling` dBTP, looking `lookahead` seconds ahead so the gain is already down when a peak arrives and recovering over `release` seconds. Measures the oversampled curve, not the samples, so inter-sample overshoot \u2014 the kind that clips a converter or a lossy encoder \u2014 is caught too.",
+    params: [{ name: "ceiling", unit: "db", default: -1.0, min: -60.0, max: 0.0 }, { name: "lookahead", unit: "seconds", default: 0.005, min: 0.0001, max: 0.1 }, { name: "release", unit: "seconds", default: 0.05, min: 0.001, max: 1.0 }],
+  },
+  "loudnorm": {
+    name: "loudnorm",
+    group: "effect",
+    variadic: false,
+    doc: "Loudness normalize: bring the programme to `target` LUFS (ITU-R BS.1770), then hold its true peak under `ceiling` dBTP. Two passes \u2014 loudness is a property of the whole programme, so it has to be measured before anything can be decided. Material with enough crest factor cannot reach a loud target under a strict ceiling; it lands as close as the ceiling allows.",
+    params: [{ name: "target", unit: "db", default: -14.0, min: -70.0, max: 0.0 }, { name: "ceiling", unit: "db", default: -1.0, min: -60.0, max: 0.0 }],
+  },
   "phaser": {
     name: "phaser",
     group: "effect",

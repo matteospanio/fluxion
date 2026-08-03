@@ -105,6 +105,28 @@ WebAssembly build and the browser chain API (roadmap W1–W2).
 
 ### Added
 
+- **The mastering set (Epic M / M1-M4 — completes milestone F-M3)** — a mastering chain needed
+  four things the dynamics module did not have. `stat` now reports integrated loudness, loudness
+  range and true peak; `limiter` and `loudnorm` are chain ops, so they arrived on Rust, the CLI,
+  Python, C and the browser at once by being one row each in the registry.
+  Loudness is ITU-R BS.1770: K-weighting designed analytically (so it is correct at any sample
+  rate, and reproduces the standard's tabulated 48 kHz coefficients to machine precision), the
+  two-pass gate, and EBU Tech 3342 loudness range. Checked against pyloudnorm and ffmpeg's
+  `ebur128` over 11 signals covering the K-curve, channel summing and gating — worst disagreement
+  0.058 LU against a 0.1 LU bar, where the two references disagree with *each other* by up to
+  0.055.
+  True peak oversamples 4x through a 96-tap polyphase interpolator whose length was chosen by
+  measurement against signals with analytically known peaks. M2 asked for 0.1 dB of ffmpeg; that
+  is not achievable and measurement says why — ffmpeg reports 10 kHz and 19 kHz sines of amplitude
+  0.5 as -5.2 dBTP, above their own mathematical maximum, and reads the canonical inter-sample-peak
+  fixture 0.62 dB high. The test says so, and pins our accuracy against the truth instead.
+  The limiter computes its gain from the reconstructed waveform, not the samples, applies one gain
+  curve across all channels so the image does not wander, and holds its ceiling on *any* input —
+  including full-scale noise and square waves, where a first attempt did not, because a gain that
+  moves sample-to-sample creates the very inter-sample peaks it is removing. Loudness normalize is
+  measure-apply-verify, keeping the closest attempt rather than the last: material with enough
+  crest factor cannot reach a loud target under a strict ceiling, and chasing it would hand back
+  something quieter than it started.
 - **The wasm-vs-native suite, over every op (roadmap W6 — completes milestone F-M1)** — W2 compared
   one chain; this compares all 27 ops plus five chain topologies (series, parallel, nested, a
   labelled node, and feedback — the one construct a series/parallel tree cannot encode), 4096

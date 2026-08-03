@@ -219,6 +219,17 @@ pub mod prelude {
         Graph::op(OpKind::Flanger, [rate_hz, depth_s, delay_s, feedback, mix])
     }
 
+    /// True-peak limiter: holds the reconstructed waveform under `ceiling` dBTP, anticipating by
+    /// `lookahead` seconds and recovering over `release` seconds.
+    pub fn limiter(ceiling_db: f32, lookahead_s: f32, release_s: f32) -> Graph {
+        Graph::op(OpKind::Limiter, [ceiling_db, lookahead_s, release_s])
+    }
+
+    /// Loudness normalize to `target` LUFS (BS.1770), holding the true peak under `ceiling` dBTP.
+    pub fn loudnorm(target_lufs: f32, ceiling_db: f32) -> Graph {
+        Graph::op(OpKind::Loudnorm, [target_lufs, ceiling_db])
+    }
+
     /// Phaser: LFO-swept all-pass cascade with feedback — `rate` Hz, `depth` (0..1), `feedback`,
     /// `mix` (0..1).
     pub fn phaser(rate_hz: f32, depth: f32, feedback: f32, mix: f32) -> Graph {
