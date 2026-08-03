@@ -116,24 +116,59 @@ jobs:
       - uses: taiki-e/install-action@cargo-deny
       - run: cargo deny check
 
+  # ROADMAP I3: "a fresh virtualenv on all three systems installs the wheel and runs the
+  # quickstart". Native builds on the three runners, on every PR — not `wheels.yml`, which is a
+  # release matrix whose cross-compiled aarch64 wheel cannot be executed here and so would prove
+  # nothing about the quickstart.
   python:
-    name: python bindings (maturin + pytest)
-    runs-on: ubuntu-latest
+    name: python bindings (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          # Pinned: PyO3 0.22 does not support 3.14, which is the runners' default. One
+          # cp310-abi3 wheel covers CPython 3.10+ regardless of the interpreter that builds it.
+          python-version: "3.12"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: crates/fluxion-py
-      # torch / jax are not installed (heavy); those adapter tests skip — eager API, the analytic
+          key: ${{ matrix.os }}
+      # torch / jax are not installed (heavy); those adapter tests skip — the API, the analytic
       # gradcheck, and scipy filter-design parity are the guards here.
       - run: pip install --upgrade pip maturin numpy pytest scipy array_api_strict array-api-compat
       - run: maturin build --release -m crates/fluxion-py/Cargo.toml --out dist
-      - run: pip install dist/*.whl
-      - run: pytest crates/fluxion-py/tests/ -v
+
+      # A *fresh* venv, in a scratch directory: the quickstart has to work against nothing but the
+      # wheel and numpy. It writes in.wav / out.wav into the working directory, hence the cd.
+      - name: fresh venv + quickstart
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          python -m venv "$RUNNER_TEMP/fxvenv"
+          "$RUNNER_TEMP/fxvenv/bin/pip" install --quiet dist/*.whl
+          mkdir -p "$RUNNER_TEMP/quickstart" && cd "$RUNNER_TEMP/quickstart"
+          "$RUNNER_TEMP/fxvenv/bin/python" "$GITHUB_WORKSPACE/crates/fluxion-py/tests/quickstart.py"
+      - name: fresh venv + quickstart
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -m venv "$env:RUNNER_TEMP\fxvenv"
+          & "$env:RUNNER_TEMP\fxvenv\Scripts\pip" install --quiet (Get-ChildItem dist\*.whl)
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\quickstart" | Out-Null
+          Set-Location "$env:RUNNER_TEMP\quickstart"
+          & "$env:RUNNER_TEMP\fxvenv\Scripts\python" "$env:GITHUB_WORKSPACE\crates\fluxion-py\tests\quickstart.py"
+
+      - name: install the wheel and run the suite
+        shell: bash
+        run: |
+          pip install dist/*.whl
+          pytest crates/fluxion-py/tests/ -v
 
   benches:
     name: benches (compile-check only)

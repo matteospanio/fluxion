@@ -38,7 +38,10 @@ All notable changes to fluxion are documented here. The format is based on
   prints it back. Errors name the class, the parameter and its range, and suggest a fix on a typo.
   A conformance test compares `fluxion.filter` / `fluxion.effect` against `fluxion.ops_table()` in
   both directions, so neither a missing class nor a stale generated file can survive CI. New
-  helper: `fluxion.db(-3)` for the linear ratio the gain-like ops take.
+  helper: `fluxion.db(-3)` for the linear ratio the gain-like ops take. CI now builds the wheel
+  and runs the ten-line quickstart from a *fresh* virtualenv on Linux, macOS and Windows on every
+  pull request — previously the Python job was Linux-only and wheels were built on tags alone,
+  so "pip install works" was never actually tested before a release.
 - **Breaking: one op name on every interface (Epic I / I2)** — the four Chebyshev ops were spelled
   `cheby1low` / `cheby1high` / `cheby2low` / `cheby2high` in the CLI and chain text but
   `cheby1_lowpass` / … in Rust and Python. The registry name is now the long form everywhere, which
