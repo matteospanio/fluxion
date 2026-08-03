@@ -53,6 +53,22 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Added
 
+- **The chain text syntax (Epic I / I2)** — `"highpass(80, 4) | gain(-3dB)".parse::<Graph>()`. One
+  grammar, in `fluxion-core`, that is the exact inverse of what `Graph` prints: whatever the library
+  renders parses back to the identical graph, asserted over a corpus covering every op, both
+  associativities of `|` and `+`, labels around every node kind, feedback nested either way, and the
+  numeric edges (`inf`, signed zero, exponents). That is what lets the CLI's `--chain`, Python's
+  `fluxion.chain()`, C's `fx_chain_from_text` and the browser describe a chain with one string
+  instead of four dialects. `+` binds tighter than `|`, matching Rust and Python, so
+  `a | b + c | d` needs no parentheses. Ergonomics on the way in, canonical form on the way out:
+  trailing parameters fall back to their defaults (`highpass(80)`), arguments may be named
+  (`compand(threshold=-24, ratio=8)`), there is a `name=v1,v2` shorthand, and the suffixes `k`
+  (×1000) and `dB` are accepted — `gain(-3dB)` is an actual 3 dB cut, which `gain(-3)` is not, since
+  that parameter is a linear ratio. A suffix a parameter cannot take is refused rather than
+  misread. Errors carry a byte offset, a message and an optional fix, and render with a caret:
+  `unknown op 'hipass'` under `^^^^^^ did you mean 'highpass'?`. The suggestion helper
+  (`fluxion_core::suggest`) counts a transposition as one edit, so `gian` finds `gain`; it adds no
+  dependency.
 - **Realtime bindings (Python + C ABI)** — the `fluxion-rt` streaming engine is now reachable
   from both binding surfaces, closing the "batch-only bindings" gap. Python: `fluxion.RtChain`
   (`from_chain` / `from_sections`) lowers a `Chain` once at a fixed `fs`, certifies it on the
