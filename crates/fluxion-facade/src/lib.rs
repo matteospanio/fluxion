@@ -45,6 +45,16 @@ pub use fluxion_core::suggest;
 /// frame count, channel count, or sample rate, so they run before/after a graph rather than inside it.
 pub use fluxion_ops::transform;
 
+/// Sample-rate conversion, one converter reached two ways: [`resample::Resampler`] for blocks
+/// (realtime, the worklet) and [`resample::convert`] for a signal you already hold whole.
+/// [`transform::ensure_fs`] is the one to reach for on an input path — it skips the work when the
+/// signal is already at the project rate.
+pub use fluxion_ops::resample;
+
+/// Playback speed that moves while it plays — scrubbing, tape effects. Allocation-free per block
+/// and anti-aliased up to the speed it was built for; see [`varispeed::Varispeed`].
+pub use fluxion_ops::varispeed;
+
 /// The Jury-triangle stability projection for flat `[b0,b1,b2,a1,a2]·K` coefficient vectors (plan
 /// task E8) — clamps every section's `(a1, a2)` strictly inside the stable region. Used by
 /// `fluxion import --project-stable` to tame an unstable trained checkpoint before certification.

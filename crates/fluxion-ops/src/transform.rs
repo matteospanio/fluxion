@@ -6,12 +6,16 @@
 //! deliberately changes the frame count, the channel count, or the sample rate. They are plain
 //! functions over `fluxion_core::Signal`, applied before/after a graph rather than inside it.
 //!
-//! [`resample`] is a real sample-rate converter (windowed-sinc, anti-aliased for downsampling) — the
-//! SoX `rate` replacement; [`speed`] reuses it to change pitch+tempo together (SoX `speed`).
-
-use std::f32::consts::PI;
+//! [`resample()`] is a real sample-rate converter (windowed-sinc, anti-aliased for downsampling) — the
+//! SoX `rate` replacement; [`speed`] reuses it to change pitch+tempo together (SoX `speed`);
+//! [`ensure_fs`] is the one a host calls on the way in, to pin everything to the project rate.
+//!
+//! All three run [`crate::resample::Resampler`], the same converter the streaming and realtime
+//! paths use — there is one sample-rate conversion in fluxion, reached from different directions.
 
 use fluxion_core::Signal;
+
+use crate::resample;
 
 /// Keep the window `[start_s, start_s + len_s)` seconds of every channel (clamped to the signal),
 /// dropping the rest. Sample rate unchanged.
@@ -107,80 +111,42 @@ pub fn silence_trim(
     Signal::new(sig.fs, channels)
 }
 
-/// A symmetric Blackman window over `u ∈ [-1, 1]` (0 outside), for tapering the sinc.
-fn blackman(u: f32) -> f32 {
-    if u.abs() > 1.0 {
-        0.0
-    } else {
-        0.42 + 0.5 * (PI * u).cos() + 0.08 * (2.0 * PI * u).cos()
-    }
-}
-
-/// Normalized sinc `sin(πx)/(πx)`, `sinc(0) = 1`.
-fn sinc(x: f32) -> f32 {
-    if x.abs() < 1e-8 {
-        1.0
-    } else {
-        let px = PI * x;
-        px.sin() / px
-    }
-}
-
-/// Zero-crossings of the windowed sinc on each side (taps/phase ≈ `2·ZEROS`).
-const ZEROS: f32 = 32.0;
-
-/// Resample one channel by `ratio = out_fs / in_fs` to `out_len` samples, with a windowed-sinc
-/// (Blackman) kernel whose cutoff drops to `ratio` when downsampling (anti-aliasing). The kernel has
-/// unit DC gain, so constants pass unchanged.
-fn resample_channel(input: &[f32], ratio: f64, out_len: usize) -> Vec<f32> {
-    let n = input.len();
-    if n == 0 || out_len == 0 {
-        return vec![0.0; out_len];
-    }
-    let cutoff = (ratio.min(1.0)) as f32; // normalized to the input Nyquist
-    let half = ZEROS / cutoff.max(1e-6); // kernel half-width in input samples
-    (0..out_len)
-        .map(|m| {
-            let center = m as f64 / ratio; // position in input-sample coordinates
-            let i0 = (center - half as f64).ceil().max(0.0) as usize;
-            let i1 = ((center + half as f64).floor() as i64).min(n as i64 - 1);
-            let mut acc = 0.0f32;
-            for k in i0 as i64..=i1 {
-                let dx = center as f32 - k as f32;
-                let w = cutoff * sinc(cutoff * dx) * blackman(dx / half);
-                acc += input[k as usize] * w;
-            }
-            acc
-        })
-        .collect()
-}
-
 /// Resample to `to_fs` Hz with a real windowed-sinc converter (the SoX `rate` replacement). Preserves
 /// frequency content and DC; anti-aliases when downsampling. Frame count scales by `to_fs / fs`.
 pub fn resample(sig: &Signal, to_fs: u32) -> Signal {
     if to_fs == sig.fs || sig.frames() == 0 {
         return Signal::new(to_fs, sig.channels.clone());
     }
-    let ratio = to_fs as f64 / sig.fs as f64;
-    let out_len = (sig.frames() as f64 * ratio).round() as usize;
     let channels = sig
         .channels
         .iter()
-        .map(|c| resample_channel(c, ratio, out_len))
+        .map(|c| resample::convert(c, sig.fs, to_fs, resample::Quality::Hq))
         .collect();
     Signal::new(to_fs, channels)
+}
+
+/// Pin a signal to a project rate, converting only if it is not already there (ROADMAP R2).
+///
+/// A host sets its rate once and puts every input through here: what comes back is at `rate`, with
+/// exactly `round(frames · rate/fs)` frames. It takes the signal by value so that the common case —
+/// an input already at the project rate — costs nothing at all, not even a copy. A `rate` of 0 is
+/// not a rate; it means no project rate is set, and the signal passes through.
+pub fn ensure_fs(sig: Signal, rate: u32) -> Signal {
+    if rate == 0 || rate == sig.fs {
+        return sig;
+    }
+    resample(&sig, rate)
 }
 
 /// Change playback speed by `factor` (pitch **and** tempo together, SoX `speed`): resample the data
 /// by `1/factor` but keep `fs`, so `factor > 1` is faster and higher-pitched. Anti-aliased.
 pub fn speed(sig: &Signal, factor: f32) -> Signal {
     let factor = factor.max(1e-6);
-    let ratio = 1.0 / factor as f64;
-    let out_len = (sig.frames() as f64 * ratio).round() as usize;
+    let ratio = 1.0 / f64::from(factor);
     let channels = sig
         .channels
         .iter()
-        .map(|c| resample_channel(c, ratio, out_len))
+        .map(|c| resample::convert_ratio(c, ratio, resample::Quality::Hq))
         .collect();
     Signal::new(sig.fs, channels) // same fs — pitch changes with tempo
 }
@@ -287,6 +253,7 @@ pub fn mix(sigs: &[&Signal]) -> Signal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::f32::consts::PI;
 
     fn mono(fs: u32, samples: Vec<f32>) -> Signal {
         Signal::new(fs, vec![samples])
@@ -359,6 +326,33 @@ mod tests {
             worst = worst.max((y[i] - x[i]).abs());
         }
         assert!(worst < 5e-2, "roundtrip ripple too large: {worst}");
+    }
+
+    /// R2's check: whatever rate comes in, the project rate comes out, at the length the caller
+    /// can compute from the two rates.
+    #[test]
+    fn ensure_fs_pins_every_input_rate_to_the_project_rate() {
+        const PROJECT: u32 = 48_000;
+        for from in [8_000, 22_050, 44_100, 48_000, 96_000, 192_000] {
+            let frames = from as usize / 10; // 100 ms, whatever the rate
+            let s = mono(from, vec![0.25f32; frames]);
+            let out = ensure_fs(s, PROJECT);
+            assert_eq!(out.fs, PROJECT, "from {from}");
+            let want = (frames as f64 * f64::from(PROJECT) / f64::from(from)).round() as usize;
+            assert_eq!(out.frames(), want, "from {from}");
+        }
+    }
+
+    /// The common case, and the reason this takes the signal by value: an input already at the
+    /// project rate is handed straight back, not run through a filter that would soften its top end
+    /// for nothing.
+    #[test]
+    fn ensure_fs_leaves_a_matching_rate_alone() {
+        let x: Vec<f32> = (0..1_000).map(|i| (0.05 * i as f32).sin()).collect();
+        let out = ensure_fs(mono(48_000, x.clone()), 48_000);
+        assert_eq!(out.channels[0], x);
+        // 0 means "no project rate is set", so it is not a conversion request either.
+        assert_eq!(ensure_fs(mono(44_100, x.clone()), 0).fs, 44_100);
     }
 
     #[test]

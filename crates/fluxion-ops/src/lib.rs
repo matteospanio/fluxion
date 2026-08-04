@@ -29,6 +29,7 @@ pub mod reverb;
 pub mod stability;
 pub mod stretch;
 pub mod transform;
+pub mod varispeed;
 
 pub use chebyshev::{
     chebyshev1_highpass, chebyshev1_lowpass, chebyshev2_highpass, chebyshev2_lowpass,
@@ -60,3 +61,4 @@ pub use stability::{
     small_gain_certify,
 };
 pub use stretch::{pitch_shift, time_stretch};
+pub use varispeed::Varispeed;

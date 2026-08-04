@@ -21,6 +21,41 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Added
 
+- **Realtime varispeed (Epic R / R5)** — `varispeed::Varispeed`: playback speed that moves while it
+  is playing, for scrubbing and tape effects. Pull rather than push, because a callback needs
+  exactly the block it asked for and how much input that takes is the part that varies —
+  `process(input, output)` fills the output and reports what it swallowed. Anti-aliased up to the
+  `max_speed` it was built for: a 15 kHz tone played at 4× comes out quiet rather than folded back
+  down as a loud tone in the wrong place. Zero allocations across five seconds of scrubbing with
+  the speed moved every block, at 1.1 % of real time (`Fast`); the widest kernel it can be asked
+  for — `Hq` at 2× — is 3.6 %.
+  The clicking check took two attempts and the first one was wrong: a speed change does *not* step
+  the output, since the read position stays continuous either way, so the largest sample-to-sample
+  jump does not move at all when the smoothing is removed and a test written on it passes whatever
+  the code does. What a speed change puts in the signal is a **corner** — the position's slope
+  jumps in one sample — so the check is on the second difference. Slamming the speed between 1.0
+  and 1.6 every 20 blocks measures 0.00084 against a steady-speed baseline of 0.00089; with the
+  20 ms ramp taken out it is 0.0076, eight and a half times the baseline.
+
+- **One project rate, set once (Epic R / R2)** — `transform::ensure_fs(signal, rate)` and its
+  spelling on each door: `fluxion --rate 48000` in the CLI, `fx.Wave.from_file(path, fs=48_000)` /
+  `wave.ensure_fs(48_000)` in Python, `ensureFs(samples, fromFs, toFs)` in the browser. A signal
+  already at the rate is handed straight back, not run through a filter for nothing — which is why
+  the Rust one takes the signal by value. The frame count is exactly `round(frames · to/from)`,
+  because that is the number a host computed for itself before asking.
+  There is now **one** sample-rate conversion in fluxion rather than two: `resample`, `speed` and
+  `ensure_fs` all run the streaming `Resampler` from R1, so a file imported whole and the same file
+  streamed through the worklet come out as the same samples. That also made the offline path about
+  **11× faster** (10 s of 48 k → 44.1 k in 42 ms, from 471 ms) — the old one evaluated a `sin()`
+  per tap per output sample where the streaming converter reads a precomputed table.
+  Alignment is the part worth stating: a whole-signal conversion has no run-up to compensate, so
+  `Resampler::align_to_input` puts output frame 0 on input frame 0 exactly. Rounding that
+  compensation to the nearest output frame instead — the obvious first version — left a fifth of a
+  frame of slip, visible as 0.022 of amplitude error on a 1 kHz tone. Aligned properly, a converted
+  1 kHz tone matches the sine its new rate implies to 1.8e-6, which is f32 noise. `Resampler` also
+  takes a ratio directly now (`with_ratio`), so a speed factor or a pitch interval is no longer
+  rounded into a pair of integer rates on the way in.
+
 - **Time tools: streaming resampler, time-stretch, pitch-shift (Epic R / R1, R3, R4 — completes
   milestone F-M4)** — three things a host needs and the offline converter could not give it.
   `Resampler` converts sample rates a block at a time with every buffer allocated in `new` and

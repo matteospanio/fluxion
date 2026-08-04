@@ -332,6 +332,39 @@ fn multi_input_rate_mismatch_needs_rate_flag() {
     std::fs::remove_dir_all(&d).ok();
 }
 
+/// `--rate` is the project rate (ROADMAP R2): every input arrives at it, and each one's length
+/// follows its *own* source rate. Two seconds in, two seconds out, whatever the files were.
+#[test]
+fn rate_flag_pins_the_project_rate_and_the_length() {
+    let d = tmp("projectrate");
+    let (a, b, out) = (d.join("a.wav"), d.join("b.wav"), d.join("out.wav"));
+    write_wav(&a, 44_100, &[0.1; 44_100]); // 1 s
+    write_wav(&b, 22_050, &[0.2; 22_050]); // 1 s
+
+    let st = Command::new(bin())
+        .args([
+            "--rate",
+            "48000",
+            a.to_str().unwrap(),
+            b.to_str().unwrap(),
+            out.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(st.success());
+
+    let spec = wav_spec(&out);
+    assert_eq!(spec.sample_rate, 48_000);
+    let frames = std::fs::metadata(&out).unwrap().len() as usize
+        / (spec.channels as usize * spec.bits_per_sample as usize / 8);
+    // 96000 frames of audio plus the WAV header, which is why this is a range and not an equality.
+    assert!(
+        (96_000..96_064).contains(&frames),
+        "two seconds at 48 kHz should be 96000 frames, got about {frames}"
+    );
+    std::fs::remove_dir_all(&d).ok();
+}
+
 #[test]
 fn synth_sine_then_stat() {
     let d = tmp("synthstat");

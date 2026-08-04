@@ -6,6 +6,7 @@ export {
   Chain,
   Player,
   allocations,
+  ensureFs,
   ops,
   version,
 } from "./pkg/fluxion_wasm.js";

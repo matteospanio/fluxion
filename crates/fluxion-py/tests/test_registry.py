@@ -137,6 +137,38 @@ def test_wave_round_trips_through_a_file(tmp_path):
     assert np.allclose(back.ys, x, atol=1e-6)
 
 
+def test_wave_ensure_fs_pins_the_project_rate(tmp_path):
+    """ROADMAP R2: any rate in, the project rate out, at the length the two rates imply."""
+    for source in (8_000, 22_050, 44_100, 96_000):
+        w = fx.Wave(np.zeros((2, source // 10), dtype=np.float32), source)  # 100 ms
+        out = w.ensure_fs(FS)
+        assert out.fs == FS
+        assert out.channels() == 2
+        assert len(out) == round(len(w) * FS / source)
+        assert out.metadata["source_fs"] == source
+
+
+def test_wave_ensure_fs_at_the_same_rate_changes_nothing():
+    w = fx.Wave(np.linspace(-1, 1, 64, dtype=np.float32), FS)
+    assert w.ensure_fs(FS) is w
+    with pytest.raises(ValueError, match="must be positive"):
+        w.ensure_fs(0)
+
+
+def test_wave_from_file_can_convert_on_the_way_in(tmp_path):
+    """A host sets its rate once: files at it are untouched, the rest arrive converted."""
+    path = tmp_path / "at44k.wav"
+    tone = np.sin(2 * np.pi * 1000 * np.arange(44_100) / 44_100).astype(np.float32)
+    fx.Wave(tone, 44_100).save(path)
+
+    w = fx.Wave.from_file(path, fs=FS)
+    assert w.fs == FS
+    assert len(w) == FS
+    # Still a 1 kHz tone, and still where the new rate says it is (the ends taper).
+    want = np.sin(2 * np.pi * 1000 * np.arange(FS) / FS).astype(np.float32)
+    assert np.allclose(w.ys[0][2000:-2000], want[2000:-2000], atol=1e-3)
+
+
 def test_wave_channels_split_and_merge(tmp_path):
     left = fx.Wave(np.full((1, 8), 1.0, dtype=np.float32), FS)
     right = fx.Wave(np.full((1, 8), 2.0, dtype=np.float32), FS)

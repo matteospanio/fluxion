@@ -40,6 +40,25 @@ derives its spelling from that row; none of them keeps its own list.
 [ops.md](ops.md) is the generated cross-name table. Do not edit it; run
 `python scripts/gen_interfaces.py`.
 
+## The project rate
+
+Ops never change the sample rate — that is what lets `|` and `+` compose — so a host picks one rate
+and converts on the way in. Each door spells that one way (roadmap R2):
+
+- **Rust** — `fluxion::transform::ensure_fs(signal, rate)`.
+- **The CLI** — `fluxion --rate 48000 a.wav b.wav out.wav`.
+- **Python** — `fx.Wave.from_file(path, fs=48_000)`, or `wave.ensure_fs(48_000)` later.
+- **JS** — `ensureFs(samples, fromFs, toFs)`, for the gap between the file's rate and the
+  `AudioContext`'s.
+
+All four run the one converter in `fluxion_ops::resample`, whether the signal arrives whole or a
+block at a time, so a file imported in the CLI and the same file streamed through the worklet come
+out as the same samples. Input already at the rate is not touched at all. The frame count is exactly
+`round(frames · to/from)` — a host computes that number for itself, so the converter has to land
+on it rather than near it.
+
+C is the exception, for the reason its whole surface is small: see "Not yet".
+
 ## Definition of done
 
 A pull request that adds or changes an op is finished when all of these are true:
@@ -93,6 +112,14 @@ per-channel, length-preserving and rate-preserving, which is exactly what makes 
 without bookkeeping, and every one of these changes the frame count, the sample rate or the channel
 layout. They live in `fluxion_ops::transform` and run between graph passes. Giving them a home on
 every interface is a design round of its own, not a missing row in a table.
+
+**`ensure_fs` in C.** The other four doors have it; the C header does not. Its contract is the
+stable core — build a chain from text, run it on a buffer — and a rate converter is not a chain op,
+so it would be a new pair of symbols with its own buffer-sizing rules, and every ABI symbol is a
+commitment that never expires. A C host that needs a project rate today can run the chain at each
+source's own rate, or convert with whatever its platform already provides. If one asks, the shape to
+add is `fx_ensure_fs(in, n, from_fs, to_fs, out, cap)` returning the frames written, the same
+`snprintf` convention as `fx_graph_to_text`.
 
 **`.to(device)` in Python.** torchfx has it because its arrays are torch tensors. Fluxion's Python
 API is an Array-API *consumer* over NumPy, and its GPU path is in the batch backend, not in the

@@ -70,6 +70,10 @@ def write_audio(path: str, data: F32, fs: int, bits: int | None = ...) -> None:
     """Write a WAV file. ``bits`` is ``None`` for 32-bit float, or 16 / 24 / 32 for PCM."""
     ...
 
+def ensure_fs(data: F32, from_fs: int, to_fs: int) -> F32:
+    """Resample to ``to_fs``, keeping the shape and landing on exactly the expected frame count."""
+    ...
+
 class RtChain:
     """A realtime, stateful executor for a :class:`Chain`: streams a signal block-by-block.
 
