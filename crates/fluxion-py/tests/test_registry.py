@@ -203,3 +203,20 @@ def test_chain_takes_side_inputs():
     # The same gate written without a key listens to itself and stays open.
     plain = fx.chain("gate(-40, 60, 0.001, 0, 0.005)")(loud, FS)
     assert np.abs(plain[FS // 4 :]).max() > 0.4
+
+
+def test_taps_report_without_touching_the_audio():
+    """ROADMAP A1/A2/A3: analysers in the chain, and the same samples out."""
+    x = (np.sin(2 * np.pi * 375 * np.arange(FS) / FS) * 0.4).astype(np.float32)
+
+    plain = fx.chain("gain(0.5)")(x, FS)
+    audio, readings = fx.chain("meter | gain(0.5) | spectrum(2048, 0.5)").taps(x, FS)
+
+    assert np.array_equal(plain, audio)
+    assert [r["kind"] for r in readings] == ["meter", "spectrum"]
+    # -6.02 dBFS is 0.5 linear, before the gain halves it.
+    assert readings[0]["peak_db"] == pytest.approx(-7.96, abs=0.05)
+    # 375 Hz is bin 16 of a 2048-point FFT at 48 kHz; the gain halved the 0.4 partial.
+    spectrum = readings[1]
+    bin_index = round(375 / spectrum["bin_hz"])
+    assert spectrum["magnitude"][bin_index] == pytest.approx(0.2, abs=0.005)

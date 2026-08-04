@@ -14,6 +14,7 @@
 //! Kernels operate on plain `&[f32]` / `&mut [f32]` channels; the graph executor in
 //! `fluxion-backend` applies them across a multichannel signal.
 
+pub mod analysis;
 pub mod chebyshev;
 pub mod delay;
 pub mod design;
@@ -33,6 +34,7 @@ pub mod stretch;
 pub mod transform;
 pub mod varispeed;
 
+pub use analysis::measure;
 pub use chebyshev::{
     chebyshev1_highpass, chebyshev1_lowpass, chebyshev2_highpass, chebyshev2_lowpass,
 };

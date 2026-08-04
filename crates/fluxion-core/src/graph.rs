@@ -6,6 +6,7 @@ use std::ops::{Add, BitOr};
 use serde::{Deserialize, Serialize};
 
 use crate::op::{Op, OpKind};
+use crate::tap::TapKind;
 
 /// A reified node in the DSP graph — the IR the backends lower.
 ///
@@ -56,6 +57,13 @@ pub enum Graph {
         /// The signal that drives it — typically a [`Graph::Side`], possibly filtered.
         key: Box<Graph>,
     },
+    /// An **observer tap** (ROADMAP A1): measure what flows past, change nothing.
+    ///
+    /// Not an op, deliberately. An op transforms the signal; a tap only reads it, and making that
+    /// a different kind of node is what makes "invisible to the audio" structural rather than a
+    /// promise — see [`crate::tap`]. Readings come back from `process_taps` in the order the chain
+    /// reaches them.
+    Tap(TapKind),
     /// A **feedback** loop (the `~` operator) — the third construct a series/parallel *tree* cannot
     /// encode, because it needs a cycle (plan task B8). Semantics: `y[n] = forward(x[n] +
     /// feedback(y)[n-1])`; the one-sample delay on the loop-back path breaks the algebraic loop so it
@@ -105,7 +113,7 @@ impl Graph {
     pub fn side_inputs(&self) -> usize {
         match self {
             Graph::Side(n) => n + 1,
-            Graph::Id | Graph::Op(_) => 0,
+            Graph::Id | Graph::Op(_) | Graph::Tap(_) => 0,
             Graph::Series(a, b) | Graph::Parallel(a, b) => a.side_inputs().max(b.side_inputs()),
             Graph::Named { node, .. } => node.side_inputs(),
             Graph::Keyed { node, key } => node.side_inputs().max(key.side_inputs()),
@@ -127,7 +135,7 @@ impl Graph {
     /// Number of leaf ops in the graph (structural size; [`Graph::Id`] counts as zero).
     pub fn leaf_count(&self) -> usize {
         match self {
-            Graph::Id | Graph::Side(_) => 0,
+            Graph::Id | Graph::Side(_) | Graph::Tap(_) => 0,
             Graph::Op(_) => 1,
             Graph::Series(a, b) | Graph::Parallel(a, b) => a.leaf_count() + b.leaf_count(),
             Graph::Named { node, .. } => node.leaf_count(),
@@ -155,7 +163,7 @@ impl Graph {
                 .find_named(name)
                 .or_else(|| feedback.find_named(name)),
             Graph::Keyed { node, key } => node.find_named(name).or_else(|| key.find_named(name)),
-            Graph::Id | Graph::Op(_) | Graph::Side(_) => None,
+            Graph::Id | Graph::Op(_) | Graph::Side(_) | Graph::Tap(_) => None,
         }
     }
 
@@ -188,6 +196,9 @@ impl Graph {
             // The reference interpreter has one input, so a side signal is the silence a chain
             // gets when nothing was connected — the same answer the real engine gives.
             Graph::Side(_) => vec![0.0; input.len()],
+            // A tap measures and passes on; the reference interpreter has nowhere to publish to,
+            // so here it is simply the identity — which is exactly what it is to the audio.
+            Graph::Tap(_) => input.to_vec(),
             // No op wired into `eval_ref` reads a key, so keying is transparent here. That is not a
             // simplification: it is the property S1 has to have, checked in the backend where the
             // keyed ops actually live.
@@ -264,6 +275,12 @@ impl fmt::Display for Graph {
             },
             Graph::Feedback { forward, feedback } => write!(f, "({forward} ~ {feedback})"),
             Graph::Side(n) => write!(f, "side({n})"),
+            Graph::Tap(kind) => match kind {
+                TapKind::Spectrum { size, overlap } => {
+                    write!(f, "spectrum({size}, {})", fmt_num(*overlap))
+                }
+                TapKind::Meter => f.write_str("meter"),
+            },
             // `<` is the loosest operator and non-associative, so a composite on either side has to
             // say where it ends — the same reason `Feedback` brackets itself.
             Graph::Keyed { node, key } => {

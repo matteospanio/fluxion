@@ -24,6 +24,7 @@ pub mod param;
 pub mod parse;
 pub mod signal;
 pub mod suggest;
+pub mod tap;
 
 pub use envelope::{Envelope, EnvelopeError, FORMAT_VERSION, LoadError};
 pub use frozen::FrozenSos;
@@ -32,3 +33,4 @@ pub use op::{Group, Op, OpError, OpKind};
 pub use param::{ParamSpec, Unit};
 pub use parse::ParseError;
 pub use signal::Signal;
+pub use tap::{TapData, TapKind, TapReading};

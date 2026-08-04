@@ -77,6 +77,26 @@ fn corpus() -> Vec<Graph> {
     out.push(a().keyed(Graph::side(0)) + b());
     out.push(a().keyed(Graph::side(0)).keyed(b()));
 
+    // Observer taps (ROADMAP A1): leaves, so they compose like any other primary.
+    out.push(Graph::Tap(fluxion_core::TapKind::Meter));
+    out.push(Graph::Tap(fluxion_core::TapKind::Spectrum {
+        size: 1024,
+        overlap: 0.5,
+    }));
+    out.push(Graph::Tap(fluxion_core::TapKind::Spectrum {
+        size: 256,
+        overlap: 0.0,
+    }));
+    out.push(a() | Graph::Tap(fluxion_core::TapKind::Meter) | b());
+    out.push(Graph::named(
+        "analyser",
+        Graph::Tap(fluxion_core::TapKind::Spectrum {
+            size: 2048,
+            overlap: 0.75,
+        }),
+    ));
+    out.push(a() + Graph::Tap(fluxion_core::TapKind::Meter));
+
     // Something deep enough to exercise the bracketing rules together.
     out.push(((a() | b()) + (c() | a())) | Graph::named("tail", b() + c()));
 

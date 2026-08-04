@@ -23,6 +23,17 @@ class Chain:
     def process(self, x: F32, fs: int, sides: list[F32] | None = ...) -> F32:
         """Apply the chain at ``fs`` to a 1-D ``(T,)`` or 2-D ``(C, T)`` float32 array (same shape out)."""
         ...
+    def taps(
+        self, x: F32, fs: int, sides: list[F32] | None = ...
+    ) -> tuple[F32, list[dict]]:
+        """Apply the chain and return `(audio, readings)` — what its observer taps saw.
+
+        The audio is identical to ``process``'s; a tap reads and never writes. Each reading is a
+        dict with ``label`` and ``kind``, plus ``bin_hz``/``magnitude`` for a spectrum or
+        ``peak_db``/``rms_db``/``short_term_lufs`` for a meter.
+        """
+        ...
+
     def process_batch(self, x: F32, fs: int) -> F32:
         """Filter a 2-D ``(B, T)`` batch of independent mono signals at ``fs`` → ``(B, T)`` float32.
 

@@ -23,11 +23,12 @@
 
 pub use fluxion_backend::{
     Backend, Certificate, Cpu, Ctx, Verdict, certify_graph, eval, eval_with, graph_to_sos,
-    is_differentiable, process, process_batch, process_with, sos_filter_batch,
+    is_differentiable, process, process_batch, process_taps, process_taps_with, process_with,
+    sos_filter_batch,
 };
 pub use fluxion_core::{
     FORMAT_VERSION, Graph, Group, LoadError, Op, OpError, OpKind, ParamSpec, ParseError, Signal,
-    Unit, fxg,
+    TapData, TapKind, TapReading, Unit, fxg,
 };
 
 /// The shared chain text syntax — `"highpass(80, 4) | gain(-3dB)".parse::<Graph>()`, and the

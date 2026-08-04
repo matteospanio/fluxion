@@ -223,9 +223,9 @@ read, they never touch the audio.
 
 | # | Task | Depends on | The check written first |
 |---|------|-----------|--------------------------|
-| [ ] A1 | Observer nodes: an op that reads the stream and publishes a snapshot, provably invisible to the audio (no allocation, no change to the signal) | — | A chain with N observers produces bit-identical audio to the chain without them |
-| [ ] A2 | Spectrum tap (windowed FFT, size and overlap configurable) for analyser views | A1 | The spectrum of a known multitone matches SciPy within tolerance |
-| [ ] A3 | Meter taps: peak, RMS, and short-term loudness reusing M1's filters | A1, M1 | Short-term loudness of the standard fixture matches the offline meter within 0.1 LU |
+| [x] A1 | Observer nodes: an op that reads the stream and publishes a snapshot, provably invisible to the audio (no allocation, no change to the signal) | — | A chain with N observers produces bit-identical audio to the chain without them |
+| [x] A2 | Spectrum tap (windowed FFT, size and overlap configurable) for analyser views | A1 | The spectrum of a known multitone matches SciPy within tolerance |
+| [x] A3 | Meter taps: peak, RMS, and short-term loudness reusing M1's filters | A1, M1 | Short-term loudness of the standard fixture matches the offline meter within 0.1 LU |
 
 ## Epic N — Distortion + oversampling
 

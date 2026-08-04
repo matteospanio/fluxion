@@ -66,6 +66,7 @@ use crate::graph::Graph;
 use crate::op::{Op, OpError, OpKind};
 use crate::param::{ParamSpec, Unit};
 use crate::suggest;
+use crate::tap::TapKind;
 
 /// A syntax or name error in a chain string, located in the source text.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -466,6 +467,7 @@ impl<'a> Parser<'a> {
                 Ok(Graph::Id)
             }
             Tok::Ident if t.text == "side" => self.side(),
+            Tok::Ident if t.text == "spectrum" || t.text == "meter" => self.tap(),
             Tok::Ident => self.op(),
             _ => Err(ParseError::new(
                 t.start,
@@ -500,6 +502,72 @@ impl<'a> Parser<'a> {
             ))));
         }
         Ok(Graph::Side(n as usize))
+    }
+
+    /// `spectrum(1024, 0.5)` / `meter` — an observer tap. Not an op for the reason `side` is not
+    /// one: it has no effect on the signal, so it is a different kind of node.
+    fn tap(&mut self) -> Result<Graph, ParseError> {
+        let name = self.bump();
+        let mut args = Vec::new();
+        if self.peek().tok == Tok::LParen {
+            self.bump();
+            if self.peek().tok != Tok::RParen {
+                loop {
+                    args.push(self.number()?);
+                    if self.peek().tok != Tok::Comma {
+                        break;
+                    }
+                    self.bump();
+                }
+            }
+            self.expect(Tok::RParen)?;
+        }
+
+        let kind = match name.text {
+            "meter" => {
+                if let Some(extra) = args.first() {
+                    return Err(ParseError::new(
+                        extra.span.start,
+                        extra.span.text.len(),
+                        "'meter' takes no parameters",
+                    ));
+                }
+                TapKind::Meter
+            }
+            _ => {
+                if args.len() > 2 {
+                    return Err(ParseError::new(
+                        args[2].span.start,
+                        args[2].span.text.len(),
+                        "'spectrum' takes at most 2 parameters: size and overlap",
+                    ));
+                }
+                let size = args.first().map_or(1024.0, |a| a.raw);
+                let overlap = args.get(1).map_or(0.5, |a| a.raw);
+                if !(size.is_finite() && size >= 2.0) {
+                    return Err(ParseError::new(
+                        args[0].span.start,
+                        args[0].span.text.len(),
+                        format!("an FFT size is 2 or more — '{}' is not", args[0].span.text),
+                    ));
+                }
+                if !(0.0..1.0).contains(&overlap) {
+                    return Err(ParseError::new(
+                        args[1].span.start,
+                        args[1].span.text.len(),
+                        format!(
+                            "overlap is a fraction below 1 — '{}' is not",
+                            args[1].span.text
+                        ),
+                    ));
+                }
+                TapKind::Spectrum {
+                    size: size as usize,
+                    overlap,
+                }
+            }
+        };
+        Ok(Graph::Tap(kind))
     }
 
     fn op(&mut self) -> Result<Graph, ParseError> {

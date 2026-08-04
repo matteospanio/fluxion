@@ -153,6 +153,69 @@ impl Chain {
         out.channels.into_iter().next().unwrap_or_default()
     }
 
+    /// Render, and also return what the chain's observer taps saw (ROADMAP A1).
+    ///
+    /// This is the analyser path: `meter | gain(0.5) | spectrum(2048)` renders *and* measures in
+    /// one pass, and the audio is bit-identical to [`Chain::process`]'s, because a tap reads the
+    /// buffer and never writes to it. Returns `{ audio, taps }`, where each tap is
+    /// `{ label, kind, ... }` — `binHz` and `magnitude` for a spectrum, `peakDb`, `rmsDb` and
+    /// `shortTermLufs` for a meter — in the order the chain reaches them.
+    #[wasm_bindgen(js_name = processTaps)]
+    pub fn process_taps(&self, samples: &[f32], fs: u32) -> js_sys::Object {
+        let (out, readings) =
+            fluxion::process_taps(&self.graph, &Signal::new(fs, vec![samples.to_vec()]));
+
+        let taps = js_sys::Array::new();
+        for reading in readings {
+            let entry = js_sys::Object::new();
+            let set = |key: &str, value: JsValue| {
+                // Both arguments are ours and the target is a fresh object, so this cannot fail.
+                let _ = js_sys::Reflect::set(&entry, &JsValue::from_str(key), &value);
+            };
+            set(
+                "label",
+                match reading.label {
+                    Some(l) => JsValue::from_str(&l),
+                    None => JsValue::NULL,
+                },
+            );
+            match reading.data {
+                fluxion::TapData::Spectrum { bin_hz, magnitude } => {
+                    set("kind", JsValue::from_str("spectrum"));
+                    set("binHz", JsValue::from_f64(f64::from(bin_hz)));
+                    set(
+                        "magnitude",
+                        js_sys::Float32Array::from(&magnitude[..]).into(),
+                    );
+                }
+                fluxion::TapData::Meter {
+                    peak_db,
+                    rms_db,
+                    short_term_lufs,
+                } => {
+                    set("kind", JsValue::from_str("meter"));
+                    set("peakDb", JsValue::from_f64(f64::from(peak_db)));
+                    set("rmsDb", JsValue::from_f64(f64::from(rms_db)));
+                    set(
+                        "shortTermLufs",
+                        JsValue::from_f64(f64::from(short_term_lufs)),
+                    );
+                }
+            }
+            taps.push(&entry);
+        }
+
+        let audio = out.channels.into_iter().next().unwrap_or_default();
+        let result = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(
+            &result,
+            &JsValue::from_str("audio"),
+            &js_sys::Float32Array::from(&audio[..]).into(),
+        );
+        let _ = js_sys::Reflect::set(&result, &JsValue::from_str("taps"), &taps);
+        result
+    }
+
     /// How many side inputs this chain reads — 0 for an ordinary one-input chain.
     #[wasm_bindgen(js_name = sideInputs)]
     pub fn side_inputs(&self) -> usize {

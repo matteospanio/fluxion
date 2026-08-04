@@ -21,6 +21,24 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Added
 
+- **Observer taps: analysis that reads the chain and never touches it (Epic A / A1, A2, A3 —
+  completes milestone F-M5)** — `meter` and `spectrum(2048, 0.5)` sit in a chain like anything else
+  and measure what flows past. Invisible to the audio is **structural**, not promised: a tap is a
+  different kind of node from an op, the executor hands it the buffer to borrow, and the buffer that
+  carries on is the one that arrived — there is no code path by which it could return anything else.
+  The check compares a chain with six taps against the same chain without them, bit for bit.
+  The spectrum is a Hann-windowed FFT averaged over frames, scaled so a partial reads its own
+  amplitude rather than a number proportional to it — the part an analyser gets wrong quietly.
+  Checked against an independently written SciPy rfft over four size/overlap combinations: worst
+  disagreement 1.8e-7, which is f32 noise. The meter reports peak, RMS and the loudest 3 s window,
+  the last straight from M1's BS.1770 code. All three in decibels, because a meter is a decibel
+  instrument and a reading that mixes units is how a caller ends up drawing a linear number on a dB
+  scale; silence reads `-inf` rather than 0, which on that scale would mean full scale.
+  Readings come back in chain order, labelled by the nearest enclosing `name:`. Rust, Python and
+  the browser can read them (`process_taps`, `chain.taps`, `chain.processTaps`); the CLI and C can
+  build a tapped chain but have nowhere to put the numbers, and `docs/interfaces.md` says what each
+  would need.
+
 - **Side inputs, and the gate that proves they work (Epic S / S1, S3)** — a chain could only ever
   carry one signal, which is the one thing standing between fluxion and a ducker, a keyed gate or
   any other two-input effect. Two additions to the algebra: `side(0)` reads a second signal handed
