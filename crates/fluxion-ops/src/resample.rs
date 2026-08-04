@@ -75,6 +75,12 @@ pub struct Resampler {
     /// result for every block size, which is the property the caller actually needs.
     frames_in: u64,
     frames_out: u64,
+    /// Where output frame 0 reads, in input frames from the first sample fed.
+    ///
+    /// Streaming, this is `-latency`: the converter starts half a kernel before the signal, so the
+    /// output lags and the host compensates. [`Resampler::align_to_input`] moves it to 0, which is
+    /// what an offline conversion wants — see [`convert_ratio`].
+    origin: f64,
     quality: Quality,
 }
 
@@ -84,7 +90,17 @@ impl Resampler {
     /// Everything is allocated here. `max_block` only sizes the history, so passing a larger block
     /// later is safe but will re-borrow from a shorter tail than intended; pass what you will use.
     pub fn new(from_fs: u32, to_fs: u32, quality: Quality, max_block: usize) -> Resampler {
-        let ratio = f64::from(to_fs) / f64::from(from_fs);
+        Resampler::with_ratio(f64::from(to_fs) / f64::from(from_fs), quality, max_block)
+    }
+
+    /// The same, given the ratio directly: output frames per input frame.
+    ///
+    /// Two rates are the readable way to say this and [`Resampler::new`] is the one to reach for.
+    /// A ratio is for the conversions that are not between two rates at all — a speed factor, a
+    /// pitch interval — where rounding the request into a pair of integer rates would quietly
+    /// change what was asked for.
+    pub fn with_ratio(ratio: f64, quality: Quality, max_block: usize) -> Resampler {
+        let ratio = ratio.max(1e-9);
         let step = 1.0 / ratio;
 
         // Downsampling has to lowpass to the *output* Nyquist, which widens the kernel by the same
@@ -126,8 +142,19 @@ impl Resampler {
             history: vec![0.0; taps + max_block],
             frames_in: 0,
             frames_out: 0,
+            origin: -(((taps - 1) / 2) as f64),
             quality,
         }
+    }
+
+    /// Line output frame 0 up with input frame 0: no start-up delay, and the kernel's leading half
+    /// reads the silence in front of the signal.
+    ///
+    /// This is for converting something whole, where the delay is a nuisance rather than a fact
+    /// about the stream — [`latency`](Resampler::latency) reads 0 afterwards. Do not use it on a
+    /// live stream: it throws away the first half-kernel of context that a stream genuinely has.
+    pub fn align_to_input(&mut self) {
+        self.origin = 0.0;
     }
 
     /// The quality this was built with.
@@ -142,7 +169,7 @@ impl Resampler {
 
     /// Filter delay, in input frames. The output lags the input by this much.
     pub fn latency(&self) -> usize {
-        (self.taps - 1) / 2
+        (-self.origin).max(0.0) as usize
     }
 
     /// The most output frames `in_frames` of input can produce. Size the output buffer with this;
@@ -179,9 +206,9 @@ impl Resampler {
         // kernel is behind it.
         let horizon = (self.frames_in + input.len() as u64) as f64;
         while written < output.len() {
-            // Output `n` is centred half a kernel before `n * step`, so the first outputs are made
-            // from the silence in front of the signal — what the offline version does by clamping.
-            let centre_abs = self.frames_out as f64 * self.step - half as f64;
+            // Output `n` reads at `origin + n * step`; by default `origin` is half a kernel before
+            // the signal, so the first outputs are made partly from the silence in front of it.
+            let centre_abs = self.frames_out as f64 * self.step + self.origin;
             if centre_abs + half as f64 >= horizon {
                 break;
             }
@@ -230,6 +257,55 @@ impl Resampler {
         self.frames_in = 0;
         self.frames_out = 0;
     }
+}
+
+/// Blocks used to run a whole signal through the streaming converter. Big enough that the
+/// per-block bookkeeping disappears, small enough to stay in cache.
+const OFFLINE_BLOCK: usize = 1024;
+
+/// Convert a whole channel from `from_fs` to `to_fs`, returning exactly `round(len · to/from)`
+/// samples aligned with the input in time.
+///
+/// This is [`Resampler`] run over a signal that happens to be complete, rather than a second
+/// converter for offline use: a file imported whole and the same file streamed through a callback
+/// come out as the same samples, which is the property a pinned project rate exists to give.
+pub fn convert(input: &[f32], from_fs: u32, to_fs: u32, quality: Quality) -> Vec<f32> {
+    if from_fs == to_fs {
+        return input.to_vec();
+    }
+    convert_ratio(input, f64::from(to_fs) / f64::from(from_fs), quality)
+}
+
+/// The same, given output frames per input frame — see [`Resampler::with_ratio`].
+pub fn convert_ratio(input: &[f32], ratio: f64, quality: Quality) -> Vec<f32> {
+    let want = (input.len() as f64 * ratio).round() as usize;
+    if input.is_empty() || want == 0 {
+        return vec![0.0; want];
+    }
+
+    let mut r = Resampler::with_ratio(ratio, quality, OFFLINE_BLOCK);
+    // Offline there is no such thing as "before the signal": output frame 0 is input frame 0. This
+    // is what makes the alignment exact rather than rounded to the nearest output frame.
+    let half = r.taps() / 2 + 1;
+    r.align_to_input();
+
+    let mut out = Vec::with_capacity(want + 2);
+    let mut scratch = vec![0.0f32; r.max_output(OFFLINE_BLOCK)];
+    for chunk in input.chunks(OFFLINE_BLOCK) {
+        let n = r.process(chunk, &mut scratch);
+        out.extend_from_slice(&scratch[..n]);
+    }
+    // A frame is only produced once its whole kernel has arrived, so the last half-kernel of the
+    // signal is still inside the filter. Silence pushes it out.
+    let flush = vec![0.0f32; half];
+    for chunk in flush.chunks(OFFLINE_BLOCK) {
+        let n = r.process(chunk, &mut scratch);
+        out.extend_from_slice(&scratch[..n]);
+    }
+
+    // Exact, not approximate: a host laying this on a timeline needs the length it computed.
+    out.resize(want, 0.0);
+    out
 }
 
 /// A symmetric Blackman window over `u ∈ [-1, 1]` (0 outside), for tapering the sinc.
@@ -423,6 +499,57 @@ mod tests {
             worst < 1e-3,
             "a matched rate changed the signal: worst {worst}"
         );
+    }
+
+    /// R2's own check, at the channel level: whatever goes in, the frame count that comes out is
+    /// the one a host computed from the two rates.
+    #[test]
+    fn convert_lands_on_the_exact_length() {
+        for (from, to) in [
+            (48_000, 44_100),
+            (44_100, 48_000),
+            (22_050, 48_000),
+            (96_000, 8_000),
+            (48_000, 48_000),
+            (8_000, 192_000),
+        ] {
+            for frames in [0, 1, 37, 4_800] {
+                let out = convert(&tone(440.0, from, 1.0)[..frames], from, to, Quality::Hq);
+                let want = (frames as f64 * f64::from(to) / f64::from(from)).round() as usize;
+                assert_eq!(out.len(), want, "{from} -> {to}, {frames} frames");
+            }
+        }
+    }
+
+    /// Alignment, against the only reference that cannot itself be misaligned: the tone the
+    /// converter is supposed to be producing. Output frame `i` must be the source at time
+    /// `i / to_fs` — one frame of slip at 1 kHz is 0.14 rad of phase, and even the half-frame a
+    /// rounded alignment would leave shows up as 0.02.
+    ///
+    /// Worst measured is 1.8e-6, which is f32 noise: the conversion is not approximately aligned,
+    /// it is aligned. The bound is set an order of magnitude above that and nothing more.
+    #[test]
+    fn convert_puts_the_signal_where_the_output_rate_says_it_is() {
+        for (from, to) in [(48_000u32, 44_100u32), (44_100, 48_000), (48_000, 96_000)] {
+            let out = convert(&tone(1000.0, from, 0.5), from, to, Quality::Hq);
+            // Skip the ends, where the kernel runs off the signal and the taper is real.
+            let worst = (2000..out.len() - 2000)
+                .map(|i| {
+                    let want =
+                        (std::f64::consts::TAU * 1000.0 * i as f64 / f64::from(to)).sin() as f32;
+                    (out[i] - want).abs()
+                })
+                .fold(0.0f32, f32::max);
+            assert!(worst < 1e-5, "{from} -> {to}: off by {worst}");
+        }
+    }
+
+    /// The same rate in and out is not a conversion, and must not behave like one: no filter, no
+    /// delay, the samples themselves.
+    #[test]
+    fn convert_at_a_matched_rate_is_the_input() {
+        let x = tone(1000.0, 48_000, 0.1);
+        assert_eq!(convert(&x, 48_000, 48_000, Quality::Hq), x);
     }
 
     #[test]

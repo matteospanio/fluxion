@@ -21,6 +21,25 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Added
 
+- **One project rate, set once (Epic R / R2)** — `transform::ensure_fs(signal, rate)` and its
+  spelling on each door: `fluxion --rate 48000` in the CLI, `fx.Wave.from_file(path, fs=48_000)` /
+  `wave.ensure_fs(48_000)` in Python, `ensureFs(samples, fromFs, toFs)` in the browser. A signal
+  already at the rate is handed straight back, not run through a filter for nothing — which is why
+  the Rust one takes the signal by value. The frame count is exactly `round(frames · to/from)`,
+  because that is the number a host computed for itself before asking.
+  There is now **one** sample-rate conversion in fluxion rather than two: `resample`, `speed` and
+  `ensure_fs` all run the streaming `Resampler` from R1, so a file imported whole and the same file
+  streamed through the worklet come out as the same samples. That also made the offline path about
+  **11× faster** (10 s of 48 k → 44.1 k in 42 ms, from 471 ms) — the old one evaluated a `sin()`
+  per tap per output sample where the streaming converter reads a precomputed table.
+  Alignment is the part worth stating: a whole-signal conversion has no run-up to compensate, so
+  `Resampler::align_to_input` puts output frame 0 on input frame 0 exactly. Rounding that
+  compensation to the nearest output frame instead — the obvious first version — left a fifth of a
+  frame of slip, visible as 0.022 of amplitude error on a 1 kHz tone. Aligned properly, a converted
+  1 kHz tone matches the sine its new rate implies to 1.8e-6, which is f32 noise. `Resampler` also
+  takes a ratio directly now (`with_ratio`), so a speed factor or a pitch interval is no longer
+  rounded into a pair of integer rates on the way in.
+
 - **Time tools: streaming resampler, time-stretch, pitch-shift (Epic R / R1, R3, R4 — completes
   milestone F-M4)** — three things a host needs and the offline converter could not give it.
   `Resampler` converts sample rates a block at a time with every buffer allocated in `new` and

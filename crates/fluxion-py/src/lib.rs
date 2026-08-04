@@ -374,6 +374,35 @@ fn read_audio(py: Python<'_>, path: &str) -> PyResult<(Py<PyArray2<f32>>, u32)> 
     Ok((arr.unbind(), fs))
 }
 
+/// Resample `data` from `from_fs` to `to_fs`, returning an array of the same shape with
+/// `round(frames · to_fs/from_fs)` frames (ROADMAP R2).
+///
+/// This is what backs `fluxion.Wave.ensure_fs`, and it is the same converter the CLI's `--rate` and
+/// the browser's `ensureFs` run — a project rate means one rate *and* one conversion.
+#[pyfunction]
+fn ensure_fs<'py>(
+    py: Python<'py>,
+    data: &Bound<'py, PyAny>,
+    from_fs: u32,
+    to_fs: u32,
+) -> PyResult<Bound<'py, PyAny>> {
+    if from_fs == 0 || to_fs == 0 {
+        return Err(PyValueError::new_err(format!(
+            "sample rates must be positive (got {from_fs} -> {to_fs})"
+        )));
+    }
+    let (channels, ndim) = as_channels(data)?;
+    let out = fluxion_ops::transform::ensure_fs(Signal::new(from_fs, channels), to_fs);
+    if ndim == 1 {
+        let ch = out.channels.into_iter().next().unwrap_or_default();
+        Ok(ch.into_pyarray_bound(py).into_any())
+    } else {
+        let arr = PyArray2::from_vec2_bound(py, &out.channels)
+            .map_err(|e| PyValueError::new_err(format!("output channels are ragged: {e}")))?;
+        Ok(arr.into_any())
+    }
+}
+
 /// Write a `(channels, frames)` (or 1-D) array to a WAV file at `fs`.
 ///
 /// `bits` is `None` for 32-bit float (lossless, the default) or 16 / 24 / 32 for dithered integer
@@ -639,6 +668,7 @@ fn _fluxion(m: &Bound<'_, PyModule>) -> PyResult<()> {
         ops_table,
         read_audio,
         write_audio,
+        ensure_fs,
         sos_forward,
         sos_backward,
         import_state_dict,

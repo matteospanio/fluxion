@@ -71,6 +71,28 @@ pub fn ops() -> Vec<String> {
     OpKind::all().iter().map(|k| k.name().to_string()).collect()
 }
 
+/// Resample one channel from `fromFs` to `toFs`, returning exactly
+/// `round(input.length · toFs/fromFs)` samples (ROADMAP R2).
+///
+/// A page decodes at whatever rate the file happens to be and plays at whatever rate the
+/// `AudioContext` picked; this is the step between. Input already at `toFs` is returned as it is.
+/// The converter is the one the native library and the CLI use, so a preview in the browser and
+/// the final render agree.
+#[wasm_bindgen(js_name = ensureFs)]
+pub fn ensure_fs(input: &[f32], from_fs: u32, to_fs: u32) -> Result<Vec<f32>, JsError> {
+    if from_fs == 0 || to_fs == 0 {
+        return Err(JsError::new(&format!(
+            "sample rates must be positive (got {from_fs} -> {to_fs})"
+        )));
+    }
+    Ok(fluxion::resample::convert(
+        input,
+        from_fs,
+        to_fs,
+        fluxion::resample::Quality::Hq,
+    ))
+}
+
 /// An effect chain: build it from text, run it over a buffer.
 ///
 /// The same graph the native library, the CLI, Python and C build — and the same text describes it

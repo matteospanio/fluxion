@@ -21,7 +21,7 @@ use std::f32::consts::TAU;
 
 use rustfft::{FftPlanner, num_complex::Complex};
 
-use crate::resample::{Quality, Resampler};
+use crate::resample::{Quality, convert_ratio};
 
 /// Windows overlapping at any point. Four is the usual choice for a phase vocoder: enough that the
 /// Hann window sums flat, few enough that the FFT count stays sane.
@@ -249,8 +249,8 @@ fn advance(k: usize, n: usize, ha: f32, hs: f32, phase: f32, prev: f32, accumula
 /// Pitch-shift by `cents`, keeping the duration.
 ///
 /// 1200 cents is an octave up, -1200 an octave down. Built the way R4 says: [`time_stretch`] by the
-/// pitch ratio, then [`Resampler`] the result back to the original length. The stretch moves the
-/// tempo and leaves the pitch; the resample moves both; what survives is pitch alone.
+/// pitch ratio, then [`convert_ratio`] back to the original length. The stretch moves the tempo and
+/// leaves the pitch; the resample moves both; what survives is pitch alone.
 ///
 /// The output is exactly `x.len()` samples.
 pub fn pitch_shift(x: &[f32], fs: u32, cents: f32) -> Vec<f32> {
@@ -263,33 +263,8 @@ pub fn pitch_shift(x: &[f32], fs: u32, cents: f32) -> Vec<f32> {
 
     // Stretch by `ratio`, then read back `ratio` times faster.
     let stretched = time_stretch(x, fs, ratio);
+    let mut out = convert_ratio(&stretched, 1.0 / f64::from(ratio), Quality::Hq);
 
-    // `Resampler` takes rates, not a ratio; a millionth is far finer than any pitch that can be
-    // heard, and far finer than R4's 1 Hz at 880.
-    let from = 1_000_000u32;
-    let to = ((f64::from(from) / f64::from(ratio)).round() as u32).max(1);
-
-    let block = 4096;
-    let mut r = Resampler::new(from, to, Quality::Hq, block);
-    // The filter is centred, so its output lags the input by half its length. Flushing that many
-    // extra zeros through pushes the real tail out; dropping that many output frames lines the
-    // start back up.
-    let drop = (r.latency() as f64 * f64::from(to) / f64::from(from)).round() as usize;
-    let mut fed = stretched;
-    fed.resize(fed.len() + r.latency() + block, 0.0);
-
-    let mut out = Vec::with_capacity(r.max_output(fed.len()));
-    let mut scratch = vec![0.0f32; r.max_output(block)];
-    for chunk in fed.chunks(block) {
-        let k = r.process(chunk, &mut scratch);
-        out.extend_from_slice(&scratch[..k]);
-    }
-
-    let mut out = if drop < out.len() {
-        out.split_off(drop)
-    } else {
-        Vec::new()
-    };
     // Exact duration: the roadmap's check, and the reason this is safe to expose as an op rather
     // than a geometry stage.
     out.resize(x.len(), 0.0);

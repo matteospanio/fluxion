@@ -47,10 +47,15 @@ class Wave:
     # --- construction -------------------------------------------------------------------------
 
     @classmethod
-    def from_file(cls, path: str | os.PathLike) -> "Wave":
-        """Read an audio file. WAV, FLAC, MP3, OGG — whatever the CLI reads, decoded identically."""
-        ys, fs = _fluxion.read_audio(os.fspath(path))
-        return cls(ys, fs, {"path": os.fspath(path)})
+    def from_file(cls, path: str | os.PathLike, fs: int | None = None) -> "Wave":
+        """Read an audio file. WAV, FLAC, MP3, OGG — whatever the CLI reads, decoded identically.
+
+        Pass ``fs`` to pin the result to a project rate: files already at it are not touched, the
+        rest are converted on the way in. ``metadata["source_fs"]`` remembers what the file was.
+        """
+        ys, file_fs = _fluxion.read_audio(os.fspath(path))
+        wave = cls(ys, file_fs, {"path": os.fspath(path)})
+        return wave if fs is None else wave.ensure_fs(fs)
 
     @staticmethod
     def _as_channels_first(ys) -> np.ndarray:
@@ -103,6 +108,23 @@ class Wave:
         out.metadata = dict(self.metadata)
         # Compose rather than apply: one pass at the end instead of one per effect.
         out._plan = effect if self._plan is None else (self._plan | effect)
+        return out
+
+    # --- sample rate --------------------------------------------------------------------------
+
+    def ensure_fs(self, fs: int) -> "Wave":
+        """This wave at ``fs``, converting only if it is not already there.
+
+        A host pins one project rate and puts every input through here; ``fs`` never has to be
+        thought about again. The result has exactly ``round(len(self) * fs / self.fs)`` frames.
+        """
+        fs = int(fs)
+        if fs <= 0:
+            raise ValueError(f"a sample rate must be positive, got {fs}")
+        if fs == self.fs:
+            return self
+        out = Wave(_fluxion.ensure_fs(self.ys, self.fs, fs), fs, self.metadata)
+        out.metadata["source_fs"] = self.fs
         return out
 
     # --- channels -----------------------------------------------------------------------------

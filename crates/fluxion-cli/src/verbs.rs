@@ -192,7 +192,7 @@ pub(crate) fn cmd_process(
         }
     }
 
-    align_rates(&mut signals, rate)?;
+    let mut signals = align_rates(signals, rate)?;
 
     let combined = match signals.len() {
         1 => signals.pop().unwrap(),
@@ -233,16 +233,17 @@ fn print_dry_run(inputs: &[String], stages: &[Stage], output: &str) {
     println!("out: {output}");
 }
 
-/// Bring inputs to a common sample rate. With `--rate`, resample every input to it; without it,
+/// Bring inputs to a common sample rate. With `--rate`, pin every input to it; without it,
 /// differing input rates are an error (matching SoX).
-fn align_rates(signals: &mut [Signal], rate: Option<u32>) -> Result<(), String> {
+///
+/// `--rate` is the CLI's half of ROADMAP R2: one project rate, set once, applied on the way in.
+/// Inputs already at it are not touched at all.
+fn align_rates(signals: Vec<Signal>, rate: Option<u32>) -> Result<Vec<Signal>, String> {
     if let Some(target) = rate {
-        for s in signals.iter_mut() {
-            if s.fs != target {
-                *s = transform::resample(s, target);
-            }
-        }
-        return Ok(());
+        return Ok(signals
+            .into_iter()
+            .map(|s| transform::ensure_fs(s, target))
+            .collect());
     }
     let rates: HashSet<u32> = signals.iter().map(|s| s.fs).collect();
     if rates.len() > 1 {
@@ -258,7 +259,7 @@ fn align_rates(signals: &mut [Signal], rate: Option<u32>) -> Result<(), String> 
              common rate"
         ));
     }
-    Ok(())
+    Ok(signals)
 }
 
 /// `fluxion batch <out-dir> <glob> [effect...]` — apply a filter chain to every file matching `glob`,
