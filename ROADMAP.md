@@ -263,7 +263,7 @@ engine, once, with tests.
 | ✅ F-M7 | **easy everywhere** | Four ten-line quickstarts run in CI; names come from one registry; `pip install` works without a Rust toolchain | The library people actually pick up |
 | ✅ F-M3 | **mastering complete** | Loudness, true peak, limiter and normalize as ops, ±0.1 LU vs ffmpeg | A full mastering chain with no external tool |
 | ✅ F-M4 | **time tools** | Streaming rate conversion on every input; stretch and pitch as separate controls, tested against a reference | Import at any rate, scrubbing, tempo and pitch edits |
-| F-M5 | **routing and taps** | A keyed gate works end to end; spectrum and meter taps are provably invisible to the audio | Duckers, keyed dynamics, live analysers |
+| ✅ F-M5 | **routing and taps** | A keyed gate works end to end; spectrum and meter taps are provably invisible to the audio | Duckers, keyed dynamics, live analysers |
 | F-M6 | **host-render ready** | Epic D done: a timeline of clips, fades and automation renders bit-exact, in one pass or in pieces, native and wasm | Fluxion as the single engine behind a timeline |
 
 **Reached so far.**
@@ -286,6 +286,22 @@ engine, once, with tests.
   with pyloudnorm and ffmpeg to within 0.058 LU, against the 0.1 LU the milestone asks for. True
   peak is pinned against analytic truth rather than a reference, because measurement showed ffmpeg
   reads up to 0.8 dB high near Nyquist — see `crates/fluxion-ops/tests/loudness_golden.rs`.
+- **F-M4 — time tools.** Streaming rate conversion (blocks in, blocks out, nothing allocated after
+  `new`), time-stretch and pitch-shift as separate controls. The converter agrees with
+  `scipy.signal.resample_poly` to 0.05 dB of a 1 dB bar and rejects a 23 kHz tone by 23.6 dB where
+  `resample_poly` manages 11.1; the stretcher tracks the source spectrum three to ten times closer
+  than Rubber Band on tonal material, and about 0.7 dB worse on noise, which is the transient
+  handling it does not have. `ensure_fs` pins every input path to one project rate, and there is one
+  sample-rate conversion in the crate rather than one per direction. See
+  [docs/time-stretch.md](docs/time-stretch.md).
+
+- **F-M5 — routing and taps.** A chain can carry a second signal: `side(0)` reads it and `<` keys an
+  op with it, so a gate on one track opens from another. Keying is transparent to every op that does
+  not declare a key input, and every existing algebra test passes unchanged. `meter` and `spectrum`
+  sit in the chain and measure without touching it — bit-identical audio with six taps in place,
+  which the design makes structural rather than promising it. The spectrum matches an independent
+  SciPy transform to 1.8e-7, and the meter's loudness is M1's own BS.1770 code.
+
 - **F-M7 — easy everywhere.** Five ten-line quickstarts run in CI (six lines to ten, against a
   budget of ten); every name comes from the one registry in `fluxion-core/src/op.rs`; `pip install`
   works with no Rust toolchain on Linux, macOS and Windows. See [docs/interfaces.md](docs/interfaces.md).
