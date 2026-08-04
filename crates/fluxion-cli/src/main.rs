@@ -88,6 +88,10 @@ struct Cli {
     #[arg(long)]
     mix: bool,
 
+    /// Signal read by `side(0)`, `side(1)`, …; repeat for more.
+    #[arg(long = "side", value_name = "FILE")]
+    sides: Vec<String>,
+
     /// Output bit depth 16/24/32 (default: 32-bit float).
     #[arg(long)]
     bits: Option<u16>,
@@ -169,6 +173,7 @@ fn run(cli: Cli) -> Result<(), String> {
             cli.fs,
             cli.rate,
             cli.mix,
+            &cli.sides,
             enc,
             cli.chain.as_deref(),
             cli.dry_run,

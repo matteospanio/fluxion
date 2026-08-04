@@ -218,6 +218,13 @@ export const OPS = Object.freeze({
     doc: "Pitch-shift by `cents`, keeping the length: 1200 cents is an octave up, -1200 an octave down. A phase vocoder stretches the material by the pitch ratio and a resampler plays it back that much faster, so the duration change cancels and the pitch change does not.",
     params: [{ name: "cents", unit: "linear", default: 0.0, min: -2400.0, max: 2400.0 }],
   },
+  "gate": {
+    name: "gate",
+    group: "effect",
+    variadic: false,
+    doc: "Noise gate: below `threshold` the signal is turned down by `range` dB, opening over `attack` seconds, staying open for at least `hold` after the level drops, and closing over `release`. `range` is a reduction, not a mute, because a gate that slams to silence is more audible than the noise it removed. Takes a key (the `<` operator): with one, the gate listens to that signal and acts on this one \u2014 a different microphone opening this channel. Written without `<` it listens to itself, which is an ordinary noise gate. Written *with* `<` but handed no signal it hears silence and closes, which is the safe reading of a key that went missing.",
+    params: [{ name: "threshold", unit: "db", default: -40.0, min: -100.0, max: 0.0 }, { name: "range", unit: "db", default: 60.0, min: 0.0, max: 120.0 }, { name: "attack", unit: "seconds", default: 0.001, min: 0.0, max: 1.0 }, { name: "hold", unit: "seconds", default: 0.01, min: 0.0, max: 5.0 }, { name: "release", unit: "seconds", default: 0.1, min: 0.0, max: 5.0 }],
+  },
 });
 
 /** Every op name, in catalog order. */

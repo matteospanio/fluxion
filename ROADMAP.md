@@ -210,9 +210,9 @@ not the end goal.
 
 | # | Task | Depends on | The check written first |
 |---|------|-----------|--------------------------|
-| [ ] S1 | Side inputs in the chain algebra: an op can declare a "key" input, connected when the chain is built; ops with one input behave exactly as before | — | All existing algebra tests pass unchanged; a two-input test op receives both signals sample-aligned |
-| [ ] S2 | Envelope follower (attack/release, peak and RMS) — the building block under gates, duckers and meters | — | A step input follows the attack curve within 1e-4; SciPy reference on noise |
-| [ ] S3 | Noise gate with optional key input (threshold, range, attack/hold/release) | S1, S2 | Below threshold the signal drops by exactly `range`; with a key, the gate follows the key, not the program |
+| [x] S1 | Side inputs in the chain algebra: an op can declare a "key" input, connected when the chain is built; ops with one input behave exactly as before | — | All existing algebra tests pass unchanged; a two-input test op receives both signals sample-aligned |
+| [x] S2 | Envelope follower (attack/release, peak and RMS) — the building block under gates, duckers and meters | — | A step input follows the attack curve within 1e-4; SciPy reference on noise |
+| [x] S3 | Noise gate with optional key input (threshold, range, attack/hold/release) | S1, S2 | Below threshold the signal drops by exactly `range`; with a key, the gate follows the key, not the program |
 | [ ] S4 | LFO and ADSR as parameter sources, defined with the same curves as automation | — | The same description gives identical curves in the batch and realtime engines |
 
 ## Epic A — Analysis taps
@@ -223,9 +223,9 @@ read, they never touch the audio.
 
 | # | Task | Depends on | The check written first |
 |---|------|-----------|--------------------------|
-| [ ] A1 | Observer nodes: an op that reads the stream and publishes a snapshot, provably invisible to the audio (no allocation, no change to the signal) | — | A chain with N observers produces bit-identical audio to the chain without them |
-| [ ] A2 | Spectrum tap (windowed FFT, size and overlap configurable) for analyser views | A1 | The spectrum of a known multitone matches SciPy within tolerance |
-| [ ] A3 | Meter taps: peak, RMS, and short-term loudness reusing M1's filters | A1, M1 | Short-term loudness of the standard fixture matches the offline meter within 0.1 LU |
+| [x] A1 | Observer nodes: an op that reads the stream and publishes a snapshot, provably invisible to the audio (no allocation, no change to the signal) | — | A chain with N observers produces bit-identical audio to the chain without them |
+| [x] A2 | Spectrum tap (windowed FFT, size and overlap configurable) for analyser views | A1 | The spectrum of a known multitone matches SciPy within tolerance |
+| [x] A3 | Meter taps: peak, RMS, and short-term loudness reusing M1's filters | A1, M1 | Short-term loudness of the standard fixture matches the offline meter within 0.1 LU |
 
 ## Epic N — Distortion + oversampling
 
@@ -263,7 +263,7 @@ engine, once, with tests.
 | ✅ F-M7 | **easy everywhere** | Four ten-line quickstarts run in CI; names come from one registry; `pip install` works without a Rust toolchain | The library people actually pick up |
 | ✅ F-M3 | **mastering complete** | Loudness, true peak, limiter and normalize as ops, ±0.1 LU vs ffmpeg | A full mastering chain with no external tool |
 | ✅ F-M4 | **time tools** | Streaming rate conversion on every input; stretch and pitch as separate controls, tested against a reference | Import at any rate, scrubbing, tempo and pitch edits |
-| F-M5 | **routing and taps** | A keyed gate works end to end; spectrum and meter taps are provably invisible to the audio | Duckers, keyed dynamics, live analysers |
+| ✅ F-M5 | **routing and taps** | A keyed gate works end to end; spectrum and meter taps are provably invisible to the audio | Duckers, keyed dynamics, live analysers |
 | F-M6 | **host-render ready** | Epic D done: a timeline of clips, fades and automation renders bit-exact, in one pass or in pieces, native and wasm | Fluxion as the single engine behind a timeline |
 
 **Reached so far.**
@@ -286,6 +286,22 @@ engine, once, with tests.
   with pyloudnorm and ffmpeg to within 0.058 LU, against the 0.1 LU the milestone asks for. True
   peak is pinned against analytic truth rather than a reference, because measurement showed ffmpeg
   reads up to 0.8 dB high near Nyquist — see `crates/fluxion-ops/tests/loudness_golden.rs`.
+- **F-M4 — time tools.** Streaming rate conversion (blocks in, blocks out, nothing allocated after
+  `new`), time-stretch and pitch-shift as separate controls. The converter agrees with
+  `scipy.signal.resample_poly` to 0.05 dB of a 1 dB bar and rejects a 23 kHz tone by 23.6 dB where
+  `resample_poly` manages 11.1; the stretcher tracks the source spectrum three to ten times closer
+  than Rubber Band on tonal material, and about 0.7 dB worse on noise, which is the transient
+  handling it does not have. `ensure_fs` pins every input path to one project rate, and there is one
+  sample-rate conversion in the crate rather than one per direction. See
+  [docs/time-stretch.md](docs/time-stretch.md).
+
+- **F-M5 — routing and taps.** A chain can carry a second signal: `side(0)` reads it and `<` keys an
+  op with it, so a gate on one track opens from another. Keying is transparent to every op that does
+  not declare a key input, and every existing algebra test passes unchanged. `meter` and `spectrum`
+  sit in the chain and measure without touching it — bit-identical audio with six taps in place,
+  which the design makes structural rather than promising it. The spectrum matches an independent
+  SciPy transform to 1.8e-7, and the meter's loudness is M1's own BS.1770 code.
+
 - **F-M7 — easy everywhere.** Five ten-line quickstarts run in CI (six lines to ten, against a
   budget of ten); every name comes from the one registry in `fluxion-core/src/op.rs`; `pip install`
   works with no Rust toolchain on Linux, macOS and Windows. See [docs/interfaces.md](docs/interfaces.md).

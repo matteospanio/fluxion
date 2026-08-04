@@ -160,13 +160,78 @@ impl Chain {
 
     /// `chain(x, fs)` — apply the chain, so a chain is simply callable. Same contract as
     /// [`process`](Self::process).
+    #[pyo3(signature = (x, fs, sides=None))]
     fn __call__<'py>(
         &self,
         py: Python<'py>,
         x: &Bound<'py, PyAny>,
         fs: u32,
+        sides: Option<Vec<Bound<'py, PyAny>>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        self.process(py, x, fs)
+        self.process(py, x, fs, sides)
+    }
+
+    /// Apply the chain and also return what its observer taps saw (ROADMAP A1).
+    ///
+    /// Returns `(audio, readings)`. The audio is bit-identical to [`process`](Self::process)'s — a
+    /// tap reads and never writes — so an analyser can live in the chain that renders. Each reading
+    /// is a dict: `label`, `kind`, and either `bin_hz` + `magnitude` for a spectrum or `peak_db`,
+    /// `rms_db` and `short_term_lufs` for a meter. They come back in the order the chain reaches
+    /// them.
+    #[pyo3(signature = (x, fs, sides=None))]
+    fn taps<'py>(
+        &self,
+        py: Python<'py>,
+        x: &Bound<'py, PyAny>,
+        fs: u32,
+        sides: Option<Vec<Bound<'py, PyAny>>>,
+    ) -> PyResult<(Bound<'py, PyAny>, Vec<Py<PyDict>>)> {
+        let (channels, ndim) = as_channels(x)?;
+        let sides: Vec<Signal> = sides
+            .unwrap_or_default()
+            .iter()
+            .map(|s| as_channels(s).map(|(c, _)| Signal::new(fs, c)))
+            .collect::<PyResult<_>>()?;
+        let side_refs: Vec<&Signal> = sides.iter().collect();
+        let (out, readings) = fluxion_backend::process_taps_with(
+            &self.graph,
+            &Signal::new(fs, channels),
+            &side_refs,
+        );
+
+        let audio = if ndim == 1 {
+            let ch = out.channels.into_iter().next().unwrap_or_default();
+            ch.into_pyarray_bound(py).into_any()
+        } else {
+            PyArray2::from_vec2_bound(py, &out.channels)
+                .map_err(|e| PyValueError::new_err(format!("output channels are ragged: {e}")))?
+                .into_any()
+        };
+
+        let mut out_readings = Vec::with_capacity(readings.len());
+        for reading in readings {
+            let d = PyDict::new_bound(py);
+            d.set_item("label", reading.label)?;
+            match reading.data {
+                fluxion_core::TapData::Spectrum { bin_hz, magnitude } => {
+                    d.set_item("kind", "spectrum")?;
+                    d.set_item("bin_hz", bin_hz)?;
+                    d.set_item("magnitude", magnitude.into_pyarray_bound(py))?;
+                }
+                fluxion_core::TapData::Meter {
+                    peak_db,
+                    rms_db,
+                    short_term_lufs,
+                } => {
+                    d.set_item("kind", "meter")?;
+                    d.set_item("peak_db", peak_db)?;
+                    d.set_item("rms_db", rms_db)?;
+                    d.set_item("short_term_lufs", short_term_lufs)?;
+                }
+            }
+            out_readings.push(d.unbind());
+        }
+        Ok((audio, out_readings))
     }
 
     /// The canonical chain text — the same string the CLI's `--chain`, `fluxion.chain()`, C's
@@ -180,14 +245,26 @@ impl Chain {
     /// time) — any DLPack tensor (numpy / torch / jax CPU) or array-like. For a *batch* of independent
     /// mono signals, iterate rows or use per-row `process` (parallel/cross-channel ops treat a 2-D
     /// input as one multichannel signal).
+    ///
+    /// `sides` supplies the extra signals a chain's `side(0)`, `side(1)`, … read (ROADMAP S1) — a
+    /// key for a gate, a source to duck against. They are taken to be at `fs` like the input, and
+    /// are read as silence past their end.
+    #[pyo3(signature = (x, fs, sides=None))]
     fn process<'py>(
         &self,
         py: Python<'py>,
         x: &Bound<'py, PyAny>,
         fs: u32,
+        sides: Option<Vec<Bound<'py, PyAny>>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let (channels, ndim) = as_channels(x)?;
-        let out = fluxion_backend::process(&self.graph, &Signal::new(fs, channels));
+        let sides: Vec<Signal> = sides
+            .unwrap_or_default()
+            .iter()
+            .map(|s| as_channels(s).map(|(c, _)| Signal::new(fs, c)))
+            .collect::<PyResult<_>>()?;
+        let side_refs: Vec<&Signal> = sides.iter().collect();
+        let out = fluxion_backend::process_with(&self.graph, &Signal::new(fs, channels), &side_refs);
         if ndim == 1 {
             let ch = out.channels.into_iter().next().unwrap_or_default();
             Ok(ch.into_pyarray_bound(py).into_any())

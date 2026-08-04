@@ -14,12 +14,15 @@
 //! Kernels operate on plain `&[f32]` / `&mut [f32]` channels; the graph executor in
 //! `fluxion-backend` applies them across a multichannel signal.
 
+pub mod analysis;
 pub mod chebyshev;
 pub mod delay;
 pub mod design;
 pub mod dynamics;
 pub mod effect;
 pub mod fir;
+pub mod follower;
+pub mod gate;
 pub mod iir;
 pub mod loudness;
 pub mod modulation;
@@ -31,6 +34,7 @@ pub mod stretch;
 pub mod transform;
 pub mod varispeed;
 
+pub use analysis::measure;
 pub use chebyshev::{
     chebyshev1_highpass, chebyshev1_lowpass, chebyshev2_highpass, chebyshev2_lowpass,
 };
@@ -43,6 +47,8 @@ pub use effect::{
 pub use fir::{
     FIR_FFT_THRESHOLD, fft_convolve, fir_filter, fir_filter_auto, fir_vjp, overlap_save,
 };
+pub use follower::{Detector, Follower, envelope};
+pub use gate::{gate, gate_keyed};
 pub use iir::{
     Biquad, BiquadGrad, Sos, biquad_forward, biquad_vjp, butterworth_highpass, butterworth_lowpass,
     sos_filter, sos_filter_in_place, sos_filter_interleaved, sos_filter_interleaved_chunk,

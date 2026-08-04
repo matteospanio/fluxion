@@ -9,6 +9,7 @@ Options:
       --fs <FS>       Reinterpret the input rate in Hz (no resampling)
       --rate <RATE>   Resample every input to this rate (Hz) first
       --mix           Sum multiple inputs instead of concatenating them
+      --side <FILE>   Signal read by `side(0)`, `side(1)`, …; repeat for more
       --bits <BITS>   Output bit depth 16/24/32 (default: 32-bit float)
       --float         Write 32-bit float output (the default)
       --no-dither     Disable TPDF dither on integer-PCM output

@@ -9,7 +9,9 @@
 #[cfg(feature = "cuda")]
 pub mod cuda;
 
-use fluxion_core::{FrozenSos, Graph, Op, OpKind, Signal};
+use std::cell::RefCell;
+
+use fluxion_core::{FrozenSos, Graph, Op, OpKind, Signal, TapData, TapKind, TapReading};
 use fluxion_ops::{
     Biquad, FadeShape, Sos, allpass, bandpass, butterworth_highpass, butterworth_lowpass,
     certify_sos, chebyshev1_highpass, chebyshev1_lowpass, chebyshev2_highpass, chebyshev2_lowpass,
@@ -26,10 +28,93 @@ pub use fluxion_ops::{Certificate, Verdict};
 /// `|` chains in order; `+` runs both branches on the same input and sums their outputs. This is
 /// [`eval`] over the [`Cpu`] backend — the same graph walk the differentiable Burn backend uses.
 pub fn process(graph: &Graph, input: &Signal) -> Signal {
+    process_with(graph, input, &[])
+}
+
+/// The same, with **side inputs** (ROADMAP S1): `sides[n]` is what `side(n)` reads.
+///
+/// A side signal shorter than the input reads as silence past its end, and a `side(n)` with no
+/// signal supplied reads as silence throughout — a chain built for two inputs still runs on one
+/// rather than refusing to. Side signals are used at their own sample positions, so they line up
+/// with the input frame for frame; bring them to a common rate with
+/// [`transform::ensure_fs`](fluxion_ops::transform::ensure_fs) first if they are not already.
+pub fn process_with(graph: &Graph, input: &Signal, sides: &[&Signal]) -> Signal {
+    let frames = input.frames();
+    let channels = input.channels.len();
+    // Match the side signals to the input's shape here, once, so the graph walk can treat them as
+    // ordinary buffers and every op downstream sees frame `i` of each.
+    let sides: Vec<Vec<Vec<f32>>> = sides
+        .iter()
+        .map(|s| conform(&s.channels, channels, frames))
+        .collect();
+    let ctx = Ctx {
+        sides: &sides,
+        key: None,
+        taps: None,
+        label: None,
+    };
     Signal::new(
         input.fs,
-        eval(&Cpu, graph, input.channels.clone(), input.fs),
+        eval_with(&Cpu, graph, input.channels.clone(), input.fs, &ctx),
     )
+}
+
+/// Run a graph and collect what its observer taps saw (ROADMAP A1).
+///
+/// The audio is bit-identical to [`process`]'s — a tap borrows the buffer to measure it and hands
+/// back the same one — so a host can leave its analysers in the chain and render from it.
+/// Readings come back in the order the chain reaches them, each carrying the label of the nearest
+/// enclosing `name:` if it had one.
+pub fn process_taps(graph: &Graph, input: &Signal) -> (Signal, Vec<TapReading>) {
+    process_taps_with(graph, input, &[])
+}
+
+/// [`process_taps`] with side inputs.
+pub fn process_taps_with(
+    graph: &Graph,
+    input: &Signal,
+    sides: &[&Signal],
+) -> (Signal, Vec<TapReading>) {
+    let frames = input.frames();
+    let channels = input.channels.len();
+    let sides: Vec<Vec<Vec<f32>>> = sides
+        .iter()
+        .map(|s| conform(&s.channels, channels, frames))
+        .collect();
+    let readings = RefCell::new(Vec::new());
+    let ctx = Ctx {
+        sides: &sides,
+        key: None,
+        taps: Some(&readings),
+        label: None,
+    };
+    let out = Signal::new(
+        input.fs,
+        eval_with(&Cpu, graph, input.channels.clone(), input.fs, &ctx),
+    );
+    (out, readings.into_inner())
+}
+
+/// Reshape a side signal to the input's channel count and length: pad with silence, drop the extra.
+///
+/// A mono key on a stereo programme is the common case and has one sensible reading — the same key
+/// for both channels — so it is done here rather than being an error the caller has to handle.
+fn conform(channels: &[Vec<f32>], want_channels: usize, want_frames: usize) -> Vec<Vec<f32>> {
+    (0..want_channels)
+        .map(|c| {
+            let src = if channels.len() == 1 {
+                channels.first()
+            } else {
+                channels.get(c)
+            };
+            let mut out = vec![0.0f32; want_frames];
+            if let Some(src) = src {
+                let n = src.len().min(want_frames);
+                out[..n].copy_from_slice(&src[..n]);
+            }
+            out
+        })
+        .collect()
 }
 
 /// The SOS cascade an op lowers to, if it is a (cascade of) biquad(s); `None` for non-filter ops.
@@ -182,6 +267,35 @@ pub trait Backend {
         unimplemented!("phaser is a CPU-only effect — guard with is_differentiable")
     }
 
+    /// Noise gate. `key` is the signal the level is measured on; `None` means the gate listens to
+    /// its own input, which is the ordinary case (ROADMAP S3).
+    #[allow(clippy::too_many_arguments)]
+    fn gate(
+        &self,
+        _x: Self::Buf,
+        _key: Option<Self::Buf>,
+        _threshold_db: f32,
+        _range_db: f32,
+        _attack_s: f32,
+        _hold_s: f32,
+        _release_s: f32,
+        _fs: u32,
+    ) -> Self::Buf {
+        unimplemented!("gate is a CPU-only effect — guard with is_differentiable")
+    }
+
+    /// Measure `x` without consuming it — an observer tap (ROADMAP A1).
+    ///
+    /// It takes the buffer by reference and returns only numbers, so there is no code path by
+    /// which a tap could alter the signal. That is what makes "invisible to the audio" a property
+    /// of the shape rather than of the implementation.
+    fn tap(&self, _x: &Self::Buf, _kind: TapKind, _fs: u32) -> TapData {
+        unimplemented!("taps read raw samples — guard with is_differentiable")
+    }
+
+    /// A buffer of silence shaped like `x` — what a [`Graph::Side`] with nothing connected reads.
+    fn zeros_like(&self, x: &Self::Buf) -> Self::Buf;
+
     /// Sum two buffers (the `+` parallel combine).
     fn add(&self, a: Self::Buf, b: Self::Buf) -> Self::Buf;
     /// A feedback loop (the `~` operator): `y[n] = forward(x[n] + feedback(y)[n-1])`. A backend that
@@ -193,21 +307,96 @@ pub trait Backend {
 /// Walk `graph`, dispatching each op to backend `b`'s kernels; `fs` converts delay/echo seconds to
 /// samples. Series composes, parallel runs both branches on the same input and [`Backend::add`]s.
 pub fn eval<B: Backend>(b: &B, graph: &Graph, x: B::Buf, fs: u32) -> B::Buf {
-    match graph {
-        Graph::Id => x,
-        Graph::Op(op) => eval_op(b, op, x, fs),
-        Graph::Series(a, c) => {
-            let y = eval(b, a, x, fs);
-            eval(b, c, y, fs)
+    eval_with(b, graph, x, fs, &Ctx::none())
+}
+
+/// What a graph walk can reach besides the signal in its hands: the side inputs, and the key in
+/// scope (ROADMAP S1).
+///
+/// Both are `None`/empty for an ordinary chain, which is why [`eval`] can hand one over without
+/// the caller knowing it exists.
+pub struct Ctx<'a, B: Backend> {
+    /// `sides[n]` is what `side(n)` reads. Shorter than the highest index used is not an error:
+    /// the missing ones read as silence.
+    pub sides: &'a [B::Buf],
+    /// The signal from the innermost enclosing `<`, offered to any op that declares a key input.
+    pub key: Option<&'a B::Buf>,
+    /// Where observer taps publish, and the label in scope for the next one.
+    ///
+    /// `None` means nobody is listening, and a tap then costs nothing at all — `process` does not
+    /// measure a spectrum the caller has no way to read.
+    taps: Option<&'a RefCell<Vec<TapReading>>>,
+    label: Option<&'a str>,
+}
+
+impl<B: Backend> Ctx<'_, B> {
+    /// No sides, no key — an ordinary one-input chain.
+    pub fn none() -> Self {
+        Ctx {
+            sides: &[],
+            key: None,
+            taps: None,
+            label: None,
         }
-        Graph::Parallel(a, c) => b.add(eval(b, a, x.clone(), fs), eval(b, c, x, fs)),
-        // A named node is transparent — it runs exactly as its inner node (B8 node identity).
-        Graph::Named { node, .. } => eval(b, node, x, fs),
-        Graph::Feedback { forward, feedback } => b.feedback(x, forward, feedback, fs),
     }
 }
 
-fn eval_op<B: Backend>(b: &B, op: &Op, x: B::Buf, fs: u32) -> B::Buf {
+/// [`eval`] with side inputs and a key in scope.
+pub fn eval_with<B: Backend>(b: &B, graph: &Graph, x: B::Buf, fs: u32, ctx: &Ctx<'_, B>) -> B::Buf {
+    match graph {
+        Graph::Id => x,
+        Graph::Op(op) => eval_op(b, op, x, fs, ctx),
+        Graph::Series(a, c) => {
+            let y = eval_with(b, a, x, fs, ctx);
+            eval_with(b, c, y, fs, ctx)
+        }
+        Graph::Parallel(a, c) => b.add(
+            eval_with(b, a, x.clone(), fs, ctx),
+            eval_with(b, c, x, fs, ctx),
+        ),
+        // A named node is transparent to the audio, but its name is what labels a tap inside it.
+        Graph::Named { name, node } => eval_with(
+            b,
+            node,
+            x,
+            fs,
+            &Ctx {
+                label: Some(name),
+                ..*ctx
+            },
+        ),
+        // Measure and pass the buffer straight on — the one that arrived, not a copy of it.
+        Graph::Tap(kind) => {
+            if let Some(sink) = ctx.taps {
+                let data = b.tap(&x, *kind, fs);
+                sink.borrow_mut().push(TapReading {
+                    label: ctx.label.map(str::to_string),
+                    data,
+                });
+            }
+            x
+        }
+        Graph::Feedback { forward, feedback } => b.feedback(x, forward, feedback, fs),
+        // A side input replaces the signal rather than joining it: what flows on from here is the
+        // side signal, and `+` is what puts the two back together.
+        Graph::Side(n) => match ctx.sides.get(*n) {
+            Some(side) => side.clone(),
+            None => b.zeros_like(&x),
+        },
+        // The key is evaluated on the same input the node gets, so `gate < side(0) | lowpass(200)`
+        // means "the side signal, low-passed" and not "this chain, low-passed".
+        Graph::Keyed { node, key } => {
+            let signal = eval_with(b, key, x.clone(), fs, ctx);
+            let inner = Ctx {
+                key: Some(&signal),
+                ..*ctx
+            };
+            eval_with(b, node, x, fs, &inner)
+        }
+    }
+}
+
+fn eval_op<B: Backend>(b: &B, op: &Op, x: B::Buf, fs: u32, ctx: &Ctx<'_, B>) -> B::Buf {
     if let Some(sos) = op_sos(op, fs) {
         return b.filter(x, &sos);
     }
@@ -228,6 +417,9 @@ fn eval_op<B: Backend>(b: &B, op: &Op, x: B::Buf, fs: u32) -> B::Buf {
         OpKind::Limiter => b.limiter(x, p[0], p[1], p[2], fs),
         OpKind::Loudnorm => b.loudnorm(x, p[0], p[1], fs),
         OpKind::PitchShift => b.pitchshift(x, p[0], fs),
+        // The only op reading the key today. `None` is not a failure: an unkeyed gate listens to
+        // its own input, which is what a noise gate is.
+        OpKind::Gate => b.gate(x, ctx.key.cloned(), p[0], p[1], p[2], p[3], p[4], fs),
         OpKind::Chorus => b.chorus(x, p[0], p[1], p[2], p[3], fs),
         OpKind::Flanger => b.flanger(x, p[0], p[1], p[2], p[3], p[4], fs),
         OpKind::Phaser => b.phaser(x, p[0], p[1], p[2], p[3], fs),
@@ -251,6 +443,11 @@ pub fn is_differentiable(graph: &Graph, fs: u32) -> bool {
         }
         Graph::Named { node, .. } => is_differentiable(node, fs),
         Graph::Feedback { .. } => false, // sample-recursive; not wired into the autodiff engine
+        // Routing, not arithmetic on the signal: the autodiff engine has one input and no key
+        // port, so a chain that uses either is not one it can lower.
+        Graph::Side(_) | Graph::Keyed { .. } => false,
+        // A tap reads raw samples, which a tensor the autograd tape owns will not hand over.
+        Graph::Tap(_) => false,
     }
 }
 
@@ -364,6 +561,40 @@ impl Backend for Cpu {
         }
         x
     }
+    /// Gate every channel. With a key, each channel is gated by the matching key channel — so a
+    /// stereo programme keyed by a stereo signal gates left by left, and keyed by a mono one gates
+    /// both by the same thing (`process_with` has already conformed the shape). Without a key, each
+    /// channel keys itself.
+    fn gate(
+        &self,
+        mut x: Vec<Vec<f32>>,
+        key: Option<Vec<Vec<f32>>>,
+        threshold_db: f32,
+        range_db: f32,
+        attack_s: f32,
+        hold_s: f32,
+        release_s: f32,
+        fs: u32,
+    ) -> Vec<Vec<f32>> {
+        for (c, ch) in x.iter_mut().enumerate() {
+            *ch = match key.as_ref().and_then(|k| k.get(c).or_else(|| k.first())) {
+                Some(k) => fluxion_ops::gate_keyed(
+                    ch,
+                    k,
+                    threshold_db,
+                    range_db,
+                    attack_s,
+                    hold_s,
+                    release_s,
+                    fs,
+                ),
+                None => {
+                    fluxion_ops::gate(ch, threshold_db, range_db, attack_s, hold_s, release_s, fs)
+                }
+            };
+        }
+        x
+    }
     fn limiter(
         &self,
         mut x: Vec<Vec<f32>>,
@@ -443,6 +674,12 @@ impl Backend for Cpu {
         }
         x
     }
+    fn tap(&self, x: &Vec<Vec<f32>>, kind: TapKind, fs: u32) -> TapData {
+        fluxion_ops::analysis::measure(x, kind, fs)
+    }
+    fn zeros_like(&self, x: &Vec<Vec<f32>>) -> Vec<Vec<f32>> {
+        x.iter().map(|c| vec![0.0; c.len()]).collect()
+    }
     /// Channel-by-channel sum, zero-padding to the longer of each pair (and the more channels).
     fn add(&self, a: Vec<Vec<f32>>, b: Vec<Vec<f32>>) -> Vec<Vec<f32>> {
         let n = a.len().max(b.len());
@@ -515,6 +752,11 @@ pub fn certify_graph(graph: &Graph, fs: u32) -> Certificate {
         Graph::Named { node, .. } => certify_graph(node, fs),
         // A general `~` loop's stability is a small-gain property of the *whole* loop; auto-certifying
         // an arbitrary feedback sub-graph isn't wired yet, so it carries no certificate (not shippable).
+        // A side input is a source, not a filter: it adds no poles, so it cannot destabilize
+        // anything. A keyed subchain is as stable as the subchain and its key together.
+        // Neither changes the signal at all, so neither can destabilize it.
+        Graph::Side(_) | Graph::Tap(_) => Certificate::certified(),
+        Graph::Keyed { node, key } => certify_graph(node, fs).worst(certify_graph(key, fs)),
         Graph::Feedback { .. } => Certificate {
             verdict: Verdict::NotCertified,
             margin: f32::NAN,
@@ -559,7 +801,10 @@ fn certify_op(op: &Op, fs: u32) -> Certificate {
         // signal and multiply by it, with no recirculation. The limiter's gain is bounded above by
         // 1 by construction, and loudnorm's is a constant per pass, so both are BIBO-stable.
         | OpKind::Limiter
-        | OpKind::Loudnorm => Certificate::certified(),
+        | OpKind::Loudnorm
+        // The gate multiplies by a gain that lives between its floor and 1 and never recirculates,
+        // so it can only ever make the signal quieter than the input it was given.
+        | OpKind::Gate => Certificate::certified(),
         // `OpKind` is `#[non_exhaustive]`; a new op must be classified above (or in `op_sos`) rather
         // than silently blessed as stable.
         kind => panic!(
@@ -584,7 +829,13 @@ pub fn graph_to_sos(graph: &Graph, fs: u32) -> Option<Sos> {
             Some(s)
         }
         Graph::Named { node, .. } => graph_to_sos(node, fs), // transparent
-        Graph::Parallel(..) | Graph::Feedback { .. } => None,
+        // Neither is one concatenated cascade: a side input is a different signal, and a key is
+        // a second one arriving beside it.
+        Graph::Parallel(..)
+        | Graph::Feedback { .. }
+        | Graph::Side(_)
+        | Graph::Keyed { .. }
+        | Graph::Tap(_) => None,
     }
 }
 
@@ -613,6 +864,11 @@ pub fn to_rt_graph(graph: &Graph, fs: u32) -> Option<RtGraph> {
         Graph::Parallel(a, b) => Some(RtGraph::parallel(to_rt_graph(a, fs)?, to_rt_graph(b, fs)?)),
         Graph::Named { node, .. } => to_rt_graph(node, fs), // transparent
         Graph::Feedback { .. } => None, // realtime `~` (an alloc-free feedback node) is a follow-up
+        // Realtime side inputs need a second ring per side signal, which is its own piece of work.
+        Graph::Side(_) | Graph::Keyed { .. } => None,
+        // A realtime tap has to publish without allocating or blocking the audio thread, which is
+        // a lock-free hand-off of its own — see the roadmap's realtime analysis work.
+        Graph::Tap(_) => None,
     }
 }
 

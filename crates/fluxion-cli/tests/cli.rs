@@ -332,6 +332,60 @@ fn multi_input_rate_mismatch_needs_rate_flag() {
     std::fs::remove_dir_all(&d).ok();
 }
 
+/// `--side` hands a second signal to the chain (ROADMAP S1/S3). The programme is loud and the key
+/// is silent, so a gate that listened to the programme would leave it open — the output being quiet
+/// is the whole check.
+#[test]
+fn side_flag_feeds_a_keyed_gate() {
+    let d = tmp("sidechain");
+    let (prog, key, out) = (d.join("prog.wav"), d.join("key.wav"), d.join("out.wav"));
+    let loud: Vec<f32> = (0..24_000).map(|i| (i as f32 * 0.13).sin() * 0.5).collect();
+    write_wav(&prog, 48_000, &loud);
+    write_wav(&key, 48_000, &vec![0.0; 24_000]);
+
+    let st = Command::new(bin())
+        .args([
+            "--side",
+            key.to_str().unwrap(),
+            "--chain",
+            "gate(-40, 60, 0.001, 0, 0.005) < side(0)",
+            prog.to_str().unwrap(),
+            out.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(st.success());
+
+    let peak = read_samples(&out)
+        .iter()
+        .fold(0.0f32, |m, v| m.max(v.abs()));
+    assert!(
+        peak < 0.01,
+        "a silent key should have closed the gate, peak {peak}"
+    );
+
+    // The control: the same chain with no key at all listens to the programme and stays open.
+    let st = Command::new(bin())
+        .args([
+            "--chain",
+            "gate(-40, 60, 0.001, 0, 0.005)",
+            prog.to_str().unwrap(),
+            out.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(st.success());
+    let peak = read_samples(&out)
+        .iter()
+        .fold(0.0f32, |m, v| m.max(v.abs()));
+    assert!(
+        peak > 0.4,
+        "an unkeyed gate on loud material closed, peak {peak}"
+    );
+
+    std::fs::remove_dir_all(&d).ok();
+}
+
 /// `--rate` is the project rate (ROADMAP R2): every input arrives at it, and each one's length
 /// follows its *own* source rate. Two seconds in, two seconds out, whatever the files were.
 #[test]

@@ -59,6 +59,35 @@ on it rather than near it.
 
 C is the exception, for the reason its whole surface is small: see "Not yet".
 
+## Side inputs
+
+Most chains carry one signal; a gate opened by a different microphone needs two. `side(0)` reads
+the first extra signal handed to the chain and `<` says which signal drives a keyed op — one
+grammar, so `gate(-35, 40) < side(0)` is the same string everywhere (roadmap S1). What differs is
+only how the extra signal is handed over:
+
+- **Rust** — `process_with(&graph, &input, &[&key])`.
+- **The CLI** — `fluxion --side key.wav --chain "gate(-35, 40) < side(0)" in.wav out.wav`.
+- **Python** — `chain(x, fs, sides=[key])`.
+- **JS** — `chain.processWith(samples, fs, [key])`.
+
+C is again the exception, and for the same reason: see "Not yet".
+
+## Observer taps
+
+`meter` and `spectrum(2048, 0.5)` sit in a chain like anything else and measure what flows past
+without touching it — the audio out of a tapped chain is bit-identical to the same chain without the
+taps (roadmap A1–A3). Because they are part of the chain text, every interface can *build* them; what
+differs is whether it can read the numbers back:
+
+- **Rust** — `process_taps(&graph, &input) -> (Signal, Vec<TapReading>)`.
+- **Python** — `chain.taps(x, fs)` returns `(audio, readings)`, each reading a dict.
+- **JS** — `chain.processTaps(samples, fs)` returns `{ audio, taps }`.
+- **The CLI and C** — can build a tapped chain, but have nowhere to put the readings; see "Not yet".
+
+A tap is labelled by the nearest enclosing `name:` — `analyser: spectrum(1024)` — and readings come
+back in the order the chain reaches them, so an unlabelled tap is still identifiable by position.
+
 ## Definition of done
 
 A pull request that adds or changes an op is finished when all of these are true:
@@ -120,6 +149,19 @@ commitment that never expires. A C host that needs a project rate today can run 
 source's own rate, or convert with whatever its platform already provides. If one asks, the shape to
 add is `fx_ensure_fs(in, n, from_fs, to_fs, out, cap)` returning the frames written, the same
 `snprintf` convention as `fx_graph_to_text`.
+
+**Side inputs in C.** `fx_process` takes one buffer, and a second would mean a second entry point
+with its own length and channel rules. The gap is the same shape as `ensure_fs` above and the answer
+is the same: the C surface is the small stable core, and a host that needs a key today can run the
+key chain itself and multiply. `fx_process_with(graph, buf, sides, n_sides, frames, channels, fs)`
+is the signature to add if one asks.
+
+**Tap readings on the CLI and in C.** Both can *build* a chain containing `meter` or `spectrum` —
+it is ordinary chain text, and the taps are correctly invisible to the audio — but neither has
+anywhere to put the numbers. The CLI would need an output format for them (`--taps out.json` is the
+obvious shape, and `fluxion stat` already covers the common case of "measure this file"); C would
+need a struct per reading and an ownership rule for the magnitude array, which is the kind of ABI
+commitment the header exists to avoid making early. Neither is blocked on anything but a decision.
 
 **`.to(device)` in Python.** torchfx has it because its arrays are torch tensors. Fluxion's Python
 API is an Array-API *consumer* over NumPy, and its GPU path is in the batch backend, not in the

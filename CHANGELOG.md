@@ -21,6 +21,51 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Added
 
+- **Observer taps: analysis that reads the chain and never touches it (Epic A / A1, A2, A3 —
+  completes milestone F-M5)** — `meter` and `spectrum(2048, 0.5)` sit in a chain like anything else
+  and measure what flows past. Invisible to the audio is **structural**, not promised: a tap is a
+  different kind of node from an op, the executor hands it the buffer to borrow, and the buffer that
+  carries on is the one that arrived — there is no code path by which it could return anything else.
+  The check compares a chain with six taps against the same chain without them, bit for bit.
+  The spectrum is a Hann-windowed FFT averaged over frames, scaled so a partial reads its own
+  amplitude rather than a number proportional to it — the part an analyser gets wrong quietly.
+  Checked against an independently written SciPy rfft over four size/overlap combinations: worst
+  disagreement 1.8e-7, which is f32 noise. The meter reports peak, RMS and the loudest 3 s window,
+  the last straight from M1's BS.1770 code. All three in decibels, because a meter is a decibel
+  instrument and a reading that mixes units is how a caller ends up drawing a linear number on a dB
+  scale; silence reads `-inf` rather than 0, which on that scale would mean full scale.
+  Readings come back in chain order, labelled by the nearest enclosing `name:`. Rust, Python and
+  the browser can read them (`process_taps`, `chain.taps`, `chain.processTaps`); the CLI and C can
+  build a tapped chain but have nowhere to put the numbers, and `docs/interfaces.md` says what each
+  would need.
+
+- **Side inputs, and the gate that proves they work (Epic S / S1, S3)** — a chain could only ever
+  carry one signal, which is the one thing standing between fluxion and a ducker, a keyed gate or
+  any other two-input effect. Two additions to the algebra: `side(0)` reads a second signal handed
+  to the chain, and `<` says which signal drives a keyed op — `gate(-35, 40) < side(0)`. The same
+  string on every interface, with only the delivery differing: `process_with` in Rust, `--side` on
+  the CLI, `sides=[...]` in Python, `processWith` in the browser. C is deliberately left out and
+  `docs/interfaces.md` says why and what the signature would be.
+  The two halves are checked separately because they fail differently. Alignment: two identical
+  tones, one inverted, summed through `id + side(0)` cancel to under 1e-6 — and the same test slips
+  the side signal by a single frame to confirm it would have noticed (6.5 % of the amplitude left
+  over at 1 kHz). Transparency: keying a chain of ops that do not read a key produces the identical
+  samples, and every algebra test in the repo passes unchanged.
+  `gate` is the first op to declare a key input. Below the threshold it drops the signal by exactly
+  `range` dB — measured within 0.1 dB at 6, 20 and 60 — and `hold` rides over a dip so it does not
+  chatter. A silent key shuts it on loud material; a loud key holds it open on quiet material. An
+  unconnected `side(n)` is silence, so a keyed gate handed no key **closes**: a key that went
+  missing should shut the gate rather than quietly fall back to opening it.
+
+- **Envelope follower (Epic S / S2)** — `Follower`, one pole with separate attack and release, peak
+  or RMS. The block under gates, duckers and meters; not an op, because what comes out is a control
+  signal. Checked two ways, because the two halves need different oracles: with attack and release
+  equal it is a plain one-pole and is compared sample-for-sample against SciPy's `lfilter` (worst
+  disagreement 1.2e-6 across four cases), and the asymmetric case — which has no LTI reference at
+  all — is checked against the closed-form curves, a step following `1 - a^n` and silence decaying
+  as `r^n`, both within 1e-4. `CompandCoeffs::design` now takes its coefficient from the same
+  place, so an attack time means one thing across the crate.
+
 - **Realtime varispeed (Epic R / R5)** — `varispeed::Varispeed`: playback speed that moves while it
   is playing, for scrubbing and tape effects. Pull rather than push, because a callback needs
   exactly the block it asked for and how much input that takes is the part that varies —

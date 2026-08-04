@@ -40,8 +40,9 @@ impl CompandCoeffs {
         makeup_db: f32,
         fs: u32,
     ) -> CompandCoeffs {
-        // exp(-1/(t·fs)): t = 0 -> 1/0 = +inf -> coefficient 0 (env jumps straight to |x|).
-        let coef = |t: f32| (-1.0 / (t.max(0.0) * fs as f32)).exp();
+        // Shared with the standalone follower, so an attack time means the same thing in a
+        // compressor as in a gate or a meter.
+        let coef = |t: f32| crate::follower::smoothing_coef(t, fs);
         CompandCoeffs {
             attack: coef(attack_s),
             release: coef(release_s),

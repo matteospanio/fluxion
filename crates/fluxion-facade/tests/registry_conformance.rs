@@ -43,6 +43,7 @@ fn every_builder() -> Vec<Graph> {
         limiter(-1.0, 0.005, 0.05),
         loudnorm(-14.0, -1.0),
         pitchshift(0.0),
+        gate(-40.0, 60.0, 0.001, 0.01, 0.1),
     ]
 }
 

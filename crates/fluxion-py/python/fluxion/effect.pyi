@@ -49,3 +49,6 @@ class Phaser(Chain):
 
 class PitchShift(Chain):
     def __new__(cls, cents: float = ...) -> PitchShift: ...
+
+class Gate(Chain):
+    def __new__(cls, threshold: float = ..., range: float = ..., attack: float = ..., hold: float = ..., release: float = ...) -> Gate: ...

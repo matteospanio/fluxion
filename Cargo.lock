@@ -2730,6 +2730,7 @@ dependencies = [
  "console_error_panic_hook",
  "fluxion",
  "fluxion-rt",
+ "js-sys",
  "serde_json",
  "wasm-bindgen",
 ]
