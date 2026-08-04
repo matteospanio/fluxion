@@ -211,7 +211,7 @@ not the end goal.
 | # | Task | Depends on | The check written first |
 |---|------|-----------|--------------------------|
 | [ ] S1 | Side inputs in the chain algebra: an op can declare a "key" input, connected when the chain is built; ops with one input behave exactly as before | — | All existing algebra tests pass unchanged; a two-input test op receives both signals sample-aligned |
-| [ ] S2 | Envelope follower (attack/release, peak and RMS) — the building block under gates, duckers and meters | — | A step input follows the attack curve within 1e-4; SciPy reference on noise |
+| [x] S2 | Envelope follower (attack/release, peak and RMS) — the building block under gates, duckers and meters | — | A step input follows the attack curve within 1e-4; SciPy reference on noise |
 | [ ] S3 | Noise gate with optional key input (threshold, range, attack/hold/release) | S1, S2 | Below threshold the signal drops by exactly `range`; with a key, the gate follows the key, not the program |
 | [ ] S4 | LFO and ADSR as parameter sources, defined with the same curves as automation | — | The same description gives identical curves in the batch and realtime engines |
 
