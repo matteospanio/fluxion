@@ -210,6 +210,12 @@ const CASES: &[Case] = &[
         name: "pitchshift",
         chain: "pitchshift(1200)",
     },
+    Case {
+        // A threshold the fixture's own level crosses, so the gate is seen opening and closing
+        // rather than sitting at one end of its range.
+        name: "gate",
+        chain: "gate(-20, 24, 0.002, 0.02, 0.05)",
+    },
     // --- topologies, not ops: the algebra has to survive the trip too ---
     Case {
         name: "chain:series",

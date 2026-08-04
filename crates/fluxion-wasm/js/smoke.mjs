@@ -6,7 +6,7 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-import init, { ensureFs, version } from "./pkg/fluxion_wasm.js";
+import init, { Chain, ensureFs, version } from "./pkg/fluxion_wasm.js";
 
 const wasm = fileURLToPath(new URL("./pkg/fluxion_wasm_bg.wasm", import.meta.url));
 await init({ module_or_path: await readFile(wasm) });
@@ -38,7 +38,32 @@ if (ensureFs(tone, 48_000, 48_000).length !== tone.length) {
   throw new Error("ensureFs at a matched rate should hand the samples back");
 }
 
+// Side inputs (roadmap S1): the same chain text as every other interface, and the key is what
+// decides. A loud programme with a silent key has to come out shut.
+const gated = Chain.fromText("gate(-40, 60, 0.001, 0, 0.005) < side(0)");
+if (gated.sideInputs() !== 1) {
+  throw new Error(`the chain reads ${gated.sideInputs()} side inputs, expected 1`);
+}
+const silentKey = new Float32Array(tone.length);
+const shut = gated.processWith(tone, 48_000, [silentKey]);
+const shutPeak = shut.slice(24_000).reduce((m, s) => Math.max(m, Math.abs(s)), 0);
+if (!(shutPeak < 0.01)) {
+  throw new Error(`a silent key should have closed the gate; peak ${shutPeak}`);
+}
+// The control is the same gate with no key *written* — that one listens to itself, and on this
+// material stays wide open. (Keeping the `< side(0)` and simply not supplying the signal is a
+// different thing: an unconnected side input is silence, so the gate shuts. That is deliberate —
+// a gate whose key went missing should close, not fall back to opening itself.)
+const openPeak = Chain.fromText("gate(-40, 60, 0.001, 0, 0.005)")
+  .process(tone, 48_000)
+  .slice(24_000)
+  .reduce((m, s) => Math.max(m, Math.abs(s)), 0);
+if (!(openPeak > 0.9)) {
+  throw new Error(`an unkeyed gate on loud material closed; peak ${openPeak}`);
+}
+
 console.log(
   `fluxion wasm smoke OK (version ${v}) — ensureFs 48k->44.1k exact to ${at44k.length} frames, ` +
-    `tone within ${worst.toExponential(1)}`,
+    `tone within ${worst.toExponential(1)}; keyed gate shut to ${shutPeak.toExponential(1)}, ` +
+    `unkeyed ${openPeak.toFixed(2)}`,
 );

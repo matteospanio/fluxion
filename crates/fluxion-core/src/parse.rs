@@ -17,12 +17,14 @@
 //! Loosest binding to tightest:
 //!
 //! ```text
-//! chain    = feedback ;
+//! chain    = keyed ;
+//! keyed    = feedback [ "<" feedback ] ;      (* non-associative *)
 //! feedback = series [ "~" series ] ;          (* non-associative *)
 //! series   = parallel { "|" parallel } ;      (* left-associative *)
 //! parallel = labeled { "+" labeled } ;        (* left-associative *)
 //! labeled  = ident ":" labeled | primary ;    (* the label binds tightest *)
-//! primary  = "id" | op | "(" chain ")" ;
+//! primary  = "id" | side | op | "(" chain ")" ;
+//! side     = "side" "(" digits ")" ;          (* a second input, numbered from 0 *)
 //! op       = ident [ "(" [ args ] ")" | "=" values ] ;
 //! args     = arg { "," arg } ;
 //! arg      = number | ident "=" number ;      (* positional first, then named *)
@@ -33,6 +35,14 @@
 //!
 //! `+` binds tighter than `|`, matching Rust's and Python's operator precedence — so
 //! `a | b + c | d` is `a | (b + c) | d` and needs no parentheses.
+//!
+//! # Side inputs and keys
+//!
+//! `side(0)` reads the first extra signal handed to the chain instead of what is flowing down it,
+//! and `<` says which signal drives a keyed op: `gate(-35, 40) < side(0)` gates the programme by
+//! the side signal. The key runs on the same input the node was given, so
+//! `gate(-35) < side(0) | lowpass(200)` low-passes the *key*. Only ops that declare a key input
+//! read it, so keying a chain of ordinary ops changes nothing.
 //!
 //! # Filling in parameters
 //!
@@ -165,6 +175,7 @@ enum Tok {
     Pipe,
     Plus,
     Tilde,
+    Lt,
     Comma,
     Colon,
     Eq,
@@ -182,6 +193,7 @@ impl Tok {
             Tok::Pipe => "|",
             Tok::Plus => "+",
             Tok::Tilde => "~",
+            Tok::Lt => "<",
             Tok::Comma => ",",
             Tok::Colon => ":",
             Tok::Eq => "=",
@@ -227,6 +239,7 @@ fn lex(src: &str) -> Result<Vec<Spanned<'_>>, ParseError> {
             b'|' => (Tok::Pipe, 0),
             b'+' => (Tok::Plus, 0),
             b'~' => (Tok::Tilde, 0),
+            b'<' => (Tok::Lt, 0),
             b',' => (Tok::Comma, 0),
             b':' => (Tok::Colon, 0),
             b'=' => (Tok::Eq, 0),
@@ -374,6 +387,25 @@ impl<'a> Parser<'a> {
     }
 
     fn chain(&mut self) -> Result<Graph, ParseError> {
+        let node = self.feedback()?;
+        if self.peek().tok != Tok::Lt {
+            return Ok(node);
+        }
+        self.bump();
+        let key = self.feedback()?;
+        // `<` is non-associative for the same reason `~` is: `a < b < c` has no agreed reading.
+        let t = self.peek();
+        if t.tok == Tok::Lt {
+            return Err(
+                ParseError::new(t.start, t.text.len(), "'<' cannot be chained").with_help(Some(
+                    "bracket the key you mean, e.g. '(a < b) < c'".to_string(),
+                )),
+            );
+        }
+        Ok(node.keyed(key))
+    }
+
+    fn feedback(&mut self) -> Result<Graph, ParseError> {
         let forward = self.series()?;
         if self.peek().tok != Tok::Tilde {
             return Ok(forward);
@@ -433,6 +465,7 @@ impl<'a> Parser<'a> {
                 self.bump();
                 Ok(Graph::Id)
             }
+            Tok::Ident if t.text == "side" => self.side(),
             Tok::Ident => self.op(),
             _ => Err(ParseError::new(
                 t.start,
@@ -440,6 +473,33 @@ impl<'a> Parser<'a> {
                 format!("expected an op name, found {}", found(t)),
             )),
         }
+    }
+
+    /// `side(0)` — read a side signal instead of the chain's own input. Not an op: it takes no
+    /// parameters, it takes an *input index*, which is why it is spelled out here next to `id`
+    /// rather than being a row in the registry.
+    fn side(&mut self) -> Result<Graph, ParseError> {
+        let name = self.bump();
+        self.expect(Tok::LParen)?;
+        let index = self.number()?;
+        self.expect(Tok::RParen)?;
+
+        let n = index.raw;
+        if !n.is_finite() || n < 0.0 || n.fract() != 0.0 || !index.suffix.is_empty() {
+            return Err(ParseError::new(
+                index.span.start,
+                index.span.text.len(),
+                format!(
+                    "a side input is numbered 0, 1, 2, … — '{}' is not",
+                    index.span.text
+                ),
+            )
+            .with_help(Some(format!(
+                "'{}(0)' is the first side signal handed to the chain",
+                name.text
+            ))));
+        }
+        Ok(Graph::Side(n as usize))
     }
 
     fn op(&mut self) -> Result<Graph, ParseError> {

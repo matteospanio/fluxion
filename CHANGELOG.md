@@ -21,6 +21,33 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Added
 
+- **Side inputs, and the gate that proves they work (Epic S / S1, S3)** — a chain could only ever
+  carry one signal, which is the one thing standing between fluxion and a ducker, a keyed gate or
+  any other two-input effect. Two additions to the algebra: `side(0)` reads a second signal handed
+  to the chain, and `<` says which signal drives a keyed op — `gate(-35, 40) < side(0)`. The same
+  string on every interface, with only the delivery differing: `process_with` in Rust, `--side` on
+  the CLI, `sides=[...]` in Python, `processWith` in the browser. C is deliberately left out and
+  `docs/interfaces.md` says why and what the signature would be.
+  The two halves are checked separately because they fail differently. Alignment: two identical
+  tones, one inverted, summed through `id + side(0)` cancel to under 1e-6 — and the same test slips
+  the side signal by a single frame to confirm it would have noticed (6.5 % of the amplitude left
+  over at 1 kHz). Transparency: keying a chain of ops that do not read a key produces the identical
+  samples, and every algebra test in the repo passes unchanged.
+  `gate` is the first op to declare a key input. Below the threshold it drops the signal by exactly
+  `range` dB — measured within 0.1 dB at 6, 20 and 60 — and `hold` rides over a dip so it does not
+  chatter. A silent key shuts it on loud material; a loud key holds it open on quiet material. An
+  unconnected `side(n)` is silence, so a keyed gate handed no key **closes**: a key that went
+  missing should shut the gate rather than quietly fall back to opening it.
+
+- **Envelope follower (Epic S / S2)** — `Follower`, one pole with separate attack and release, peak
+  or RMS. The block under gates, duckers and meters; not an op, because what comes out is a control
+  signal. Checked two ways, because the two halves need different oracles: with attack and release
+  equal it is a plain one-pole and is compared sample-for-sample against SciPy's `lfilter` (worst
+  disagreement 1.2e-6 across four cases), and the asymmetric case — which has no LTI reference at
+  all — is checked against the closed-form curves, a step following `1 - a^n` and silence decaying
+  as `r^n`, both within 1e-4. `CompandCoeffs::design` now takes its coefficient from the same
+  place, so an attack time means one thing across the crate.
+
 - **Realtime varispeed (Epic R / R5)** — `varispeed::Varispeed`: playback speed that moves while it
   is playing, for scrubbing and tape effects. Pull rather than push, because a callback needs
   exactly the block it asked for and how much input that takes is the part that varies —

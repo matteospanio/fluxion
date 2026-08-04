@@ -330,6 +330,23 @@ ops! {
     PitchShift => "pitchshift", Effect, [
         ParamSpec::new("cents", Unit::Linear, 0.0, -2400.0, 2400.0),
     ];
+
+    /// Noise gate: below `threshold` the signal is turned down by `range` dB, opening over `attack`
+    /// seconds, staying open for at least `hold` after the level drops, and closing over `release`.
+    /// `range` is a reduction, not a mute, because a gate that slams to silence is more audible than
+    /// the noise it removed.
+    ///
+    /// Takes a **key** (the `<` operator): with one, the gate listens to that signal and acts on
+    /// this one — a different microphone opening this channel. Written without `<` it listens to
+    /// itself, which is an ordinary noise gate. Written *with* `<` but handed no signal it hears
+    /// silence and closes, which is the safe reading of a key that went missing.
+    Gate => "gate", Effect, [
+        ParamSpec::new("threshold", Unit::Db, -40.0, -100.0, 0.0),
+        ParamSpec::new("range", Unit::Db, 60.0, 0.0, 120.0),
+        ParamSpec::new("attack", Unit::Seconds, 0.001, 0.0, 1.0),
+        ParamSpec::new("hold", Unit::Seconds, 0.010, 0.0, 5.0),
+        ParamSpec::new("release", Unit::Seconds, 0.100, 0.0, 5.0),
+    ];
 }
 
 impl OpKind {
@@ -339,6 +356,20 @@ impl OpKind {
     /// one, each within the single spec's bounds".
     pub fn is_variadic(self) -> bool {
         matches!(self, OpKind::Fir)
+    }
+
+    /// Whether this op declares a **key** input (ROADMAP S1): a second signal that drives it,
+    /// separate from the audio passing through.
+    ///
+    /// A keyed op is still a one-input op when nothing keys it — it falls back to listening to its
+    /// own input, which is what a gate with no side chain should do. The key is supplied by
+    /// [`Graph::Keyed`](crate::Graph::Keyed), written `<` in chain text.
+    ///
+    /// Like [`is_variadic`](OpKind::is_variadic) this is a short hand-written list rather than a
+    /// column in the `ops!` table: it is a property of two or three ops, and a column would put an
+    /// empty field on all thirty.
+    pub fn takes_key(self) -> bool {
+        matches!(self, OpKind::Gate)
     }
 
     /// Look up a kind by its text name (inverse of [`OpKind::name`]).

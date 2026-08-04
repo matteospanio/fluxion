@@ -160,13 +160,15 @@ impl Chain {
 
     /// `chain(x, fs)` — apply the chain, so a chain is simply callable. Same contract as
     /// [`process`](Self::process).
+    #[pyo3(signature = (x, fs, sides=None))]
     fn __call__<'py>(
         &self,
         py: Python<'py>,
         x: &Bound<'py, PyAny>,
         fs: u32,
+        sides: Option<Vec<Bound<'py, PyAny>>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        self.process(py, x, fs)
+        self.process(py, x, fs, sides)
     }
 
     /// The canonical chain text — the same string the CLI's `--chain`, `fluxion.chain()`, C's
@@ -180,14 +182,26 @@ impl Chain {
     /// time) — any DLPack tensor (numpy / torch / jax CPU) or array-like. For a *batch* of independent
     /// mono signals, iterate rows or use per-row `process` (parallel/cross-channel ops treat a 2-D
     /// input as one multichannel signal).
+    ///
+    /// `sides` supplies the extra signals a chain's `side(0)`, `side(1)`, … read (ROADMAP S1) — a
+    /// key for a gate, a source to duck against. They are taken to be at `fs` like the input, and
+    /// are read as silence past their end.
+    #[pyo3(signature = (x, fs, sides=None))]
     fn process<'py>(
         &self,
         py: Python<'py>,
         x: &Bound<'py, PyAny>,
         fs: u32,
+        sides: Option<Vec<Bound<'py, PyAny>>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let (channels, ndim) = as_channels(x)?;
-        let out = fluxion_backend::process(&self.graph, &Signal::new(fs, channels));
+        let sides: Vec<Signal> = sides
+            .unwrap_or_default()
+            .iter()
+            .map(|s| as_channels(s).map(|(c, _)| Signal::new(fs, c)))
+            .collect::<PyResult<_>>()?;
+        let side_refs: Vec<&Signal> = sides.iter().collect();
+        let out = fluxion_backend::process_with(&self.graph, &Signal::new(fs, channels), &side_refs);
         if ndim == 1 {
             let ch = out.channels.into_iter().next().unwrap_or_default();
             Ok(ch.into_pyarray_bound(py).into_any())

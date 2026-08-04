@@ -189,3 +189,17 @@ def test_db_matches_the_chain_text_suffix():
     assert fx.db(0.0) == pytest.approx(1.0)
     assert fx.db(-6.0) == pytest.approx(0.5011872)
     assert str(fx.effect.Gain(fx.db(-3))) == str(fx.chain("gain=-3dB"))
+
+
+def test_chain_takes_side_inputs():
+    """ROADMAP S1/S3: a keyed gate follows the key, not the programme."""
+    loud = (np.sin(2 * np.pi * 1000 * np.arange(FS) / FS) * 0.5).astype(np.float32)
+    silent = np.zeros(FS, dtype=np.float32)
+
+    keyed = fx.chain("gate(-40, 60, 0.001, 0, 0.005) < side(0)")
+    shut = keyed(loud, FS, sides=[silent])
+    assert np.abs(shut[FS // 2 :]).max() < 0.01
+
+    # The same gate written without a key listens to itself and stays open.
+    plain = fx.chain("gate(-40, 60, 0.001, 0, 0.005)")(loud, FS)
+    assert np.abs(plain[FS // 4 :]).max() > 0.4

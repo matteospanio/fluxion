@@ -17,7 +17,7 @@
 //! * `fir --taps 0.5,0.3,0.2` supplies the whole (variadic) tap vector.
 
 use fluxion::suggest;
-use fluxion::{Graph, Op, OpKind, Signal, fxg, process, transform};
+use fluxion::{Graph, Op, OpKind, Signal, fxg, process_with, transform};
 
 /// Parse a numeric CLI value: a plain float, optionally with a `k`/`K` SI suffix (`×1000`).
 ///
@@ -241,10 +241,11 @@ pub(crate) enum Stage {
 }
 
 impl Stage {
-    /// Apply this stage to a signal, producing the next signal.
-    pub(crate) fn apply(&self, sig: Signal) -> Signal {
+    /// Apply this stage to a signal, with the side signals `side(n)` reads (ROADMAP S1). Only a
+    /// graph stage can use them; the geometry stages take one signal by definition.
+    pub(crate) fn apply_with(&self, sig: Signal, sides: &[&Signal]) -> Signal {
         match self {
-            Stage::Graph(g) => process(g, &sig),
+            Stage::Graph(g) => process_with(g, &sig, sides),
             Stage::Trim { start, len, end } => {
                 let len_s = match (len, end) {
                     (Some(l), _) => *l,
@@ -274,9 +275,14 @@ impl Stage {
 }
 
 /// Run a stage pipeline left to right.
-pub(crate) fn run_stages(stages: &[Stage], mut signal: Signal) -> Signal {
+pub(crate) fn run_stages(stages: &[Stage], signal: Signal) -> Signal {
+    run_stages_with(stages, signal, &[])
+}
+
+/// The same, with the side signals `--side` supplied.
+pub(crate) fn run_stages_with(stages: &[Stage], mut signal: Signal, sides: &[&Signal]) -> Signal {
     for stage in stages {
-        signal = stage.apply(signal);
+        signal = stage.apply_with(signal, sides);
     }
     signal
 }

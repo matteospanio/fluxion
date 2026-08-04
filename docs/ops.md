@@ -2,7 +2,7 @@
 
 # The op catalog
 
-30 ops, generated from the single table in
+31 ops, generated from the single table in
 [`crates/fluxion-core/src/op.rs`](../crates/fluxion-core/src/op.rs). The rule this table
 exists to enforce is in [interfaces.md](interfaces.md): **an op ships on every interface,
 or this document says why not.**
@@ -43,6 +43,7 @@ same op as a function and a class respectively, both named from the row below.
 | `loudnorm` | `prelude::loudnorm` | `fluxion.effect.Loudnorm` | via chain text |
 | `phaser` | `prelude::phaser` | `fluxion.effect.Phaser` | via chain text |
 | `pitchshift` | `prelude::pitchshift` | `fluxion.effect.PitchShift` | via chain text |
+| `gate` | `prelude::gate` | `fluxion.effect.Gate` | via chain text |
 
 ## What each op does
 
@@ -167,6 +168,10 @@ same op as a function and a class respectively, both named from the row below.
 **`pitchshift(cents=0)`** — Pitch-shift by `cents`, keeping the length: 1200 cents is an octave up, -1200 an octave down. A phase vocoder stretches the material by the pitch ratio and a resampler plays it back that much faster, so the duration change cancels and the pitch change does not.
 
 > `cents` -2400..2400
+
+**`gate(threshold=-40, range=60, attack=0.001, hold=0.01, release=0.1)`** — Noise gate: below `threshold` the signal is turned down by `range` dB, opening over `attack` seconds, staying open for at least `hold` after the level drops, and closing over `release`. `range` is a reduction, not a mute, because a gate that slams to silence is more audible than the noise it removed. Takes a key (the `<` operator): with one, the gate listens to that signal and acts on this one — a different microphone opening this channel. Written without `<` it listens to itself, which is an ordinary noise gate. Written *with* `<` but handed no signal it hears silence and closes, which is the safe reading of a key that went missing.
+
+> `threshold` -100..0 dB · `range` 0..120 dB · `attack` 0..1 s · `hold` 0..5 s · `release` 0..5 s
 
 ## Geometry stages (CLI only)
 

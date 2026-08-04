@@ -60,6 +60,23 @@ fn corpus() -> Vec<Graph> {
     out.push(a().feedback(b()).feedback(c()));
     out.push(a().feedback(b().feedback(c())));
 
+    // Side inputs and keys (ROADMAP S1). `<` is the loosest operator, so what is worth pinning is
+    // that a composite on either side survives a reparse.
+    out.push(Graph::side(0));
+    out.push(Graph::side(3));
+    out.push(Graph::side(0) | b());
+    out.push(a() + Graph::side(1));
+    out.push(a().keyed(Graph::side(0)));
+    out.push(a().keyed(Graph::side(0) | b()));
+    out.push((a() | b()).keyed(Graph::side(0)));
+    out.push((a() + b()).keyed(c()));
+    out.push(a().keyed(b().feedback(c())));
+    out.push(Graph::named("gated", a().keyed(Graph::side(0))));
+    out.push(a().keyed(Graph::side(0)) | b());
+    out.push(b() | a().keyed(Graph::side(0)));
+    out.push(a().keyed(Graph::side(0)) + b());
+    out.push(a().keyed(Graph::side(0)).keyed(b()));
+
     // Something deep enough to exercise the bracketing rules together.
     out.push(((a() | b()) + (c() | a())) | Graph::named("tail", b() + c()));
 

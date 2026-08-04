@@ -101,12 +101,14 @@ error: op 'lowpass' parameter 'cutoff' = -5 is out of range [0, inf]
 Loosest binding to tightest:
 
 ```ebnf
-chain    = feedback ;
+chain    = keyed ;
+keyed    = feedback [ "<" feedback ] ;      (* non-associative *)
 feedback = series [ "~" series ] ;          (* non-associative *)
 series   = parallel { "|" parallel } ;      (* left-associative *)
 parallel = labeled { "+" labeled } ;        (* left-associative *)
 labeled  = ident ":" labeled | primary ;    (* the label binds tightest *)
-primary  = "id" | op | "(" chain ")" ;
+primary  = "id" | side | op | "(" chain ")" ;
+side     = "side" "(" digits ")" ;          (* a second input, numbered from 0 *)
 op       = ident [ "(" [ args ] ")" | "=" values ] ;
 args     = arg { "," arg } ;
 arg      = number | ident "=" number ;      (* positional first, then named *)
@@ -118,5 +120,29 @@ ident    = ( alpha | "_" ) { alpha | digit | "_" } ;
 
 There is no subtraction operator, so a leading `-` always starts a number; conversely `+` is always
 the parallel operator, so numbers are never written with a leading `+`.
+
+## Side inputs and keys
+
+Most chains carry one signal. Some need two: a gate on a drum overhead opened by the snare's own
+microphone, a bass ducked by a kick. `side(0)` reads the first extra signal handed to the chain
+instead of what is flowing down it, and `<` says which signal drives a keyed op:
+
+```
+gate(-35, 40) < side(0)                  # gated by the first side input
+gate(-35, 40) < side(0) | lowpass(200)   # ...listening only to its low end
+lowpass(800) + side(0)                   # not a key at all: just mixing a second signal in
+```
+
+`<` is the loosest operator and does not chain: bracket what you mean, as with `~`. The key runs on
+the same input the node was given, so the low-pass above filters the *key*, not the programme.
+
+Only ops that declare a key input read it — `gate` is the one today — so keying a chain of ordinary
+ops changes nothing. A `side(n)` with no signal connected reads as silence, which is what lets the
+same chain text be handed to an interface that has no way to pass a second signal. Note what that
+means for a gate: `gate(...) < side(0)` run without a side signal hears silence and *closes*. That
+is deliberate — a key that went missing should shut the gate, not quietly fall back to opening it.
+
+Side signals are supplied per interface: `--side file.wav` on the CLI, `process_with` in Rust,
+`sides=[...]` in Python, `processWith` in the browser.
 
 The implementation is [`crates/fluxion-core/src/parse.rs`](../crates/fluxion-core/src/parse.rs).

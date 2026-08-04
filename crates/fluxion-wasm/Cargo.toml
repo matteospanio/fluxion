@@ -23,6 +23,10 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 wasm-bindgen = "0.2"
+# The canonical companion of wasm-bindgen, and the only way to accept a *list* of typed arrays.
+# Taking one flat buffer instead would have given the browser a different shape of side-input API
+# from every other interface, which is the drift docs/interfaces.md exists to prevent.
+js-sys = "0.3"
 # The facade, which is wasm-clean: it does not pull fluxion-io (Symphonia/hound), and CubeCL is
 # behind the `cuda` feature. WebGPU via wgpu arrives with the GPU path (roadmap W8).
 # `realtime` brings in the allocation-free block executor and the lock-free ring the

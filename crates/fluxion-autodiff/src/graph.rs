@@ -54,6 +54,11 @@ impl<B: BurnBackend, K: CheckpointStrategy> Backend for BurnAd<B, K> {
     fn add(&self, a: Self::Buf, b: Self::Buf) -> Self::Buf {
         a + b
     }
+    /// Never reached in practice — `is_differentiable` rejects a graph with a side input before it
+    /// gets here — but the trait needs it and zeros of the right shape is the honest answer.
+    fn zeros_like(&self, x: &Self::Buf) -> Self::Buf {
+        x.clone().zeros_like()
+    }
     fn feedback(
         &self,
         _x: Self::Buf,

@@ -38,6 +38,24 @@ pub enum Graph {
         /// The wrapped subgraph.
         node: Box<Graph>,
     },
+    /// A **side input** (ROADMAP S1): read side signal `n` instead of what came down the chain.
+    ///
+    /// The one thing a series/parallel tree of one-input nodes cannot say: *this* audio, not the
+    /// audio flowing here. A kick drum ducking a bass, a different microphone opening a gate. The
+    /// side signals are handed to `process_with` when the chain runs; a side that was not supplied
+    /// reads as silence, so a chain built for two inputs still runs on one rather than failing.
+    Side(usize),
+    /// A subgraph and the **key** feeding it (the `<` operator, ROADMAP S1).
+    ///
+    /// `key` is evaluated on whatever `node` was given, and its output is offered to every op
+    /// inside `node` that declares a key input ([`OpKind::takes_key`]). Ops that do not are
+    /// untouched, which is what keeps every one-input chain behaving exactly as before.
+    Keyed {
+        /// The subgraph being keyed.
+        node: Box<Graph>,
+        /// The signal that drives it — typically a [`Graph::Side`], possibly filtered.
+        key: Box<Graph>,
+    },
     /// A **feedback** loop (the `~` operator) — the third construct a series/parallel *tree* cannot
     /// encode, because it needs a cycle (plan task B8). Semantics: `y[n] = forward(x[n] +
     /// feedback(y)[n-1])`; the one-sample delay on the loop-back path breaks the algebraic loop so it
@@ -68,6 +86,35 @@ impl Graph {
         }
     }
 
+    /// Key `self` with `key` (the `<` operator): every op inside `self` that declares a key input
+    /// is driven by `key`'s output instead of by the audio passing through it.
+    pub fn keyed(self, key: Graph) -> Graph {
+        Graph::Keyed {
+            node: Box::new(self),
+            key: Box::new(key),
+        }
+    }
+
+    /// Read side signal `index` instead of the chain's own input — see [`Graph::Side`].
+    pub fn side(index: usize) -> Graph {
+        Graph::Side(index)
+    }
+
+    /// The highest side-input index the graph reaches for, plus one: how many side signals it
+    /// wants. Zero for an ordinary one-input chain.
+    pub fn side_inputs(&self) -> usize {
+        match self {
+            Graph::Side(n) => n + 1,
+            Graph::Id | Graph::Op(_) => 0,
+            Graph::Series(a, b) | Graph::Parallel(a, b) => a.side_inputs().max(b.side_inputs()),
+            Graph::Named { node, .. } => node.side_inputs(),
+            Graph::Keyed { node, key } => node.side_inputs().max(key.side_inputs()),
+            Graph::Feedback { forward, feedback } => {
+                forward.side_inputs().max(feedback.side_inputs())
+            }
+        }
+    }
+
     /// Wrap `self` in a feedback loop with `feedback` on the loop-back path (the `~` operator):
     /// `y[n] = self(x[n] + feedback(y)[n-1])`. Pass [`Graph::Id`] for a plain unit-delay feedback.
     pub fn feedback(self, feedback: Graph) -> Graph {
@@ -80,10 +127,12 @@ impl Graph {
     /// Number of leaf ops in the graph (structural size; [`Graph::Id`] counts as zero).
     pub fn leaf_count(&self) -> usize {
         match self {
-            Graph::Id => 0,
+            Graph::Id | Graph::Side(_) => 0,
             Graph::Op(_) => 1,
             Graph::Series(a, b) | Graph::Parallel(a, b) => a.leaf_count() + b.leaf_count(),
             Graph::Named { node, .. } => node.leaf_count(),
+            // The key is part of the chain and its ops are real ops, so they count.
+            Graph::Keyed { node, key } => node.leaf_count() + key.leaf_count(),
             Graph::Feedback { forward, feedback } => forward.leaf_count() + feedback.leaf_count(),
         }
     }
@@ -105,7 +154,8 @@ impl Graph {
             Graph::Feedback { forward, feedback } => forward
                 .find_named(name)
                 .or_else(|| feedback.find_named(name)),
-            Graph::Id | Graph::Op(_) => None,
+            Graph::Keyed { node, key } => node.find_named(name).or_else(|| key.find_named(name)),
+            Graph::Id | Graph::Op(_) | Graph::Side(_) => None,
         }
     }
 
@@ -135,6 +185,13 @@ impl Graph {
                 ya.iter().zip(yb).map(|(x, y)| x + y).collect()
             }
             Graph::Named { node, .. } => node.eval_ref(input),
+            // The reference interpreter has one input, so a side signal is the silence a chain
+            // gets when nothing was connected — the same answer the real engine gives.
+            Graph::Side(_) => vec![0.0; input.len()],
+            // No op wired into `eval_ref` reads a key, so keying is transparent here. That is not a
+            // simplification: it is the property S1 has to have, checked in the backend where the
+            // keyed ops actually live.
+            Graph::Keyed { node, .. } => node.eval_ref(input),
             // y[n] = forward(x[n] + feedback(y)[n-1]); reference is sample-by-sample, so the
             // sub-paths must be **stateless** here (Id / Gain) — the same scope as the rest of
             // `eval_ref`. The stateful engines run feedback in the backend (`fluxion-backend`).
@@ -206,7 +263,29 @@ impl fmt::Display for Graph {
                 _ => write!(f, "{name}: ({node})"),
             },
             Graph::Feedback { forward, feedback } => write!(f, "({forward} ~ {feedback})"),
+            Graph::Side(n) => write!(f, "side({n})"),
+            // `<` is the loosest operator and non-associative, so a composite on either side has to
+            // say where it ends — the same reason `Feedback` brackets itself.
+            Graph::Keyed { node, key } => {
+                write_keyed_child(f, node)?;
+                f.write_str(" < ")?;
+                write_keyed_child(f, key)
+            }
         }
+    }
+}
+
+/// Bracket anything that is not a primary, since `<` binds looser than `|`, `+` and `~`.
+fn write_keyed_child(f: &mut fmt::Formatter<'_>, g: &Graph) -> fmt::Result {
+    match g {
+        Graph::Id
+        | Graph::Op(_)
+        | Graph::Side(_)
+        | Graph::Named { .. }
+        | Graph::Feedback { .. } => {
+            write!(f, "{g}")
+        }
+        _ => write!(f, "({g})"),
     }
 }
 
@@ -223,6 +302,9 @@ fn write_child(
     let needs_parens = match g {
         Graph::Series(..) => !parent_series || right,
         Graph::Parallel(..) => parent_series || right,
+        // `<` is looser than both, so a keyed subchain inside either needs brackets whichever side
+        // it is on.
+        Graph::Keyed { .. } => true,
         // Leaves, labels and feedback loops are already unambiguous on their own.
         _ => false,
     };

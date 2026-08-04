@@ -22,6 +22,7 @@ __all__ = [
     "Fade",
     "Flanger",
     "Gain",
+    "Gate",
     "Limiter",
     "Loudnorm",
     "Normalize",
@@ -241,3 +242,23 @@ class PitchShift(Chain):
 
     def __new__(cls, cents: float = 0.0) -> "PitchShift":
         return _make(cls, "pitchshift", cents)
+
+
+class Gate(Chain):
+    """Noise gate: below `threshold` the signal is turned down by `range` dB, opening over `attack`
+    seconds, staying open for at least `hold` after the level drops, and closing over `release`.
+    `range` is a reduction, not a mute, because a gate that slams to silence is more audible than
+    the noise it removed. Takes a key (the `<` operator): with one, the gate listens to that signal
+    and acts on this one — a different microphone opening this channel. Written without `<` it
+    listens to itself, which is an ordinary noise gate. Written *with* `<` but handed no signal it
+    hears silence and closes, which is the safe reading of a key that went missing.
+
+    threshold: default -40.0, range -100.0..0.0 dB
+    range: default 60.0, range 0.0..120.0 dB
+    attack: default 0.001, range 0.0..1.0 s
+    hold: default 0.01, range 0.0..5.0 s
+    release: default 0.1, range 0.0..5.0 s
+    """
+
+    def __new__(cls, threshold: float = -40.0, range: float = 60.0, attack: float = 0.001, hold: float = 0.01, release: float = 0.1) -> "Gate":
+        return _make(cls, "gate", threshold, range, attack, hold, release)

@@ -36,7 +36,8 @@ export type OpName =
   | "limiter"
   | "loudnorm"
   | "phaser"
-  | "pitchshift";
+  | "pitchshift"
+  | "gate";
 
 /** Which section of the catalog an op belongs to. */
 export type OpGroup = "filter" | "effect";

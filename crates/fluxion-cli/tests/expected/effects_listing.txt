@@ -111,6 +111,12 @@ effects (graph ops — compose with the geometry stages below):
       --mix          <lin>   [0.5]
   pitchshift
       --cents        <lin>   [0]
+  gate
+      --threshold    <dB>   [-40]
+      --range        <dB>   [60]
+      --attack       <s>   [0.001]
+      --hold         <s>   [0.01]
+      --release      <s>   [0.1]
 
 geometry stages (change frames / rate / channels):
   trim — keep a [start, start+len) window (or [start, end)); drops the rest

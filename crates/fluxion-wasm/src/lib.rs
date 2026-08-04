@@ -131,6 +131,34 @@ impl Chain {
         out.channels.into_iter().next().unwrap_or_default()
     }
 
+    /// Render with **side inputs**: `sides[n]` is what `side(n)` in the chain reads (ROADMAP S1).
+    ///
+    /// A gate on one track opened by another, a bass ducked by a kick. Side signals are taken to be
+    /// at `fs` like the input and read as silence past their end; a `side(n)` with nothing supplied
+    /// is silence throughout, so the same chain text still runs through `process`.
+    #[wasm_bindgen(js_name = processWith)]
+    pub fn process_with(
+        &self,
+        samples: &[f32],
+        fs: u32,
+        sides: Vec<js_sys::Float32Array>,
+    ) -> Vec<f32> {
+        let sides: Vec<Signal> = sides
+            .iter()
+            .map(|s| Signal::new(fs, vec![s.to_vec()]))
+            .collect();
+        let refs: Vec<&Signal> = sides.iter().collect();
+        let out =
+            fluxion::process_with(&self.graph, &Signal::new(fs, vec![samples.to_vec()]), &refs);
+        out.channels.into_iter().next().unwrap_or_default()
+    }
+
+    /// How many side inputs this chain reads — 0 for an ordinary one-input chain.
+    #[wasm_bindgen(js_name = sideInputs)]
+    pub fn side_inputs(&self) -> usize {
+        self.graph.side_inputs()
+    }
+
     /// How many leaf ops the chain has — enough for a page to show what it built.
     #[wasm_bindgen(js_name = opCount)]
     pub fn op_count(&self) -> usize {

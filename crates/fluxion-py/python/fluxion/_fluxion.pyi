@@ -14,13 +14,13 @@ class Chain:
     """
 
     def __new__(cls, name: str | None = ..., *params: float) -> Chain: ...
-    def __call__(self, x: F32, fs: int) -> F32:
+    def __call__(self, x: F32, fs: int, sides: list[F32] | None = ...) -> F32:
         """Apply the chain at ``fs`` — the same thing as :meth:`process`, so a chain is callable."""
         ...
     def __str__(self) -> str:
         """The canonical chain text, which :func:`chain` reads back."""
         ...
-    def process(self, x: F32, fs: int) -> F32:
+    def process(self, x: F32, fs: int, sides: list[F32] | None = ...) -> F32:
         """Apply the chain at ``fs`` to a 1-D ``(T,)`` or 2-D ``(C, T)`` float32 array (same shape out)."""
         ...
     def process_batch(self, x: F32, fs: int) -> F32:

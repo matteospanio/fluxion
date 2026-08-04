@@ -22,8 +22,8 @@
 //! <!-- quickstart:end -->
 
 pub use fluxion_backend::{
-    Backend, Certificate, Cpu, Verdict, certify_graph, eval, graph_to_sos, is_differentiable,
-    process, process_batch, sos_filter_batch,
+    Backend, Certificate, Cpu, Ctx, Verdict, certify_graph, eval, eval_with, graph_to_sos,
+    is_differentiable, process, process_batch, process_with, sos_filter_batch,
 };
 pub use fluxion_core::{
     FORMAT_VERSION, Graph, Group, LoadError, Op, OpError, OpKind, ParamSpec, ParseError, Signal,
@@ -243,6 +243,24 @@ pub mod prelude {
     /// Pitch-shift by `cents`, keeping the length. 1200 cents is an octave up.
     pub fn pitchshift(cents: f32) -> Graph {
         Graph::op(OpKind::PitchShift, [cents])
+    }
+
+    /// Noise gate: below `threshold` dB the signal drops by `range` dB, opening over `attack`
+    /// seconds, staying open `hold` after the level falls, closing over `release`.
+    ///
+    /// Key it with a different signal using [`Graph::keyed`] — `gate(...).keyed(Graph::side(0))` —
+    /// and run it with `process_with`.
+    pub fn gate(
+        threshold_db: f32,
+        range_db: f32,
+        attack_s: f32,
+        hold_s: f32,
+        release_s: f32,
+    ) -> Graph {
+        Graph::op(
+            OpKind::Gate,
+            [threshold_db, range_db, attack_s, hold_s, release_s],
+        )
     }
 
     /// Phaser: LFO-swept all-pass cascade with feedback — `rate` Hz, `depth` (0..1), `feedback`,

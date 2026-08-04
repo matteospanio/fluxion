@@ -10,7 +10,9 @@ use fluxion_io::{
     read_wav_blocks, read_wav_from, write_wav_encoded, write_wav_encoded_to,
 };
 
-use crate::chain::{STAGES, Stage, parse_chain, parse_stages, parse_value, run_stages, stage_doc};
+use crate::chain::{
+    STAGES, Stage, parse_chain, parse_stages, parse_value, run_stages, run_stages_with, stage_doc,
+};
 
 /// `-` (std stream) and `-n` (null sink) are not real file paths.
 pub(crate) fn is_stream(path: &str) -> bool {
@@ -102,11 +104,13 @@ pub(crate) fn write_output(output: &str, signal: &Signal, enc: WavEncoding) -> R
 /// Leading args that are existing files or `-` are inputs (the first arg is always an input); the
 /// last arg is the output. Multiple inputs concatenate by default, or sum with `--mix`. A sample-rate
 /// mismatch across inputs is an error unless `--rate HZ` is given (each input is resampled to it).
+#[allow(clippy::too_many_arguments)] // one parameter per global flag; a struct would only rename them
 pub(crate) fn cmd_process(
     args: &[String],
     fs: Option<u32>,
     rate: Option<u32>,
     mix_inputs: bool,
+    side_paths: &[String],
     enc: WavEncoding,
     chain_text: Option<&str>,
     dry_run: bool,
@@ -175,7 +179,9 @@ pub(crate) fn cmd_process(
     // in fixed blocks — read → per-channel RtGraph → write — instead of loaded whole.
     // The streaming executor is block-size invariant and the streamed WAV writer is
     // byte-identical to the buffered one, so the output matches the buffered path.
-    if rate.is_none() && !mix_inputs && inputs.len() == 1 {
+    // The streaming path runs one signal through a realtime graph; a side input is a second
+    // signal it has no way to carry, so a chain that uses one takes the buffered path.
+    if rate.is_none() && !mix_inputs && inputs.len() == 1 && side_paths.is_empty() {
         let streamed = try_stream_process(&inputs[0], &stages, output, fs, enc)?;
         if streamed {
             return Ok(());
@@ -206,7 +212,15 @@ pub(crate) fn cmd_process(
         }
     };
 
-    let out = run_stages(&stages, combined);
+    // Side signals are brought to the programme's rate on the way in, for the same reason every
+    // other input is: two signals at different rates do not line up frame for frame.
+    let sides: Vec<Signal> = side_paths
+        .iter()
+        .map(|p| load_input(p).map(|s| transform::ensure_fs(s, combined.fs)))
+        .collect::<Result<_, _>>()?;
+    let side_refs: Vec<&Signal> = sides.iter().collect();
+
+    let out = run_stages_with(&stages, combined, &side_refs);
     write_output(output, &out, enc)
 }
 
