@@ -51,6 +51,10 @@ pub use fluxion_ops::transform;
 /// signal is already at the project rate.
 pub use fluxion_ops::resample;
 
+/// Playback speed that moves while it plays — scrubbing, tape effects. Allocation-free per block
+/// and anti-aliased up to the speed it was built for; see [`varispeed::Varispeed`].
+pub use fluxion_ops::varispeed;
+
 /// The Jury-triangle stability projection for flat `[b0,b1,b2,a1,a2]·K` coefficient vectors (plan
 /// task E8) — clamps every section's `(a1, a2)` strictly inside the stable region. Used by
 /// `fluxion import --project-stable` to tame an unstable trained checkpoint before certification.

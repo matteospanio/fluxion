@@ -31,7 +31,7 @@ pub enum Quality {
 impl Quality {
     /// Zero crossings of the sinc on each side. Taps per phase is about twice this, divided by the
     /// cutoff when downsampling.
-    fn zeros(self) -> f32 {
+    pub(crate) fn zeros(self) -> f32 {
         match self {
             Quality::Fast => 8.0,
             Quality::Hq => 32.0,
@@ -309,7 +309,7 @@ pub fn convert_ratio(input: &[f32], ratio: f64, quality: Quality) -> Vec<f32> {
 }
 
 /// A symmetric Blackman window over `u ∈ [-1, 1]` (0 outside), for tapering the sinc.
-fn blackman(u: f32) -> f32 {
+pub(crate) fn blackman(u: f32) -> f32 {
     if u.abs() > 1.0 {
         0.0
     } else {
@@ -318,7 +318,7 @@ fn blackman(u: f32) -> f32 {
 }
 
 /// Normalized sinc `sin(πx)/(πx)`, `sinc(0) = 1`.
-fn sinc(x: f32) -> f32 {
+pub(crate) fn sinc(x: f32) -> f32 {
     if x.abs() < 1e-8 {
         1.0
     } else {

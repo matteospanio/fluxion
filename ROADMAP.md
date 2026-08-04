@@ -183,7 +183,7 @@ and convert everything on the way in; this epic makes that cheap and correct.
 | [x] R2 | Project-rate helper: `ensure_fs(signal, rate)` on every input path (CLI, Python, wasm), so a host sets its rate once | R1 | Any input rate in → pinned rate out, length correct to ±1 frame |
 | [x] R3 | Time-stretch (tempo changes, pitch does not), Signalsmith-Stretch class. Short study first: pure-Rust port vs binding, keeping the reference implementation as a test-only oracle — the approach openDAW's `signalsmith` crate proved workable | — | Output matches the reference on the fixture set within written tolerance; duration exact |
 | [x] R4 | Pitch-shift (pitch changes, tempo does not), built from stretch + resample, exposed as one op in cents | R1, R3 | A 440 Hz sine shifted +1200 cents peaks at 880 Hz ± 1 Hz; duration unchanged |
-| [ ] R5 | Realtime varispeed on the streaming resampler (scrubbing, tape-style effects) | R1 | Realtime harness: meets the block deadline, no allocations, no clicks on speed changes |
+| [x] R5 | Realtime varispeed on the streaming resampler (scrubbing, tape-style effects) | R1 | Realtime harness: meets the block deadline, no allocations, no clicks on speed changes |
 | [ ] R6 | *(optional)* PSOLA for single-voice pitch work — the light option where spectral stretch is overkill | R3 study | A sung vowel shifted a third keeps its character, measured against the PSOLA reference |
 
 ## Epic M — The mastering set
