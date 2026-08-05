@@ -88,6 +88,29 @@ differs is whether it can read the numbers back:
 A tap is labelled by the nearest enclosing `name:` — `analyser: spectrum(1024)` — and readings come
 back in the order the chain reaches them, so an unlabelled tap is still identifiable by position.
 
+## Automation and region rendering
+
+A `Curve` is a list of breakpoints plus a rule for how time maps onto them, and it is the same
+object whether it is an automation lane, an LFO or an ADSR (roadmap S4, D2). A lane names a node by
+its `name:` label and a parameter by its registry name, so `fade: gain(1)` is automated by
+`("fade", "gain", curve)` — the label is what `Graph::Named` has always been for.
+
+Region rendering (roadmap D4) computes `[from, to)` of a chain and is bit-identical to that window
+of a whole render, because it *is* that window: the chain runs from frame 0 and the rest is
+discarded. It therefore costs `to` frames of work, not `to - from`.
+
+| | automation | region |
+|---|---|---|
+| Rust | `process_automated(&graph, &input, &automation)` | `render_region(&graph, &input, from, to)` |
+| Python | `chain.automate(x, fs, a)`, `fx.Automation()` | `chain.render_region(x, fs, start, end)` |
+| JS | `chain.processAutomated(samples, fs, a)`, `new Automation()` | `chain.renderRegion(samples, fs, from, to)` |
+| CLI | see "Not yet" | a `trim` stage after the effects is exactly this |
+| C | see "Not yet" | see "Not yet" |
+
+The curve types are not on the interfaces as data — each door gets a small set of lane builders
+(`ramp`, `dbRamp`, `lfo`, `points`) rather than a serialized `Curve`. That covers what a host
+actually draws, and it keeps the curve format free to change while it has one real caller.
+
 ## Definition of done
 
 A pull request that adds or changes an op is finished when all of these are true:
@@ -162,6 +185,18 @@ anywhere to put the numbers. The CLI would need an output format for them (`--ta
 obvious shape, and `fluxion stat` already covers the common case of "measure this file"); C would
 need a struct per reading and an ownership rule for the magnitude array, which is the kind of ABI
 commitment the header exists to avoid making early. Neither is blocked on anything but a decision.
+
+**Automation on the CLI and in C.** Both can build any chain, but neither has a way to *describe a
+curve*. On the CLI that means a lane syntax — something like `gain(1) @ 0:0dB, 1:-60dB` — and it
+would have to round-trip through `Display` forever once it exists, which is a commitment worth
+making after the curve format has carried a real host rather than before. `fluxion --crossfade`
+covers the common fade today. In C it means a `fx_curve_*` constructor family and an ownership rule
+for the lane table, the same shape of decision as the tap readings above.
+
+**Region rendering in C.** `fx_render_region(graph, buf, frames, from, to, fs, out)` is the
+signature; it is not written because nothing has asked. Note that the CLI needs nothing: stages run
+in order, so a `trim` after the effects renders the whole chain and returns a window of it, which is
+exactly what `render_region` computes.
 
 **`.to(device)` in Python.** torchfx has it because its arrays are torch tensors. Fluxion's Python
 API is an Array-API *consumer* over NumPy, and its GPU path is in the batch backend, not in the

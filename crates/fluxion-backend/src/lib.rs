@@ -10,6 +10,7 @@
 pub mod cuda;
 
 pub mod automate;
+pub mod region;
 
 use std::cell::RefCell;
 
@@ -25,6 +26,7 @@ use rayon::prelude::*;
 
 pub use automate::{AutomationError, process_automated, process_automated_from};
 pub use fluxion_ops::{Certificate, Verdict};
+pub use region::{RegionError, render_region, render_region_automated};
 
 /// Run a graph over an input signal on the CPU, returning a new signal.
 ///

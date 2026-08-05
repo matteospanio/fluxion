@@ -6,7 +6,7 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-import init, { Chain, ensureFs, version } from "./pkg/fluxion_wasm.js";
+import init, { Automation, Chain, ensureFs, framesToCompute, version } from "./pkg/fluxion_wasm.js";
 
 const wasm = fileURLToPath(new URL("./pkg/fluxion_wasm_bg.wasm", import.meta.url));
 await init({ module_or_path: await readFile(wasm) });
@@ -88,9 +88,45 @@ if (Math.abs(meterDb) > 0.1 || Math.abs(peakBin - 0.5) > 0.05) {
   throw new Error(`meter ${meterDb} dBFS, 1 kHz bin ${peakBin}`);
 }
 
+// Region rendering (roadmap D4): a window of a chain has to be exactly that window of the whole
+// render — this is the property a waveform tile depends on.
+const stateful = Chain.fromText("highpass(80, 4) | echo(0.05, 0.4, 0.3)");
+const wholeRender = stateful.process(tone, 48_000);
+const piecesRender = new Float32Array(tone.length);
+for (const [from, to] of [
+  [24_000, 48_000],
+  [0, 1],
+  [1, 7_777],
+  [7_777, 24_000],
+]) {
+  piecesRender.set(stateful.renderRegion(tone, 48_000, from, to), from);
+}
+for (let i = 0; i < wholeRender.length; i++) {
+  if (wholeRender[i] !== piecesRender[i]) {
+    throw new Error(`renderRegion differs from the whole render at ${i}`);
+  }
+}
+if (framesToCompute(40_000, 48_000) !== 48_000) {
+  throw new Error("framesToCompute should report the prefix a late window costs");
+}
+
+// Automation (roadmap D2/S4): a 60 dB fade drawn in decibels is -30 dB half way through, which is
+// the thing a linear-in-amplitude ramp gets wrong.
+const fade = Chain.fromText("fade: gain(1)");
+const automation = new Automation().dbRamp("fade", "gain", 1.0, 0.001, 1.0);
+if (automation.laneCount() !== 1) {
+  throw new Error(`expected one lane, got ${automation.laneCount()}`);
+}
+const faded = fade.processAutomated(new Float32Array(48_000).fill(1), 48_000, automation);
+const halfDb = 20 * Math.log10(faded[24_000]);
+if (Math.abs(halfDb + 30) > 0.05) {
+  throw new Error(`half way through a 60 dB fade should be -30 dB, got ${halfDb}`);
+}
+
 console.log(
   `fluxion wasm smoke OK (version ${v}) — ensureFs 48k->44.1k exact to ${at44k.length} frames, ` +
     `tone within ${worst.toExponential(1)}; keyed gate shut to ${shutPeak.toExponential(1)}, ` +
     `unkeyed ${openPeak.toFixed(2)}; taps read ${meterDb.toFixed(2)} dBFS and ` +
-    `${peakBin.toFixed(3)} at 1 kHz, audio bit-identical`,
+    `${peakBin.toFixed(3)} at 1 kHz, audio bit-identical; regions bit-exact, ` +
+    `dB fade ${halfDb.toFixed(2)} dB at half`,
 );

@@ -21,6 +21,20 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Added
 
+- **Render any region (Epic D / D4 — completes milestone F-M6)** — `render_region(graph, input,
+  from, to)`, `chain.render_region` in Python, `chain.renderRegion` in the browser. The window is
+  bit-identical to that window of a whole render, and not because it was tested into agreement: it
+  *is* that window, since the chain runs from frame 0 and the rest is discarded. D4's check is
+  taken literally — a chain of a high-pass, a parallel split, an echo and a compressor, rendered in
+  ragged pieces in a scrambled order, compared with `assert_eq!` on `f32`.
+  The cost is stated rather than hidden. Every op in front of a window carries state, so producing
+  `[from, to)` costs `to` frames of work, not `to - from` — `frames_to_compute` returns exactly
+  that so a caller can decide whether to ask. The cheap version is a state checkpoint, which is its
+  own piece of work with its own cost model; this is the correctness floor it will have to match.
+  Ops whose output depends on the whole signal are refused by name with what to do instead:
+  `normalize` scales by the peak of what it was given, `loudnorm` measures before it changes,
+  `reverse` needs to know where the end is, and the `limiter` looks ahead.
+
 - **Automation: curves driving op parameters (Epic D / D2)** — `process_automated(graph, input,
   &automation)`, where an `Automation` is a side table of `Lane`s naming a node's `name:` label, a
   parameter *by name*, and a curve. A side table rather than part of the `Graph` on purpose: a

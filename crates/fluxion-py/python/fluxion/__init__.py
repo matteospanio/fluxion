@@ -35,6 +35,7 @@ from . import filter  # noqa: A004  (shadows the builtin on purpose, so `fx.filt
 from .augment import Compose, RandomChain
 from .wave import Wave
 from ._fluxion import (
+    Automation,
     Chain,
     RtChain,
     __cuda__,
@@ -48,6 +49,7 @@ from ._fluxion import (
 )
 
 __all__ = [
+    "Automation",
     "Chain",
     "RtChain",
     "Wave",

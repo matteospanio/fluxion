@@ -60,6 +60,109 @@ fn as_f32_1d<'py>(x: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyArray1<f32>>> 
 /// Read a 1-D `(T,)` or 2-D `(C, T)` (channels-first, last axis = time) DLPack tensor / array-like as
 /// `(channels, ndim)` — the input to a multichannel [`Signal`]. Same zero-copy contract as
 /// [`as_f32_1d`]. Anything other than 1-D/2-D is an error.
+/// Hand a rendered signal back in the shape it arrived: a 1-D array for mono in, 2-D for
+/// multichannel.
+fn wrap_signal(py: Python<'_>, out: Signal, ndim: usize) -> PyResult<Bound<'_, PyAny>> {
+    if ndim == 1 {
+        let ch = out.channels.into_iter().next().unwrap_or_default();
+        Ok(ch.into_pyarray_bound(py).into_any())
+    } else {
+        Ok(PyArray2::from_vec2_bound(py, &out.channels)
+            .map_err(|e| PyValueError::new_err(format!("output channels are ragged: {e}")))?
+            .into_any())
+    }
+}
+
+/// Parameter automation: curves driving named nodes of a chain (ROADMAP D2, S4).
+///
+/// Lanes name a node by the `name:` label it carries in the chain text and a parameter by its
+/// registry name. Chainable, so a whole performance reads as one expression:
+///
+/// ```python
+/// chain = fx.chain("fade: gain(1) | lp: lowpass(8000, 4)")
+/// a = (fx.Automation()
+///      .db_ramp("fade", "gain", 1.0, 0.001, 1.0)   # a 60 dB fade over a second
+///      .lfo("lp", "cutoff", 0.5, 400, 4000, 0.0))  # and a slow sweep under it
+/// out = chain.automate(x, 48_000, a)
+/// ```
+#[pyclass(module = "fluxion", name = "Automation")]
+#[derive(Clone, Default)]
+pub struct Automation {
+    inner: fluxion_core::automation::Automation,
+}
+
+#[pymethods]
+impl Automation {
+    #[new]
+    fn new() -> Automation {
+        Automation::default()
+    }
+
+    /// A straight line in the parameter's own units, from `start` to `end` over `seconds`.
+    fn ramp(&self, node: &str, param: &str, start: f32, end: f32, seconds: f64) -> Automation {
+        self.push(node, param, fluxion_core::automation::Curve::ramp(start, end, seconds))
+    }
+
+    /// A fade at a constant rate **in decibels** — what a gain lane dragged from 0 to -60 dB means.
+    ///
+    /// Half way through it is at -30 dB, where `ramp` between the same endpoints would be at -6.
+    fn db_ramp(&self, node: &str, param: &str, start: f32, end: f32, seconds: f64) -> Automation {
+        self.push(
+            node,
+            param,
+            fluxion_core::automation::Curve::db_ramp(start, end, seconds),
+        )
+    }
+
+    /// An LFO between `low` and `high` at `rate_hz`, starting `phase` (0..1) into its cycle.
+    fn lfo(
+        &self,
+        node: &str,
+        param: &str,
+        rate_hz: f32,
+        low: f32,
+        high: f32,
+        phase: f32,
+    ) -> Automation {
+        self.push(
+            node,
+            param,
+            fluxion_core::automation::Curve::lfo(rate_hz, low, high, phase),
+        )
+    }
+
+    /// Breakpoints: `[(seconds, value), ...]`, straight lines between them.
+    fn points(&self, node: &str, param: &str, points: Vec<(f64, f32)>) -> Automation {
+        let curve = fluxion_core::automation::Curve::new(
+            points
+                .into_iter()
+                .map(|(t, v)| fluxion_core::automation::Point::new(t, v)),
+            fluxion_core::automation::Timing::Once,
+        );
+        self.push(node, param, curve)
+    }
+
+    /// How many lanes this holds.
+    fn __len__(&self) -> usize {
+        self.inner.lanes().len()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Automation({} lanes)", self.inner.lanes().len())
+    }
+}
+
+impl Automation {
+    fn push(&self, node: &str, param: &str, curve: fluxion_core::automation::Curve) -> Automation {
+        Automation {
+            inner: self
+                .inner
+                .clone()
+                .with(fluxion_core::automation::Lane::new(node, param, curve)),
+        }
+    }
+}
+
 fn as_channels(x: &Bound<'_, PyAny>) -> PyResult<(Vec<Vec<f32>>, usize)> {
     let py = x.py();
     let np = py.import_bound("numpy")?;
@@ -232,6 +335,52 @@ impl Chain {
             out_readings.push(d.unbind());
         }
         Ok((audio, out_readings))
+    }
+
+    /// Render frames `[from, to)` of the chain (ROADMAP D4).
+    ///
+    /// Bit-identical to the same window of a whole render, because it *is* that window: the chain
+    /// runs from frame 0 and the rest is discarded. That costs `to` frames of work, not
+    /// `to - from` — a window late in a long signal still computes everything before it, because
+    /// every op in front of it carries state. Raises for a chain containing an op that needs the
+    /// whole signal (`normalize`, `loudnorm`, `reverse`, `limiter`).
+    #[pyo3(signature = (x, fs, start, end, automation=None))]
+    fn render_region<'py>(
+        &self,
+        py: Python<'py>,
+        x: &Bound<'py, PyAny>,
+        fs: u32,
+        start: usize,
+        end: usize,
+        automation: Option<&Automation>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let (channels, ndim) = as_channels(x)?;
+        let empty = fluxion_core::automation::Automation::new();
+        let lanes = automation.map_or(&empty, |a| &a.inner);
+        let out = fluxion_backend::render_region_automated(
+            &self.graph,
+            &Signal::new(fs, channels),
+            lanes,
+            start,
+            end,
+        )
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        wrap_signal(py, out, ndim)
+    }
+
+    /// Render with automation driving the chain's parameters (ROADMAP D2).
+    fn automate<'py>(
+        &self,
+        py: Python<'py>,
+        x: &Bound<'py, PyAny>,
+        fs: u32,
+        automation: &Automation,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let (channels, ndim) = as_channels(x)?;
+        let out =
+            fluxion_backend::process_automated(&self.graph, &Signal::new(fs, channels), &automation.inner)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        wrap_signal(py, out, ndim)
     }
 
     /// The canonical chain text — the same string the CLI's `--chain`, `fluxion.chain()`, C's
@@ -731,6 +880,7 @@ fn save_biquad_fxg(
 fn _fluxion(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Chain>()?;
     m.add_class::<RtChain>()?;
+    m.add_class::<Automation>()?;
     // True in the CUDA-built ("GPU") wheel, False in the default ("CPU") wheel.
     m.add("__cuda__", cfg!(feature = "cuda"))?;
     #[cfg(feature = "cuda")]

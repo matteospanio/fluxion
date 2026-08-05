@@ -246,7 +246,7 @@ impl CrossfadeLaw {
 
 /// Concatenate signals with their ends overlapped and faded into each other (ROADMAP D1).
 ///
-/// [`concat`] butt-joins, which puts a step at the seam unless both sides happen to be at zero.
+/// [`concat()`] butt-joins, which puts a step at the seam unless both sides happen to be at zero.
 /// This overlaps each adjacent pair by `overlap_s` seconds and crossfades across it, so the join is
 /// continuous. Sample-accurate: the overlap is `round(overlap_s · fs)` frames, and the result is
 /// exactly
@@ -260,7 +260,7 @@ impl CrossfadeLaw {
 /// audio — and the length formula still holds, using the clamped values.
 ///
 /// Channel counts are unified to the maximum (missing channels are silent) and the first signal's
-/// `fs` is used, both exactly as [`concat`] does. An empty slice yields an empty signal; a single
+/// `fs` is used, both exactly as [`concat()`] does. An empty slice yields an empty signal; a single
 /// signal is returned unchanged, since there is no seam to fade.
 ///
 /// See [`CrossfadeLaw`] for which law to pick — it is not a stylistic choice.

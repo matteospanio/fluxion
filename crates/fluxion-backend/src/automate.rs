@@ -1,6 +1,7 @@
 //! Rendering a graph whose parameters move (ROADMAP D2).
 //!
-//! A lane names a node, a parameter and a [`Curve`]; this applies it. The rest of the graph is
+//! A lane names a node, a parameter and a [`Curve`](fluxion_core::automation::Curve); this
+//! applies it. The rest of the graph is
 //! untouched — an op nobody automated is processed exactly as [`process`](crate::process) would,
 //! over the whole buffer at once, because a time-invariant op has no reason to be chopped up.
 //!
