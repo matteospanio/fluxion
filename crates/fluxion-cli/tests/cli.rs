@@ -613,3 +613,47 @@ fn fxg_splices_into_the_default_pipeline() {
     assert_eq!(read_samples(&outp), vec![0.5, -1.0, 1.5]);
     std::fs::remove_dir_all(&d).ok();
 }
+
+/// `--crossfade` joins inputs with a fade instead of butt-joining them (ROADMAP D1). Two constant
+/// signals of the same level: linear holds that level across the seam, and butt-joining is what the
+/// flag replaces.
+#[test]
+fn crossfade_flag_joins_inputs_with_a_fade() {
+    let d = tmp("crossfade");
+    let (a, b, out) = (d.join("a.wav"), d.join("b.wav"), d.join("out.wav"));
+    write_wav(&a, 48_000, &vec![0.5f32; 4_800]);
+    write_wav(&b, 48_000, &vec![0.5f32; 4_800]);
+
+    let st = Command::new(bin())
+        .args([
+            "--crossfade",
+            "0.05,linear",
+            a.to_str().unwrap(),
+            b.to_str().unwrap(),
+            out.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(st.success());
+
+    let s = read_samples(&out);
+    // 4800 + 4800 - 2400 frames, and the level never moves.
+    assert_eq!(s.len(), 7_200);
+    let worst = s.iter().map(|v| (v - 0.5).abs()).fold(0.0f32, f32::max);
+    assert!(worst < 1e-6, "the seam moved the level by {worst}");
+
+    // An unknown law is refused rather than silently defaulted.
+    let st = Command::new(bin())
+        .args([
+            "--crossfade",
+            "0.05,sqrt",
+            a.to_str().unwrap(),
+            b.to_str().unwrap(),
+            out.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(!st.success(), "an unknown crossfade law must be an error");
+
+    std::fs::remove_dir_all(&d).ok();
+}

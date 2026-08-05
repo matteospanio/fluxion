@@ -220,3 +220,28 @@ def test_taps_report_without_touching_the_audio():
     spectrum = readings[1]
     bin_index = round(375 / spectrum["bin_hz"])
     assert spectrum["magnitude"][bin_index] == pytest.approx(0.2, abs=0.005)
+
+
+def test_automation_and_region_rendering():
+    """ROADMAP D2/D4: curves drive parameters, and a window is exactly that window."""
+    x = np.ones(FS, dtype=np.float32)
+    fade = fx.chain("fade: gain(1)")
+
+    # A 60 dB fade drawn in decibels is -30 dB half way through, not -6.
+    a = fx.Automation().db_ramp("fade", "gain", 1.0, 0.001, 1.0)
+    assert len(a) == 1
+    out = fade.automate(x, FS, a)
+    assert 20 * np.log10(out[FS // 2]) == pytest.approx(-30.0, abs=0.05)
+
+    # A stateful chain rendered in pieces is bit-identical to the whole render.
+    stateful = fx.chain("highpass(80, 4) | echo(0.05, 0.4, 0.3)")
+    noise = np.sin(np.arange(20_000, dtype=np.float32) * 0.05) * 0.5
+    whole = stateful(noise, FS)
+    pieces = np.empty_like(whole)
+    for start, end in [(10_000, 20_000), (0, 3), (3, 9_999), (9_999, 10_000)]:
+        pieces[start:end] = stateful.render_region(noise, FS, start, end)
+    assert np.array_equal(whole, pieces)
+
+    # An op that needs the whole signal says so rather than returning a plausible window.
+    with pytest.raises(ValueError, match="normalize"):
+        fx.chain("normalize(1)").render_region(noise, FS, 0, 100)

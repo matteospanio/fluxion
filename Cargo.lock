@@ -2720,6 +2720,7 @@ name = "fluxion-rt"
 version = "0.2.0"
 dependencies = [
  "cpal",
+ "fluxion-core",
  "fluxion-ops",
 ]
 

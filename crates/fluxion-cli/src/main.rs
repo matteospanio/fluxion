@@ -54,8 +54,7 @@ Pipeline:
   fluxion --chain \"highpass(80, 4) | gain(-3dB)\" in.wav out.wav
 
 Verbs:
-  effects [name]   list every effect and stage, or describe one
-                   (--json emits the whole registry)
+  effects [name]   list every effect and stage, or describe one (--json: all)
   stat <in>        peak/RMS dBFS, DC offset, crest factor
   info <in>        format and metadata (alias: soxi)
   synth            generate a tone or noise
@@ -88,7 +87,11 @@ struct Cli {
     #[arg(long)]
     mix: bool,
 
-    /// Signal read by `side(0)`, `side(1)`, …; repeat for more.
+    /// Crossfade inputs by SECS (`,linear` for one take).
+    #[arg(long, value_name = "SECS")]
+    crossfade: Option<String>,
+
+    /// Signal for `side(0)`, `side(1)`, …; repeat for more.
     #[arg(long = "side", value_name = "FILE")]
     sides: Vec<String>,
 
@@ -173,6 +176,7 @@ fn run(cli: Cli) -> Result<(), String> {
             cli.fs,
             cli.rate,
             cli.mix,
+            cli.crossfade.as_deref(),
             &cli.sides,
             enc,
             cli.chain.as_deref(),

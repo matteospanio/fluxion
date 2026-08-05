@@ -213,7 +213,7 @@ not the end goal.
 | [x] S1 | Side inputs in the chain algebra: an op can declare a "key" input, connected when the chain is built; ops with one input behave exactly as before | — | All existing algebra tests pass unchanged; a two-input test op receives both signals sample-aligned |
 | [x] S2 | Envelope follower (attack/release, peak and RMS) — the building block under gates, duckers and meters | — | A step input follows the attack curve within 1e-4; SciPy reference on noise |
 | [x] S3 | Noise gate with optional key input (threshold, range, attack/hold/release) | S1, S2 | Below threshold the signal drops by exactly `range`; with a key, the gate follows the key, not the program |
-| [ ] S4 | LFO and ADSR as parameter sources, defined with the same curves as automation | — | The same description gives identical curves in the batch and realtime engines |
+| [x] S4 | LFO and ADSR as parameter sources, defined with the same curves as automation | — | The same description gives identical curves in the batch and realtime engines |
 
 ## Epic A — Analysis taps
 
@@ -247,10 +247,10 @@ engine, once, with tests.
 
 | # | Task | Depends on | The check written first |
 |---|------|-----------|--------------------------|
-| [ ] D1 | Crossfade over `concat` (linear and equal-power), sample-accurate | — | An equal-power crossfade of a signal with itself leaves the level unchanged (±1e-6) |
-| [ ] D2 | Automation: breakpoint curves applied to any op parameter, compiled to per-block ramps; one curve format shared with S4 | S4 curves | A gain automated 0→−60 dB over 1 s matches the exact envelope sample by sample |
-| [ ] D3 | Check that live parameter ramps (`fluxion-rt`) and D2 curves use one definition — what you hear live is what renders | D2 | The same breakpoints give identical envelopes offline and in the realtime engine |
-| [ ] D4 | Render any region: compute `[from, to)` of a chain deterministically (seek) — the base for waveform tiles, loop preview, partial re-render | — | Rendering `[0,N)` whole equals rendering it in random pieces, bit for bit |
+| [x] D1 | Crossfade over `concat` (linear and equal-power), sample-accurate | — | An equal-power crossfade of a signal with itself leaves the level unchanged (±1e-6) |
+| [x] D2 | Automation: breakpoint curves applied to any op parameter, compiled to per-block ramps; one curve format shared with S4 | S4 curves | A gain automated 0→−60 dB over 1 s matches the exact envelope sample by sample |
+| [x] D3 | Check that live parameter ramps (`fluxion-rt`) and D2 curves use one definition — what you hear live is what renders | D2 | The same breakpoints give identical envelopes offline and in the realtime engine |
+| [x] D4 | Render any region: compute `[from, to)` of a chain deterministically (seek) — the base for waveform tiles, loop preview, partial re-render | — | Rendering `[0,N)` whole equals rendering it in random pieces, bit for bit |
 
 ---
 
@@ -264,7 +264,7 @@ engine, once, with tests.
 | ✅ F-M3 | **mastering complete** | Loudness, true peak, limiter and normalize as ops, ±0.1 LU vs ffmpeg | A full mastering chain with no external tool |
 | ✅ F-M4 | **time tools** | Streaming rate conversion on every input; stretch and pitch as separate controls, tested against a reference | Import at any rate, scrubbing, tempo and pitch edits |
 | ✅ F-M5 | **routing and taps** | A keyed gate works end to end; spectrum and meter taps are provably invisible to the audio | Duckers, keyed dynamics, live analysers |
-| F-M6 | **host-render ready** | Epic D done: a timeline of clips, fades and automation renders bit-exact, in one pass or in pieces, native and wasm | Fluxion as the single engine behind a timeline |
+| ✅ F-M6 | **host-render ready** | Epic D done: a timeline of clips, fades and automation renders bit-exact, in one pass or in pieces, native and wasm | Fluxion as the single engine behind a timeline |
 
 **Reached so far.**
 
@@ -301,6 +301,13 @@ engine, once, with tests.
   sit in the chain and measure without touching it — bit-identical audio with six taps in place,
   which the design makes structural rather than promising it. The spectrum matches an independent
   SciPy transform to 1.8e-7, and the meter's loudness is M1's own BS.1770 code.
+
+- **F-M6 — host-render ready.** Crossfades at a seam, one curve type behind automation, LFOs and
+  envelopes, and a window of a chain that is bit-identical to that window of the whole render. The
+  live ramp and the offline curve are the same function, so what a preview plays is what a bounce
+  writes — asserted with `==` on `f32` rather than a tolerance. Automation drives a gain exactly and
+  a filter in 64-frame steps; anything else is refused by name. See
+  [docs/interfaces.md](docs/interfaces.md).
 
 - **F-M7 — easy everywhere.** Five ten-line quickstarts run in CI (six lines to ten, against a
   budget of ten); every name comes from the one registry in `fluxion-core/src/op.rs`; `pip install`

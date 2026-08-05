@@ -21,6 +21,91 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Added
 
+- **Render any region (Epic D / D4 — completes milestone F-M6)** — `render_region(graph, input,
+  from, to)`, `chain.render_region` in Python, `chain.renderRegion` in the browser. The window is
+  bit-identical to that window of a whole render, and not because it was tested into agreement: it
+  *is* that window, since the chain runs from frame 0 and the rest is discarded. D4's check is
+  taken literally — a chain of a high-pass, a parallel split, an echo and a compressor, rendered in
+  ragged pieces in a scrambled order, compared with `assert_eq!` on `f32`.
+  The cost is stated rather than hidden. Every op in front of a window carries state, so producing
+  `[from, to)` costs `to` frames of work, not `to - from` — `frames_to_compute` returns exactly
+  that so a caller can decide whether to ask. The cheap version is a state checkpoint, which is its
+  own piece of work with its own cost model; this is the correctness floor it will have to match.
+  Ops whose output depends on the whole signal are refused by name with what to do instead:
+  `normalize` scales by the peak of what it was given, `loudnorm` measures before it changes,
+  `reverse` needs to know where the end is, and the `limiter` looks ahead.
+
+- **Automation: curves driving op parameters (Epic D / D2)** — `process_automated(graph, input,
+  &automation)`, where an `Automation` is a side table of `Lane`s naming a node's `name:` label, a
+  parameter *by name*, and a curve. A side table rather than part of the `Graph` on purpose: a
+  graph describes a signal path and round-trips through the chain text, while automation describes
+  a performance over a stretch of time. An automated render still prints, parses and freezes as
+  the chain it is.
+  Two application modes, because the ops genuinely differ. A **gain is a multiply**, so it is
+  rendered against the curve per sample with nothing approximated — which is exactly what D2's
+  check demands, and the test asserts `==` on every one of 48 000 frames. A **filter's cutoff is
+  an input to a design**, so it is redesigned every 64 frames (1.33 ms) with the filter state
+  carried across the change. Anything else is refused by name, with an error that lists the
+  parameters the op does have; a mistyped lane fails before a sample is rendered rather than being
+  silently ignored.
+  D2's own check says "0 → −60 dB", and getting that right needed `Shape::geometric` — a fade
+  drawn in decibels is *geometric* in amplitude, not linear. Half way through a 60 dB fade the
+  level is −30 dB; a straight line in amplitude is at −6 dB there, which is a different fade
+  entirely. `Curve::db_ramp` is the constructor for the one people mean.
+
+### Fixed
+
+- **Coefficient crossfades in the realtime engine were 3 dB loud (`fluxion-rt`)** — `SosStream`
+  blended the outgoing and incoming cascades with an **equal-power** law, `cos·old + sin·new`. But
+  the two branches are the *same input* through two similar filters, so their outputs are strongly
+  correlated, and correlated signals add in amplitude: `cos + sin = √2` is **+3.01 dB** in the
+  middle of every fade. The law is now linear, whose gains sum to 1.
+  This is the same arithmetic that D1 turned up in the roadmap's own crossfade check, applied to a
+  place it had been wrong since the streaming filter was written. The existing test could not see
+  it — it swaps a low-pass for a high-pass on DC, where one branch is 1 and the other 0, and both
+  laws slide cleanly between them. The new test crossfades a filter **to itself**, where the
+  branches are identical and any law but linear shows immediately; it measures 3.01 dB against the
+  old code and 0.0 against the new.
+- `SosStream::set_coeffs_now` replaces coefficients while keeping the filter state, for a parameter
+  that is moving smoothly rather than jumping. Crossfading two cascades cold-starts the incoming
+  one, which is the wrong trade 750 times a second.
+
+- **One curve, two engines (Epic S / S4, Epic D / D3)** — `core::automation::Curve`: breakpoint
+  automation, an LFO and an ADSR are one type, because they are one thing seen three ways — a list
+  of points and a rule for how time maps onto them (`Once`, `Loop`, `Sustain`). The LFO is not an
+  approximation of a sine: a raised cosine over two half-cycles *is* one, exactly.
+  S4 and D3 land together because the roadmap gives them the same check in the same words — "the
+  same description gives identical curves in the batch and realtime engines" and "the same
+  breakpoints give identical envelopes offline and in the realtime engine". Identical here means
+  **bit-identical**, asserted with `==` on `f32` across five shapes and five ramps, because both
+  sides call the same `segment()` in `fluxion-core` and a tolerance would only hide it if they
+  stopped.
+  That forced a change to `SmoothedValue`, and it is worth stating why. The obvious realtime ramp
+  accumulates — `current += step`, one add per sample — and it drifts from the line it is meant to
+  be: over a one-second ramp at 48 kHz it lands **6.45e-4** away from exact, with only **24 of
+  48 000** samples bit-identical. Computing from the sample index instead costs one multiply and
+  lands on the curve at every sample. The old arithmetic is kept in the test suite as the thing
+  that would *not* have matched, so the claim stays measured rather than asserted. All 27 existing
+  realtime tests pass unchanged.
+  Curves are read at absolute frames rather than by accumulating phase, so an LFO an hour into a
+  session is sample-for-sample the same cycle as the first one, and a render that starts in the
+  middle sees what a render from the beginning saw — which is what D4 leans on.
+
+- **Crossfade over concat (Epic D / D1)** — `transform::crossfade(&[a, b, ...], overlap_s, law)` and
+  `fluxion --crossfade 0.05` on the CLI. `concat` butt-joins, which puts a step at the seam; this
+  overlaps each adjacent pair and fades across it. Output length is exactly the sum of the frames
+  less each seam's overlap, with the overlap clamped to what the two sides actually have — so
+  joining a 10 ms clip with a 1 s overlap asked for gives 10 ms rather than failing.
+  **The roadmap's own check for this task names the wrong law, and the code says so.** D1 asks that
+  "an equal-power crossfade of a signal with itself leaves the level unchanged (±1e-6)". It does
+  not: equal-power's gains are `cos(tπ/2)` and `sin(tπ/2)`, which *square* to 1, so on identical —
+  fully correlated — material they sum to `√2` and the seam is **+3.01 dB**. The law that leaves
+  correlated material untouched is **linear**, whose gains sum to 1 exactly. Both properties are
+  now tested in the units they belong to: linear holds a constant signal to within 1e-6 across the
+  seam, equal-power holds white noise's RMS to 0.35 dB where linear digs the classic -3.01 dB hole,
+  and a third test pins both failure modes at 3.01 dB so the two laws cannot quietly be swapped
+  back. Pick by what the material is, not by taste — `CrossfadeLaw`'s own docs carry the table.
+
 - **Observer taps: analysis that reads the chain and never touches it (Epic A / A1, A2, A3 —
   completes milestone F-M5)** — `meter` and `spectrum(2048, 0.5)` sit in a chain like anything else
   and measure what flows past. Invisible to the audio is **structural**, not promised: a tap is a

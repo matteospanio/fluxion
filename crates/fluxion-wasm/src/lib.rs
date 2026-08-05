@@ -216,6 +216,63 @@ impl Chain {
         result
     }
 
+    /// Render frames `[from, to)` of the chain — a waveform tile, a loop preview, the bar someone
+    /// just edited (ROADMAP D4).
+    ///
+    /// Bit-identical to the same window of a whole render, because it *is* that window: the chain
+    /// runs from frame 0 and the rest is discarded. That makes it cost `to` frames of work, not
+    /// `to - from` — see `framesToCompute`. Throws for a chain containing an op that needs the
+    /// whole signal (`normalize`, `loudnorm`, `reverse`, `limiter`).
+    #[wasm_bindgen(js_name = renderRegion)]
+    pub fn render_region(
+        &self,
+        samples: &[f32],
+        fs: u32,
+        from: usize,
+        to: usize,
+    ) -> Result<Vec<f32>, JsError> {
+        let input = Signal::new(fs, vec![samples.to_vec()]);
+        match fluxion::render_region(&self.graph, &input, from, to) {
+            Ok(out) => Ok(out.channels.into_iter().next().unwrap_or_default()),
+            Err(e) => Err(JsError::new(&e.to_string())),
+        }
+    }
+
+    /// Render with automation driving the chain's parameters (ROADMAP D2).
+    ///
+    /// Curves are read at absolute frames, so this and [`Chain::render_region_automated`] agree
+    /// about what a parameter was doing at any point.
+    #[wasm_bindgen(js_name = processAutomated)]
+    pub fn process_automated(
+        &self,
+        samples: &[f32],
+        fs: u32,
+        automation: &Automation,
+    ) -> Result<Vec<f32>, JsError> {
+        let input = Signal::new(fs, vec![samples.to_vec()]);
+        match fluxion::process_automated(&self.graph, &input, &automation.inner) {
+            Ok(out) => Ok(out.channels.into_iter().next().unwrap_or_default()),
+            Err(e) => Err(JsError::new(&e.to_string())),
+        }
+    }
+
+    /// Both together: a window of an automated render.
+    #[wasm_bindgen(js_name = renderRegionAutomated)]
+    pub fn render_region_automated(
+        &self,
+        samples: &[f32],
+        fs: u32,
+        automation: &Automation,
+        from: usize,
+        to: usize,
+    ) -> Result<Vec<f32>, JsError> {
+        let input = Signal::new(fs, vec![samples.to_vec()]);
+        match fluxion::render_region_automated(&self.graph, &input, &automation.inner, from, to) {
+            Ok(out) => Ok(out.channels.into_iter().next().unwrap_or_default()),
+            Err(e) => Err(JsError::new(&e.to_string())),
+        }
+    }
+
     /// How many side inputs this chain reads — 0 for an ordinary one-input chain.
     #[wasm_bindgen(js_name = sideInputs)]
     pub fn side_inputs(&self) -> usize {
@@ -226,6 +283,96 @@ impl Chain {
     #[wasm_bindgen(js_name = opCount)]
     pub fn op_count(&self) -> usize {
         self.graph.leaf_count()
+    }
+}
+
+/// How many frames a `renderRegion(from, to)` has to compute — `to`, not `to - from`.
+///
+/// A window late in a timeline still costs the whole timeline, because every op before it carries
+/// state. Exposed so a page can decide whether to ask rather than discovering it by timing.
+#[wasm_bindgen(js_name = framesToCompute)]
+pub fn frames_to_compute(from: usize, to: usize) -> usize {
+    fluxion::region::frames_to_compute(from, to)
+}
+
+/// Parameter automation: curves driving named nodes of a chain (ROADMAP D2, S4).
+///
+/// Build it up with the lane methods, then hand it to `Chain.processAutomated`. A lane names a
+/// node by the `name:` label it has in the chain text and a parameter by its registry name:
+///
+/// ```js
+/// const chain = Chain.fromText("fade: gain(1) | lp: lowpass(8000, 4)");
+/// const a = new Automation()
+///   .dbRamp("fade", "gain", 1.0, 0.001, 1.0)   // a 60 dB fade over a second
+///   .lfo("lp", "cutoff", 0.5, 400, 4000, 0);   // and a slow filter sweep under it
+/// const out = chain.processAutomated(samples, 48000, a);
+/// ```
+#[wasm_bindgen]
+#[derive(Default)]
+pub struct Automation {
+    inner: fluxion::automation::Automation,
+}
+
+#[wasm_bindgen]
+impl Automation {
+    /// An empty lane set.
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Automation {
+        Automation::default()
+    }
+
+    /// A straight line in the parameter's own units, from `from` to `to` over `seconds`.
+    pub fn ramp(mut self, node: &str, param: &str, from: f32, to: f32, seconds: f64) -> Automation {
+        self.inner = std::mem::take(&mut self.inner).with(fluxion::automation::Lane::new(
+            node,
+            param,
+            fluxion::automation::Curve::ramp(from, to, seconds),
+        ));
+        self
+    }
+
+    /// A fade at a constant rate **in decibels** — what a gain lane dragged from 0 to -60 dB means.
+    ///
+    /// Half way through it is at -30 dB, where `ramp` between the same endpoints would be at -6.
+    #[wasm_bindgen(js_name = dbRamp)]
+    pub fn db_ramp(
+        mut self,
+        node: &str,
+        param: &str,
+        from: f32,
+        to: f32,
+        seconds: f64,
+    ) -> Automation {
+        self.inner = std::mem::take(&mut self.inner).with(fluxion::automation::Lane::new(
+            node,
+            param,
+            fluxion::automation::Curve::db_ramp(from, to, seconds),
+        ));
+        self
+    }
+
+    /// An LFO sweeping between `low` and `high` at `rateHz`, starting `phase` (0..1) into its cycle.
+    pub fn lfo(
+        mut self,
+        node: &str,
+        param: &str,
+        rate_hz: f32,
+        low: f32,
+        high: f32,
+        phase: f32,
+    ) -> Automation {
+        self.inner = std::mem::take(&mut self.inner).with(fluxion::automation::Lane::new(
+            node,
+            param,
+            fluxion::automation::Curve::lfo(rate_hz, low, high, phase),
+        ));
+        self
+    }
+
+    /// How many lanes this holds.
+    #[wasm_bindgen(js_name = laneCount)]
+    pub fn lane_count(&self) -> usize {
+        self.inner.lanes().len()
     }
 }
 

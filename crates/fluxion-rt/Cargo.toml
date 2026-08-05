@@ -21,5 +21,6 @@ workspace = true
 cpal = ["dep:cpal"]
 
 [dependencies]
+fluxion-core = { path = "../fluxion-core", version = "0.2.0" }
 fluxion-ops = { path = "../fluxion-ops", version = "0.2.0" }
 cpal = { version = "0.15", optional = true }
