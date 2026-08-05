@@ -15,6 +15,7 @@
 //! assert_eq!(chain.leaf_count(), 2);
 //! ```
 
+pub mod automation;
 pub mod envelope;
 pub mod frozen;
 pub mod fxg;
@@ -26,6 +27,7 @@ pub mod signal;
 pub mod suggest;
 pub mod tap;
 
+pub use automation::{Compiled, Curve, Point, Shape, Timing};
 pub use envelope::{Envelope, EnvelopeError, FORMAT_VERSION, LoadError};
 pub use frozen::FrozenSos;
 pub use graph::Graph;

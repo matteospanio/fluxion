@@ -21,6 +21,27 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Added
 
+- **One curve, two engines (Epic S / S4, Epic D / D3)** — `core::automation::Curve`: breakpoint
+  automation, an LFO and an ADSR are one type, because they are one thing seen three ways — a list
+  of points and a rule for how time maps onto them (`Once`, `Loop`, `Sustain`). The LFO is not an
+  approximation of a sine: a raised cosine over two half-cycles *is* one, exactly.
+  S4 and D3 land together because the roadmap gives them the same check in the same words — "the
+  same description gives identical curves in the batch and realtime engines" and "the same
+  breakpoints give identical envelopes offline and in the realtime engine". Identical here means
+  **bit-identical**, asserted with `==` on `f32` across five shapes and five ramps, because both
+  sides call the same `segment()` in `fluxion-core` and a tolerance would only hide it if they
+  stopped.
+  That forced a change to `SmoothedValue`, and it is worth stating why. The obvious realtime ramp
+  accumulates — `current += step`, one add per sample — and it drifts from the line it is meant to
+  be: over a one-second ramp at 48 kHz it lands **6.45e-4** away from exact, with only **24 of
+  48 000** samples bit-identical. Computing from the sample index instead costs one multiply and
+  lands on the curve at every sample. The old arithmetic is kept in the test suite as the thing
+  that would *not* have matched, so the claim stays measured rather than asserted. All 27 existing
+  realtime tests pass unchanged.
+  Curves are read at absolute frames rather than by accumulating phase, so an LFO an hour into a
+  session is sample-for-sample the same cycle as the first one, and a render that starts in the
+  middle sees what a render from the beginning saw — which is what D4 leans on.
+
 - **Crossfade over concat (Epic D / D1)** — `transform::crossfade(&[a, b, ...], overlap_s, law)` and
   `fluxion --crossfade 0.05` on the CLI. `concat` butt-joins, which puts a step at the seam; this
   overlaps each adjacent pair and fades across it. Output length is exactly the sum of the frames
