@@ -6,27 +6,27 @@ Arguments:
   [ARGS]...  The verb or pipeline; run `fluxion effects` for the ops
 
 Options:
-      --fs <FS>       Reinterpret the input rate in Hz (no resampling)
-      --rate <RATE>   Resample every input to this rate (Hz) first
-      --mix           Sum multiple inputs instead of concatenating them
-      --side <FILE>   Signal read by `side(0)`, `side(1)`, …; repeat for more
-      --bits <BITS>   Output bit depth 16/24/32 (default: 32-bit float)
-      --float         Write 32-bit float output (the default)
-      --no-dither     Disable TPDF dither on integer-PCM output
-      --force         compile/import: write past a bad stability certificate
-      --secs <SECS>   `record`: capture duration in seconds [default: 5]
-      --chain <TEXT>  Build the chain from the shared text syntax
-      --dry-run       Print the chain that would run, then exit
-  -h, --help          Print help
-  -V, --version       Print version
+      --fs <FS>           Reinterpret the input rate in Hz (no resampling)
+      --rate <RATE>       Resample every input to this rate (Hz) first
+      --mix               Sum multiple inputs instead of concatenating them
+      --crossfade <SECS>  Crossfade inputs by SECS (`,linear` for one take)
+      --side <FILE>       Signal for `side(0)`, `side(1)`, …; repeat for more
+      --bits <BITS>       Output bit depth 16/24/32 (default: 32-bit float)
+      --float             Write 32-bit float output (the default)
+      --no-dither         Disable TPDF dither on integer-PCM output
+      --force             compile/import: write past a bad stability certificate
+      --secs <SECS>       `record`: capture duration in seconds [default: 5]
+      --chain <TEXT>      Build the chain from the shared text syntax
+      --dry-run           Print the chain that would run, then exit
+  -h, --help              Print help
+  -V, --version           Print version
 
 Pipeline:
   fluxion [globals] <in.wav|->... [effect|stage ...] <out.wav|-|-n>
   fluxion --chain "highpass(80, 4) | gain(-3dB)" in.wav out.wav
 
 Verbs:
-  effects [name]   list every effect and stage, or describe one
-                   (--json emits the whole registry)
+  effects [name]   list every effect and stage, or describe one (--json: all)
   stat <in>        peak/RMS dBFS, DC offset, crest factor
   info <in>        format and metadata (alias: soxi)
   synth            generate a tone or noise

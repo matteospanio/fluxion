@@ -21,6 +21,21 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Added
 
+- **Crossfade over concat (Epic D / D1)** — `transform::crossfade(&[a, b, ...], overlap_s, law)` and
+  `fluxion --crossfade 0.05` on the CLI. `concat` butt-joins, which puts a step at the seam; this
+  overlaps each adjacent pair and fades across it. Output length is exactly the sum of the frames
+  less each seam's overlap, with the overlap clamped to what the two sides actually have — so
+  joining a 10 ms clip with a 1 s overlap asked for gives 10 ms rather than failing.
+  **The roadmap's own check for this task names the wrong law, and the code says so.** D1 asks that
+  "an equal-power crossfade of a signal with itself leaves the level unchanged (±1e-6)". It does
+  not: equal-power's gains are `cos(tπ/2)` and `sin(tπ/2)`, which *square* to 1, so on identical —
+  fully correlated — material they sum to `√2` and the seam is **+3.01 dB**. The law that leaves
+  correlated material untouched is **linear**, whose gains sum to 1 exactly. Both properties are
+  now tested in the units they belong to: linear holds a constant signal to within 1e-6 across the
+  seam, equal-power holds white noise's RMS to 0.35 dB where linear digs the classic -3.01 dB hole,
+  and a third test pins both failure modes at 3.01 dB so the two laws cannot quietly be swapped
+  back. Pick by what the material is, not by taste — `CrossfadeLaw`'s own docs carry the table.
+
 - **Observer taps: analysis that reads the chain and never touches it (Epic A / A1, A2, A3 —
   completes milestone F-M5)** — `meter` and `spectrum(2048, 0.5)` sit in a chain like anything else
   and measure what flows past. Invisible to the audio is **structural**, not promised: a tap is a

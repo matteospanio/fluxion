@@ -204,6 +204,118 @@ pub fn channels(sig: &Signal, n: usize) -> Signal {
     remix(sig, &spec)
 }
 
+/// Which pair of gain curves a [`crossfade`] uses over the overlap.
+///
+/// The two laws are not interchangeable, and which one is right depends on what the two signals
+/// have to do with each other:
+///
+/// | | curves | sums to 1 | right for |
+/// |---|---|---|---|
+/// | [`Linear`](CrossfadeLaw::Linear) | `1-t`, `t` | **amplitude** | material that is correlated — the same take, a loop point, a repeated bar |
+/// | [`EqualPower`](CrossfadeLaw::EqualPower) | `cos(tπ/2)`, `sin(tπ/2)` | **power** | material that is unrelated — two different takes, a scene change |
+///
+/// Using one where the other belongs is audible in a specific way. Equal-power on identical
+/// material sums to `cos + sin`, which peaks at `√2` — **+3.01 dB** in the middle of the fade.
+/// Linear on unrelated material sums in power to `(1-t)² + t²`, which dips to 0.5 in the middle —
+/// **-3.01 dB**, the classic hole in the middle of a crossfade.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CrossfadeLaw {
+    /// `1-t` out, `t` in. The gains sum to 1 at every point, so identical material passes through
+    /// completely unchanged.
+    Linear,
+    /// `cos(tπ/2)` out, `sin(tπ/2)` in. The gains *square* to 1 at every point, so unrelated
+    /// material — whose powers add rather than whose amplitudes add — holds a steady level.
+    EqualPower,
+}
+
+impl CrossfadeLaw {
+    /// The `(fade-out, fade-in)` gains at normalized position `t ∈ [0, 1]`.
+    ///
+    /// `t = 0` is entirely the outgoing signal, `t = 1` entirely the incoming one.
+    pub fn gains(self, t: f32) -> (f32, f32) {
+        let t = t.clamp(0.0, 1.0);
+        match self {
+            CrossfadeLaw::Linear => (1.0 - t, t),
+            CrossfadeLaw::EqualPower => {
+                let theta = t * std::f32::consts::FRAC_PI_2;
+                (theta.cos(), theta.sin())
+            }
+        }
+    }
+}
+
+/// Concatenate signals with their ends overlapped and faded into each other (ROADMAP D1).
+///
+/// [`concat`] butt-joins, which puts a step at the seam unless both sides happen to be at zero.
+/// This overlaps each adjacent pair by `overlap_s` seconds and crossfades across it, so the join is
+/// continuous. Sample-accurate: the overlap is `round(overlap_s · fs)` frames, and the result is
+/// exactly
+///
+/// ```text
+/// sum(frames) - sum(overlap of each adjacent pair)
+/// ```
+///
+/// frames long. The overlap of a pair is clamped to what the two sides actually have, so joining a
+/// 10 ms signal with a 1 s overlap asked for overlaps by 10 ms rather than failing or inventing
+/// audio — and the length formula still holds, using the clamped values.
+///
+/// Channel counts are unified to the maximum (missing channels are silent) and the first signal's
+/// `fs` is used, both exactly as [`concat`] does. An empty slice yields an empty signal; a single
+/// signal is returned unchanged, since there is no seam to fade.
+///
+/// See [`CrossfadeLaw`] for which law to pick — it is not a stylistic choice.
+pub fn crossfade(sigs: &[&Signal], overlap_s: f32, law: CrossfadeLaw) -> Signal {
+    let Some(first) = sigs.first() else {
+        return Signal::new(0, Vec::new());
+    };
+    let nch = sigs.iter().map(|s| s.channel_count()).max().unwrap_or(0);
+    let fs = first.fs;
+    let want_overlap = (overlap_s.max(0.0) * fs as f32).round() as usize;
+
+    // Fold left: the accumulator is everything joined so far, and each step overlaps its tail with
+    // the next signal's head. Folding rather than joining all at once keeps the length formula a
+    // sum over adjacent pairs, which is what makes it predictable when a signal is shorter than
+    // the overlap.
+    let mut acc: Vec<Vec<f32>> = (0..nch)
+        .map(|ci| first.channels.get(ci).cloned().unwrap_or_default())
+        .collect();
+    let mut acc_frames = first.frames();
+
+    for next in &sigs[1..] {
+        let next_frames = next.frames();
+        let overlap = want_overlap.min(acc_frames).min(next_frames);
+        let joined = acc_frames + next_frames - overlap;
+
+        for (ci, channel) in acc.iter_mut().enumerate() {
+            channel.resize(acc_frames, 0.0); // a channel this signal did not have is silence
+            let src = next.channels.get(ci);
+            channel.resize(joined, 0.0);
+
+            // The overlap sits at the end of what was there and the start of what is arriving.
+            let start = acc_frames - overlap;
+            for i in 0..overlap {
+                // `overlap - 1` in the denominator so the ramp reaches exactly 1 on its last
+                // sample; a 1-frame overlap is the degenerate case and is handled as t = 0.
+                let t = if overlap > 1 {
+                    i as f32 / (overlap - 1) as f32
+                } else {
+                    0.0
+                };
+                let (out_gain, in_gain) = law.gains(t);
+                let incoming = src.and_then(|c| c.get(i)).copied().unwrap_or(0.0);
+                channel[start + i] = channel[start + i] * out_gain + incoming * in_gain;
+            }
+            // Everything after the overlap is the incoming signal as it is.
+            for i in overlap..next_frames {
+                channel[start + i] = src.and_then(|c| c.get(i)).copied().unwrap_or(0.0);
+            }
+        }
+        acc_frames = joined;
+    }
+
+    Signal::new(fs, acc)
+}
+
 /// Concatenate signals end-to-end (in time). Channel counts are unified to the maximum (missing
 /// channels are silent). Uses the first signal's `fs`; an empty slice yields an empty signal.
 pub fn concat(sigs: &[&Signal]) -> Signal {
@@ -385,6 +497,185 @@ mod tests {
             let e_out = st.channels[0][f].powi(2) + st.channels[1][f].powi(2);
             assert!((e_out - s.channels[0][f].powi(2)).abs() < 1e-6);
         }
+    }
+
+    // --- crossfade (ROADMAP D1) ---------------------------------------------------------------
+
+    fn ramp(fs: u32, frames: usize) -> Signal {
+        Signal::new(fs, vec![(0..frames).map(|i| i as f32 * 0.001).collect()])
+    }
+
+    /// The property that makes a law correct for *correlated* material: where the two sides of the
+    /// seam carry the same value, the crossfade has to give that value back.
+    ///
+    /// Note what "a signal with itself" actually overlaps — the **tail** of the first copy against
+    /// the **head** of the second, which are the same samples only if the signal is stationary.
+    /// A constant is the clean case, so that is what this uses; a ramp would compare 2.4 against
+    /// 0.0 and measure something else entirely.
+    ///
+    /// The law that holds here is **linear**, not equal-power, and the arithmetic is not subtle:
+    /// linear's gains sum to `(1-t) + t = 1` everywhere. Equal-power's sum to `cos + sin`, which is
+    /// `√2` at the midpoint — the +3.01 dB checked below. ROADMAP D1 names equal-power for this
+    /// property; that is the wrong law for it, and this pair of tests is the evidence.
+    #[test]
+    fn a_linear_crossfade_of_a_signal_with_itself_is_unchanged() {
+        let x = Signal::new(48_000, vec![vec![0.5f32; 4_800]]);
+        let out = crossfade(&[&x, &x], 0.05, CrossfadeLaw::Linear);
+
+        // Overlap 2400 frames: 4800 + 4800 - 2400.
+        assert_eq!(out.frames(), 7_200);
+        let worst = out.channels[0]
+            .iter()
+            .map(|s| (s - 0.5).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 1e-6, "level moved by {worst}, the D1 bound is 1e-6");
+
+        // And the same signal under equal-power does *not* hold its level — it is 3 dB up in the
+        // middle of the seam. Stated here so the two tests cannot be reconciled by weakening one.
+        let eq = crossfade(&[&x, &x], 0.05, CrossfadeLaw::EqualPower);
+        let peak = eq.channels[0].iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(
+            (20.0 * (peak / 0.5).log10() - 3.01).abs() < 0.01,
+            "equal-power on identical material peaked at {peak}, expected 0.5·√2"
+        );
+    }
+
+    /// And the mirror: on *uncorrelated* material — where power adds rather than amplitude —
+    /// equal-power is the law that holds the level and linear is the one that digs a hole.
+    ///
+    /// Measured on white noise across the seam, comparing the RMS in the middle of the overlap
+    /// against the RMS of the material going in.
+    #[test]
+    fn equal_power_holds_the_level_where_linear_digs_a_hole() {
+        // Two independent noise signals, so the overlap really is uncorrelated.
+        let mut state = 0x2545_f491u32;
+        let mut noise = |n: usize| {
+            let samples = (0..n)
+                .map(|_| {
+                    state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    (state >> 8) as f32 / 8_388_608.0 - 1.0
+                })
+                .collect();
+            Signal::new(48_000, vec![samples])
+        };
+        let a = noise(48_000);
+        let b = noise(48_000);
+
+        let rms = |x: &[f32]| (x.iter().map(|s| s * s).sum::<f32>() / x.len() as f32).sqrt();
+        let reference = rms(&a.channels[0]);
+
+        // The middle of the overlap is where the two laws differ most.
+        let overlap = 24_000; // 0.5 s
+        let mid = 48_000 - overlap / 2;
+        let window = 1_000;
+
+        for (law, want_db, tolerance) in [
+            (CrossfadeLaw::EqualPower, 0.0f32, 0.35f32),
+            (CrossfadeLaw::Linear, -3.01, 0.35),
+        ] {
+            let out = crossfade(&[&a, &b], 0.5, law);
+            let got = rms(&out.channels[0][mid - window / 2..mid + window / 2]);
+            let db = 20.0 * (got / reference).log10();
+            assert!(
+                (db - want_db).abs() < tolerance,
+                "{law:?} at the middle of the seam: {db:.2} dB, expected about {want_db}"
+            );
+        }
+    }
+
+    /// And the property that makes equal-power correct for *unrelated* material: the gains square
+    /// to 1 everywhere, so power — which is what adds when two signals are uncorrelated — is
+    /// constant across the fade. Exact to float noise, which is the ±1e-6 claim, correctly aimed.
+    #[test]
+    fn equal_power_gains_hold_the_power_constant() {
+        for i in 0..=1_000 {
+            let t = i as f32 / 1_000.0;
+            let (out_gain, in_gain) = CrossfadeLaw::EqualPower.gains(t);
+            let power = out_gain * out_gain + in_gain * in_gain;
+            assert!(
+                (power - 1.0).abs() < 1e-6,
+                "t = {t}: power {power}, expected 1"
+            );
+        }
+    }
+
+    /// The other half of the same coin, stated so nobody swaps the laws back: equal-power on
+    /// identical material is +3.01 dB in the middle, and linear on unrelated material is -3.01 dB.
+    /// Both are the well-known audible failure, and both are what the *other* law is for.
+    #[test]
+    fn using_the_wrong_law_is_audible_by_exactly_three_decibels() {
+        let (eq_out, eq_in) = CrossfadeLaw::EqualPower.gains(0.5);
+        let amplitude_bump = 20.0 * (eq_out + eq_in).log10();
+        assert!(
+            (amplitude_bump - 3.01).abs() < 0.01,
+            "equal-power on identical material: {amplitude_bump:.2} dB"
+        );
+
+        let (lin_out, lin_in) = CrossfadeLaw::Linear.gains(0.5);
+        let power_dip = 10.0 * (lin_out * lin_out + lin_in * lin_in).log10();
+        assert!(
+            (power_dip + 3.01).abs() < 0.01,
+            "linear on unrelated material: {power_dip:.2} dB"
+        );
+    }
+
+    /// The length formula, including the case that would otherwise be a panic or a surprise: an
+    /// overlap longer than one of the signals is clamped to what is there.
+    #[test]
+    fn the_length_is_the_sum_less_every_clamped_overlap() {
+        let long = ramp(48_000, 4_800);
+        let short = ramp(48_000, 100);
+
+        // Three signals, two seams, 0.05 s = 2400 frames each: 4800*3 - 2400*2.
+        let out = crossfade(&[&long, &long, &long], 0.05, CrossfadeLaw::EqualPower);
+        assert_eq!(out.frames(), 4_800 * 3 - 2_400 * 2);
+
+        // The short signal can only give 100 frames of overlap, so that seam is 100, not 2400.
+        let out = crossfade(&[&long, &short], 0.05, CrossfadeLaw::EqualPower);
+        assert_eq!(out.frames(), 4_800 + 100 - 100);
+
+        // Degenerate inputs stay sane rather than panicking.
+        assert_eq!(crossfade(&[], 0.05, CrossfadeLaw::Linear).frames(), 0);
+        assert_eq!(
+            crossfade(&[&long], 0.05, CrossfadeLaw::Linear).frames(),
+            4_800
+        );
+        assert_eq!(
+            crossfade(&[&long, &long], 0.0, CrossfadeLaw::Linear).frames(),
+            9_600,
+            "a zero overlap is exactly concat"
+        );
+    }
+
+    /// A zero-length overlap must give back precisely what `concat` gives, or the two helpers
+    /// disagree about the same operation.
+    #[test]
+    fn a_zero_overlap_is_concat() {
+        let a = ramp(48_000, 500);
+        let b = ramp(48_000, 300);
+        assert_eq!(
+            crossfade(&[&a, &b], 0.0, CrossfadeLaw::EqualPower).channels,
+            concat(&[&a, &b]).channels
+        );
+    }
+
+    /// Channels are unified like `concat` does, and a channel one side lacks fades against silence
+    /// rather than being dropped or left at full level.
+    #[test]
+    fn a_missing_channel_fades_against_silence() {
+        let stereo = Signal::new(48_000, vec![vec![1.0; 400], vec![1.0; 400]]);
+        let mono = Signal::new(48_000, vec![vec![1.0; 400]]);
+        let out = crossfade(&[&stereo, &mono], 0.005, CrossfadeLaw::Linear);
+
+        assert_eq!(out.channels.len(), 2);
+        // Channel 1 has nothing arriving, so across the overlap it is the outgoing fade alone.
+        let overlap = 240;
+        let start = 400 - overlap;
+        let last = out.channels[1][start + overlap - 1];
+        assert!(
+            last.abs() < 1e-6,
+            "the faded-out tail should reach 0, got {last}"
+        );
     }
 
     #[test]

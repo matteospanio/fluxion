@@ -110,6 +110,7 @@ pub(crate) fn cmd_process(
     fs: Option<u32>,
     rate: Option<u32>,
     mix_inputs: bool,
+    crossfade: Option<&str>,
     side_paths: &[String],
     enc: WavEncoding,
     chain_text: Option<&str>,
@@ -181,7 +182,12 @@ pub(crate) fn cmd_process(
     // byte-identical to the buffered one, so the output matches the buffered path.
     // The streaming path runs one signal through a realtime graph; a side input is a second
     // signal it has no way to carry, so a chain that uses one takes the buffered path.
-    if rate.is_none() && !mix_inputs && inputs.len() == 1 && side_paths.is_empty() {
+    if rate.is_none()
+        && !mix_inputs
+        && crossfade.is_none()
+        && inputs.len() == 1
+        && side_paths.is_empty()
+    {
         let streamed = try_stream_process(&inputs[0], &stages, output, fs, enc)?;
         if streamed {
             return Ok(());
@@ -198,16 +204,18 @@ pub(crate) fn cmd_process(
         }
     }
 
+    let crossfade = crossfade.map(parse_crossfade).transpose()?;
+
     let mut signals = align_rates(signals, rate)?;
 
     let combined = match signals.len() {
         1 => signals.pop().unwrap(),
         _ => {
             let refs: Vec<&Signal> = signals.iter().collect();
-            if mix_inputs {
-                transform::mix(&refs)
-            } else {
-                transform::concat(&refs)
+            match (mix_inputs, crossfade) {
+                (true, _) => transform::mix(&refs),
+                (false, Some((secs, law))) => transform::crossfade(&refs, secs, law),
+                (false, None) => transform::concat(&refs),
             }
         }
     };
@@ -222,6 +230,33 @@ pub(crate) fn cmd_process(
 
     let out = run_stages_with(&stages, combined, &side_refs);
     write_output(output, &out, enc)
+}
+
+/// Parse `--crossfade SECS[,LAW]` into an overlap and a law (ROADMAP D1).
+///
+/// One flag rather than two, comma-separated the way `fir --taps` already is: the law is picked
+/// once and rarely changed, and the help screen has a hard 40-line budget that two flags broke.
+fn parse_crossfade(spec: &str) -> Result<(f32, transform::CrossfadeLaw), String> {
+    let (secs, law) = match spec.split_once(',') {
+        Some((s, l)) => (s, l.trim()),
+        None => (spec, "equal-power"),
+    };
+    let secs = parse_value(secs.trim())?;
+    if !(secs.is_finite() && secs >= 0.0) {
+        return Err(format!(
+            "--crossfade takes a length in seconds, not '{secs}'"
+        ));
+    }
+    let law = match law {
+        "equal-power" => transform::CrossfadeLaw::EqualPower,
+        "linear" => transform::CrossfadeLaw::Linear,
+        other => {
+            return Err(format!(
+                "unknown crossfade law '{other}' — 'equal-power' for unrelated material                  (the default), 'linear' for two copies of the same take"
+            ));
+        }
+    };
+    Ok((secs, law))
 }
 
 /// Parse a `--chain` string, rendering a syntax error with its caret.
