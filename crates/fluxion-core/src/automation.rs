@@ -52,6 +52,25 @@ pub enum Shape {
 }
 
 impl Shape {
+    /// The shape that travels from `a` to `b` **geometrically** — a straight line in decibels.
+    ///
+    /// This is what "fade from 0 dB to -60 dB" means when someone draws it on a dB-scaled lane: a
+    /// constant number of decibels per second, which in amplitude is a curve, not a line. A
+    /// straight line in amplitude spends most of its time already almost silent — half way through
+    /// it is at -6 dB, not -30.
+    ///
+    /// It is [`Shape::Exp`] with `k = ln(b/a)`, and that is not an approximation of geometric
+    /// interpolation but exactly it: substituting gives `a·(b/a)^u`. Both values must be non-zero
+    /// and share a sign — there is no geometric path to or through zero — and this returns
+    /// [`Shape::Linear`] when they do not, because a fade that cannot be geometric should still be
+    /// a fade.
+    pub fn geometric(a: f32, b: f32) -> Shape {
+        if a == 0.0 || b == 0.0 || a.signum() != b.signum() || !(a.is_finite() && b.is_finite()) {
+            return Shape::Linear;
+        }
+        canonical(Shape::Exp { k: (b / a).ln() })
+    }
+
     /// The fraction of the way from `a` to `b` at normalized position `u ∈ [0, 1]`.
     fn fraction(self, u: f32) -> f32 {
         match self {
@@ -201,6 +220,20 @@ impl Curve {
     pub fn ramp(from: f32, to: f32, seconds: f64) -> Curve {
         Curve::new(
             [Point::new(0.0, from), Point::new(seconds, to)],
+            Timing::Once,
+        )
+    }
+
+    /// A fade from `from` to `to` over `seconds` at a constant rate **in decibels**, then held.
+    ///
+    /// The fade a user means when they drag a gain lane from 0 dB to -60 dB. See
+    /// [`Shape::geometric`] for why that is a curve in amplitude rather than a line.
+    pub fn db_ramp(from: f32, to: f32, seconds: f64) -> Curve {
+        Curve::new(
+            [
+                Point::shaped(0.0, from, Shape::geometric(from, to)),
+                Point::new(seconds, to),
+            ],
             Timing::Once,
         )
     }
@@ -445,6 +478,74 @@ pub fn value_at(knots: &[Knot], n: i64) -> f32 {
     last.v
 }
 
+/// One automation lane: a curve driving one parameter of one named node (ROADMAP D2).
+///
+/// The node is addressed by the `name:` label it was given in the chain — which is what
+/// [`Graph::Named`](crate::Graph::Named) has always been for — and the parameter by its name in the
+/// registry, not by position. A name survives a parameter being reordered; an index does not, and
+/// would retarget silently.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Lane {
+    /// The `name:` label of the node to automate.
+    pub node: String,
+    /// The parameter's name, as the registry spells it (`"cutoff"`, `"gain"`, …).
+    pub param: String,
+    /// What the parameter does over time.
+    pub curve: Curve,
+}
+
+impl Lane {
+    /// A lane driving `param` of the node labelled `node`.
+    pub fn new(node: impl Into<String>, param: impl Into<String>, curve: Curve) -> Lane {
+        Lane {
+            node: node.into(),
+            param: param.into(),
+            curve,
+        }
+    }
+}
+
+/// Every lane for a render — the side table handed to the automated process call.
+///
+/// Deliberately **not** part of [`Graph`](crate::Graph). A graph is a description of a signal
+/// path and round-trips through the chain text; automation is a description of a *performance*
+/// over a particular stretch of time, and it is the thing a host rebuilds every time a user drags
+/// a breakpoint. Keeping them apart means an automated render still prints, parses and freezes as
+/// the chain it is.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Automation {
+    lanes: Vec<Lane>,
+}
+
+impl Automation {
+    /// No automation — every parameter holds the value the graph gives it.
+    pub fn new() -> Automation {
+        Automation::default()
+    }
+
+    /// Add a lane.
+    pub fn with(mut self, lane: Lane) -> Automation {
+        self.lanes.push(lane);
+        self
+    }
+
+    /// The lanes, in the order they were added.
+    pub fn lanes(&self) -> &[Lane] {
+        &self.lanes
+    }
+
+    /// Whether anything is automated at all — the cheap check that lets a caller skip the
+    /// automated path entirely.
+    pub fn is_empty(&self) -> bool {
+        self.lanes.is_empty()
+    }
+
+    /// Every lane targeting the node labelled `name`.
+    pub fn for_node(&self, name: &str) -> impl Iterator<Item = &Lane> {
+        self.lanes.iter().filter(move |l| l.node == name)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -602,6 +703,56 @@ mod tests {
         let c = Curve::new([Point::new(1.0, 1.0), Point::new(0.0, 0.0)], Timing::Once);
         assert_eq!(c.points()[0].t, 0.0);
         assert_eq!(c.compile(FS).at(0), 0.0);
+    }
+
+    /// A dB-linear fade is geometric in amplitude, and `Shape::geometric` gives exactly that —
+    /// the half-way point of a 0 → -60 dB fade is -30 dB, where a straight line in amplitude
+    /// would be at -6 dB. Getting this wrong is the most common automation mistake there is.
+    #[test]
+    fn a_db_fade_is_geometric_not_linear() {
+        let silent = 10f32.powf(-60.0 / 20.0);
+        let db = Curve::db_ramp(1.0, silent, 1.0).compile(FS);
+        let linear = Curve::ramp(1.0, silent, 1.0).compile(FS);
+
+        let half_db = 20.0 * db.at(24_000).log10();
+        let half_linear = 20.0 * linear.at(24_000).log10();
+        assert!(
+            (half_db + 30.0).abs() < 0.01,
+            "half way through a dB fade should be -30 dB, got {half_db:.2}"
+        );
+        assert!(
+            (half_linear + 6.02).abs() < 0.01,
+            "half way through a linear fade is -6 dB, got {half_linear:.2}"
+        );
+
+        // Constant decibels per second, all the way down: every tenth is 6 dB below the last.
+        for tenth in 1..=10u64 {
+            let want = -6.0 * tenth as f32;
+            let got = 20.0 * db.at(4_800 * tenth).log10();
+            assert!(
+                (got - want).abs() < 0.02,
+                "at {}/10 of the fade: {got:.2} dB, expected {want:.2}",
+                tenth
+            );
+        }
+        // Both land on the same endpoints, whatever they do in between.
+        assert_eq!(db.at(0), 1.0);
+        assert_eq!(db.at(48_000), silent);
+    }
+
+    /// A geometric shape needs two non-zero values of the same sign; anything else falls back to a
+    /// straight line rather than producing a NaN.
+    #[test]
+    fn geometric_falls_back_where_it_cannot_apply() {
+        assert_eq!(Shape::geometric(0.0, 1.0), Shape::Linear);
+        assert_eq!(Shape::geometric(1.0, 0.0), Shape::Linear);
+        assert_eq!(Shape::geometric(-1.0, 1.0), Shape::Linear);
+        assert_eq!(
+            Shape::geometric(0.5, 0.5),
+            Shape::Linear,
+            "b/a = 1 -> k = 0"
+        );
+        assert!(matches!(Shape::geometric(1.0, 0.001), Shape::Exp { .. }));
     }
 
     /// A curve rides in a `.fxg`, so it has to survive serde unchanged.

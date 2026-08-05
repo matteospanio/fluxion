@@ -248,7 +248,7 @@ engine, once, with tests.
 | # | Task | Depends on | The check written first |
 |---|------|-----------|--------------------------|
 | [x] D1 | Crossfade over `concat` (linear and equal-power), sample-accurate | — | An equal-power crossfade of a signal with itself leaves the level unchanged (±1e-6) |
-| [ ] D2 | Automation: breakpoint curves applied to any op parameter, compiled to per-block ramps; one curve format shared with S4 | S4 curves | A gain automated 0→−60 dB over 1 s matches the exact envelope sample by sample |
+| [x] D2 | Automation: breakpoint curves applied to any op parameter, compiled to per-block ramps; one curve format shared with S4 | S4 curves | A gain automated 0→−60 dB over 1 s matches the exact envelope sample by sample |
 | [x] D3 | Check that live parameter ramps (`fluxion-rt`) and D2 curves use one definition — what you hear live is what renders | D2 | The same breakpoints give identical envelopes offline and in the realtime engine |
 | [ ] D4 | Render any region: compute `[from, to)` of a chain deterministically (seek) — the base for waveform tiles, loop preview, partial re-render | — | Rendering `[0,N)` whole equals rendering it in random pieces, bit for bit |
 

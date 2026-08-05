@@ -9,6 +9,8 @@
 #[cfg(feature = "cuda")]
 pub mod cuda;
 
+pub mod automate;
+
 use std::cell::RefCell;
 
 use fluxion_core::{FrozenSos, Graph, Op, OpKind, Signal, TapData, TapKind, TapReading};
@@ -21,6 +23,7 @@ use fluxion_ops::{
 use fluxion_rt::RtGraph;
 use rayon::prelude::*;
 
+pub use automate::{AutomationError, process_automated, process_automated_from};
 pub use fluxion_ops::{Certificate, Verdict};
 
 /// Run a graph over an input signal on the CPU, returning a new signal.
@@ -118,7 +121,7 @@ fn conform(channels: &[Vec<f32>], want_channels: usize, want_frames: usize) -> V
 }
 
 /// The SOS cascade an op lowers to, if it is a (cascade of) biquad(s); `None` for non-filter ops.
-fn op_sos(op: &Op, fs: u32) -> Option<Sos> {
+pub(crate) fn op_sos(op: &Op, fs: u32) -> Option<Sos> {
     let p = &op.params;
     let order = |i: usize| p[i].round().max(1.0) as usize;
     Some(match op.kind {

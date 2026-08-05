@@ -21,6 +21,41 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Added
 
+- **Automation: curves driving op parameters (Epic D / D2)** — `process_automated(graph, input,
+  &automation)`, where an `Automation` is a side table of `Lane`s naming a node's `name:` label, a
+  parameter *by name*, and a curve. A side table rather than part of the `Graph` on purpose: a
+  graph describes a signal path and round-trips through the chain text, while automation describes
+  a performance over a stretch of time. An automated render still prints, parses and freezes as
+  the chain it is.
+  Two application modes, because the ops genuinely differ. A **gain is a multiply**, so it is
+  rendered against the curve per sample with nothing approximated — which is exactly what D2's
+  check demands, and the test asserts `==` on every one of 48 000 frames. A **filter's cutoff is
+  an input to a design**, so it is redesigned every 64 frames (1.33 ms) with the filter state
+  carried across the change. Anything else is refused by name, with an error that lists the
+  parameters the op does have; a mistyped lane fails before a sample is rendered rather than being
+  silently ignored.
+  D2's own check says "0 → −60 dB", and getting that right needed `Shape::geometric` — a fade
+  drawn in decibels is *geometric* in amplitude, not linear. Half way through a 60 dB fade the
+  level is −30 dB; a straight line in amplitude is at −6 dB there, which is a different fade
+  entirely. `Curve::db_ramp` is the constructor for the one people mean.
+
+### Fixed
+
+- **Coefficient crossfades in the realtime engine were 3 dB loud (`fluxion-rt`)** — `SosStream`
+  blended the outgoing and incoming cascades with an **equal-power** law, `cos·old + sin·new`. But
+  the two branches are the *same input* through two similar filters, so their outputs are strongly
+  correlated, and correlated signals add in amplitude: `cos + sin = √2` is **+3.01 dB** in the
+  middle of every fade. The law is now linear, whose gains sum to 1.
+  This is the same arithmetic that D1 turned up in the roadmap's own crossfade check, applied to a
+  place it had been wrong since the streaming filter was written. The existing test could not see
+  it — it swaps a low-pass for a high-pass on DC, where one branch is 1 and the other 0, and both
+  laws slide cleanly between them. The new test crossfades a filter **to itself**, where the
+  branches are identical and any law but linear shows immediately; it measures 3.01 dB against the
+  old code and 0.0 against the new.
+- `SosStream::set_coeffs_now` replaces coefficients while keeping the filter state, for a parameter
+  that is moving smoothly rather than jumping. Crossfading two cascades cold-starts the incoming
+  one, which is the wrong trade 750 times a second.
+
 - **One curve, two engines (Epic S / S4, Epic D / D3)** — `core::automation::Curve`: breakpoint
   automation, an LFO and an ADSR are one type, because they are one thing seen three ways — a list
   of points and a rule for how time maps onto them (`Once`, `Loop`, `Sustain`). The LFO is not an

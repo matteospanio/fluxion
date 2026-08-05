@@ -27,7 +27,7 @@ pub mod signal;
 pub mod suggest;
 pub mod tap;
 
-pub use automation::{Compiled, Curve, Point, Shape, Timing};
+pub use automation::{Automation, Compiled, Curve, Lane, Point, Shape, Timing};
 pub use envelope::{Envelope, EnvelopeError, FORMAT_VERSION, LoadError};
 pub use frozen::FrozenSos;
 pub use graph::Graph;

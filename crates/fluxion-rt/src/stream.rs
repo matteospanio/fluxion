@@ -7,8 +7,6 @@
 //! arbitrary `fluxion_core::Graph` to a cascade (G2) and the SIMD/general-graph executor are
 //! later steps.
 
-use std::f32::consts::FRAC_PI_2;
-
 use fluxion_ops::Biquad;
 
 /// A streaming SOS cascade: the sections plus each section's Direct-Form-II-Transposed state.
@@ -72,6 +70,29 @@ impl SosStream {
         self.fade_left = self.fade_len;
     }
 
+    /// Replace the coefficients **immediately, keeping the filter state** — no crossfade.
+    ///
+    /// This is the right swap for a parameter that is *moving smoothly*: an automation lane
+    /// stepping a cutoff every block changes the coefficients by a hair, and the state carried
+    /// from the previous block is a good approximation for the new cascade, so the output is
+    /// continuous without any blending at all.
+    ///
+    /// [`set_coeffs`](Self::set_coeffs) is for the other case — a large, discontinuous change,
+    /// where the old state means nothing to the new filter and the two have to be crossfaded. That
+    /// one starts the incoming cascade from silence, which is a transient this avoids paying 750
+    /// times a second.
+    pub fn set_coeffs_now(&mut self, new_sos: &[Biquad]) {
+        if self.sos.len() == new_sos.len() {
+            self.sos.copy_from_slice(new_sos);
+        } else {
+            // A different section count has no state to carry over anyway.
+            self.sos = new_sos.to_vec();
+            self.state = vec![[0.0f32; 2]; new_sos.len()];
+        }
+        // Abandon any crossfade in progress: the caller has just said what the filter is now.
+        self.fade_left = 0;
+    }
+
     /// The Direct-Form-II-Transposed cascade inner loop over one block, carrying `state`.
     fn run(sos: &[Biquad], state: &mut [[f32; 2]], input: &[f32], output: &mut [f32]) {
         output.copy_from_slice(input);
@@ -129,7 +150,17 @@ impl SosStream {
             return;
         }
 
-        // Crossfade: current → output, incoming → scratch, equal-power blend (cos²+sin² = 1).
+        // Crossfade: current → output, incoming → scratch, then blend.
+        //
+        // **Linear**, not equal-power, and the distinction is not cosmetic. The two branches are
+        // the *same input* through two similar filters, so their outputs are strongly correlated —
+        // and correlated signals add in amplitude. Gains that sum to 1 hold the level; the
+        // equal-power pair `cos`/`sin` *squares* to 1 and sums to √2, which is **+3.01 dB** in the
+        // middle of every fade. That is the law for uncorrelated material, and two filterings of
+        // one signal are the opposite of uncorrelated.
+        //
+        // (Equal-power is right for `transform::crossfade` between two unrelated takes; the two
+        // laws and when each applies are laid out on `CrossfadeLaw`.)
         Self::run(&self.sos, &mut self.state, input, output);
         let scratch = &mut self.scratch[..n];
         Self::run(&self.next_sos, &mut self.next_state, input, scratch);
@@ -138,8 +169,8 @@ impl SosStream {
             self.fade_len as f32,
         );
         for (i, (o, &s)) in output.iter_mut().zip(scratch.iter()).enumerate() {
-            let theta = ((done0 + i as f32) / flen).min(1.0) * FRAC_PI_2;
-            *o = theta.cos() * *o + theta.sin() * s;
+            let t = ((done0 + i as f32) / flen).min(1.0);
+            *o = (1.0 - t) * *o + t * s;
         }
         self.fade_left = self.fade_left.saturating_sub(n as u32);
         if self.fade_left == 0 {
@@ -229,6 +260,70 @@ mod tests {
         assert!(
             y[3500..].iter().all(|&v| v.abs() < 0.02),
             "not settled to hp DC after fade"
+        );
+    }
+
+    /// The check that catches the law being wrong, which the lp→hp test above cannot: crossfade a
+    /// filter to *itself*. Both branches then carry the same settled signal, so the blend must give
+    /// that signal back. An equal-power blend gives it back 3 dB louder — `cos + sin = √2` on
+    /// correlated material — and nothing else in the suite would notice.
+    #[test]
+    fn crossfading_a_filter_to_itself_holds_the_level() {
+        let lp = butterworth_lowpass(2, 2_000.0, 48_000);
+        let dc = vec![1.0f32; 6_000];
+
+        let mut s = SosStream::new(lp.clone());
+        s.prepare(200);
+        let mut y = Vec::with_capacity(dc.len());
+        let mut out = vec![0.0f32; 200];
+        let mut swapped = false;
+        for chunk in dc.chunks(200) {
+            let o = &mut out[..chunk.len()];
+            s.process_block(chunk, o);
+            y.extend_from_slice(o);
+            if !swapped && y.len() >= 2_000 {
+                // Settled on DC, now swap to the identical cascade over 2000 samples.
+                s.set_coeffs(&lp, 2_000);
+                swapped = true;
+            }
+        }
+
+        // Well into the fade, both branches are passing the same DC. The output has to be 1.
+        let worst = y[3_000..4_000]
+            .iter()
+            .map(|v| (v - 1.0).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            worst < 0.01,
+            "a fade between identical filters moved the level by {worst} \
+             ({:.2} dB) — the blend law is summing correlated signals wrong",
+            20.0 * (1.0 + worst).log10()
+        );
+    }
+
+    /// The swap an automation lane uses: coefficients change, state carries, output is continuous
+    /// and — for an unchanged cascade — identical.
+    #[test]
+    fn set_coeffs_now_keeps_the_state() {
+        let lp = butterworth_lowpass(4, 3_000.0, 48_000);
+        let signal: Vec<f32> = (0..2_000).map(|i| (0.07 * i as f32).sin()).collect();
+
+        let mut plain = SosStream::new(lp.clone());
+        let mut swapping = SosStream::new(lp.clone());
+        let (mut a, mut b) = (Vec::new(), Vec::new());
+        let mut out = vec![0.0f32; 64];
+        for chunk in signal.chunks(64) {
+            let o = &mut out[..chunk.len()];
+            plain.process_block(chunk, o);
+            a.extend_from_slice(o);
+            // Re-assert the same coefficients every block, as an automated-but-constant lane does.
+            swapping.set_coeffs_now(&lp);
+            swapping.process_block(chunk, o);
+            b.extend_from_slice(o);
+        }
+        assert_eq!(
+            a, b,
+            "re-asserting the same coefficients changed the output"
         );
     }
 
