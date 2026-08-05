@@ -295,11 +295,14 @@ pub fn crossfade(sigs: &[&Signal], overlap_s: f32, law: CrossfadeLaw) -> Signal 
             let start = acc_frames - overlap;
             for i in 0..overlap {
                 // `overlap - 1` in the denominator so the ramp reaches exactly 1 on its last
-                // sample; a 1-frame overlap is the degenerate case and is handled as t = 0.
+                // sample, which makes the join continuous with the pure incoming signal that
+                // follows. A 1-frame overlap has no span to ramp across, and the two signals meet
+                // at that single sample — so it is the midpoint, where both contribute. Taking
+                // `t = 0` there would silently drop the incoming signal's first frame.
                 let t = if overlap > 1 {
                     i as f32 / (overlap - 1) as f32
                 } else {
-                    0.0
+                    0.5
                 };
                 let (out_gain, in_gain) = law.gains(t);
                 let incoming = src.and_then(|c| c.get(i)).copied().unwrap_or(0.0);
@@ -645,6 +648,27 @@ mod tests {
             9_600,
             "a zero overlap is exactly concat"
         );
+    }
+
+    /// The degenerate overlap: one frame, where the two signals meet at a single sample. Both
+    /// have to be in it — an implementation that puts the ramp at t = 0 there keeps the outgoing
+    /// signal and silently drops the incoming signal's first frame.
+    #[test]
+    fn a_one_frame_overlap_keeps_both_signals() {
+        let a = Signal::new(48_000, vec![vec![1.0f32; 4]]);
+        let b = Signal::new(48_000, vec![vec![3.0f32; 4]]);
+        // 1/48000 s rounds to a 1-frame overlap.
+        let out = crossfade(&[&a, &b], 1.0 / 48_000.0, CrossfadeLaw::Linear);
+
+        assert_eq!(out.frames(), 7);
+        // The shared frame is half of each, not all of one.
+        assert!(
+            (out.channels[0][3] - 2.0).abs() < 1e-6,
+            "the meeting frame is {}, expected both signals at half",
+            out.channels[0][3]
+        );
+        // And nothing was lost: three frames of `b` follow it at full level.
+        assert_eq!(&out.channels[0][4..], &[3.0, 3.0, 3.0]);
     }
 
     /// A zero-length overlap must give back precisely what `concat` gives, or the two helpers
