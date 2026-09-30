@@ -54,6 +54,7 @@ flowchart LR
         W4 --> W5[W5 live parameter changes]
         W2 --> W6[W6 same-output tests wasm vs native]
         W4 --> W7[W7 size and speed budget]
+        W2 --> W9[W9 filter coefficients in the browser]
     end
     subgraph I["Epic I · interfaces and ease of use"]
         I1[I1 interface contract] --> I2[I2 one name everywhere]
@@ -182,6 +183,7 @@ everywhere" story.
 | [x] W6 | Same-output tests: every op exposed to wasm is rendered native and wasm on the same inputs and compared, with written tolerances, in CI | W2 | The comparison suite itself — red until every op matches |
 | [x] W7 | Budget: wasm file ≤ 1.5 MB gzipped (trim the op set behind features if needed), one block costs ≤ 30% of its deadline on a mid laptop, both enforced in CI | W4 | A size check and a speed check with hard limits |
 | [ ] W8 | *(later)* WebGPU lowering of the batch engine | W6 | — |
+| [ ] W9 | Filter coefficients in the browser: `Chain.sosCoeffs(fs)` hands back the designed sections of a pure-filter chain in the layout Python's `sos_coeffs` uses, and `Chain.certify(fs)` the stability verdict Python and `fx_rt_new` gate on — so an EQ editor draws the curve fluxion will render, and refuses an unstable chain, without a second copy of the filter design in JS | W2 | Node test: for `lowpass`, `peaking`, `cheby1_lowpass` and `highshelf`, `sosCoeffs(48000)` equals native `graph_to_sos` (what Python's `sos_coeffs` flattens) exactly, and \|H(e^jω)\| from the sections matches the DFT of `process` on an impulse within a written tolerance; `biquad(b0=1, a1=-2.1, a2=1.2)` certifies `unstable`; a non-filter chain gives `undefined` |
 
 ## Epic R — Resampling and time
 
