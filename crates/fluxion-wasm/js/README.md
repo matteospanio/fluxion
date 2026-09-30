@@ -63,6 +63,32 @@ error: unknown op 'hipass'
   ^^^^^^ did you mean 'highpass'?
 ```
 
+## Frequency response
+
+An EQ editor draws the curve from fluxion's own filter design, not a JS copy of it.
+`chain.sosCoeffs(fs)` returns the designed sections as one `Float32Array`, five numbers each —
+`b0, b1, b2, a1, a2`, with `a0 = 1` — the same layout and values as Python's `sos_coeffs`:
+
+```js
+function magnitude(sos, f, fs) {            // |H(e^jw)| at f Hz
+  const w = (2 * Math.PI * f) / fs, [c1, s1, c2, s2] = [Math.cos(w), Math.sin(w), Math.cos(2 * w), Math.sin(2 * w)];
+  let mag = 1;
+  for (let i = 0; i < sos.length; i += 5) {
+    const [b0, b1, b2, a1, a2] = sos.subarray(i, i + 5);
+    mag *= Math.hypot(b0 + b1 * c1 + b2 * c2, b1 * s1 + b2 * s2) / Math.hypot(1 + a1 * c1 + a2 * c2, a1 * s1 + a2 * s2);
+  }
+  return mag;
+}
+const db = 20 * Math.log10(magnitude(Chain.fromText("peaking(3000, 6, 1.5)").sosCoeffs(48000), 3000, 48000)); // 6.0
+```
+
+It returns `undefined` for a chain that is not one filter cascade — `gain` included, which is not
+folded in — so draw one-op chains per band and add the gain yourself. `name:` labels are ignored.
+`chain.certify(fs)` returns `{ verdict, margin }`, Python's `certify` as an object: refuse
+`"unstable"` (a hand-typed `biquad` can be), or anything but `"certified-stable"` /
+`"marginally-stable"` to be strict. CI checks both against the native library, and the curve
+against the DFT of an impulse through `process`.
+
 ## Live playback
 
 The same chain text, on the audio thread — playing audio the page hands it, or as an insert

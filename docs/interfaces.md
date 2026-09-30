@@ -111,6 +111,20 @@ The curve types are not on the interfaces as data — each door gets a small set
 (`ramp`, `dbRamp`, `lfo`, `points`) rather than a serialized `Curve`. That covers what a host
 actually draws, and it keeps the curve format free to change while it has one real caller.
 
+## Filter coefficients and stability
+
+A host drawing an EQ curve needs the sections fluxion designed, not its own copy of the formulas,
+and a verdict before it plays them (roadmap W9). One layout: `[b0, b1, b2, a1, a2]` per section,
+`a0 = 1`, for a chain that is one filter cascade — `gain` is not folded in, labels are transparent.
+
+- **Rust** — `graph_to_sos(&graph, fs)` → `Option<Sos>`; `certify_graph(&graph, fs)`.
+- **Python** — `chain.sos_coeffs(fs)`, raising if not one cascade; `chain.certify(fs)` →
+  `(verdict, margin)`.
+- **JS** — `chain.sosCoeffs(fs)`, `undefined` if not one cascade; `chain.certify(fs)` →
+  `{ verdict, margin }`.
+- **C and the CLI** — certify on the way in (`fx_rt_new`'s `verdict_out`, `fluxion compile`) but
+  hand no sections back: neither has a caller that draws.
+
 ## Definition of done
 
 A pull request that adds or changes an op is finished when all of these are true:

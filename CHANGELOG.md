@@ -21,6 +21,20 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Added
 
+- **Filter coefficients and stability in the browser (W9)** — `Chain.sosCoeffs(fs)` returns the
+  designed second-order sections of a pure-filter chain as a `Float32Array`, `[b0, b1, b2, a1, a2]`
+  per section with `a0 = 1` — Python's `sos_coeffs` layout, and the same values: all four checked
+  chains (`lowpass(1000, 4)`, `peaking(3000, 6, 1.5)`, `cheby1_lowpass(2000, 6, 1)`,
+  `highshelf(8000, 3, 0.7)`) are bit-identical to native `graph_to_sos` in CI, and were to the
+  Python wheel when checked by hand. It is `undefined` where Python raises: any non-filter op,
+  `gain` included (it is not folded into the sections), a `+` branch, a loop, a side input or a
+  tap; `name:` labels are transparent. `Chain.certify(fs)` returns `{ verdict, margin }`, the
+  certificate Python's `certify` returns as a tuple and `fx_rt_new` gates on, so an EQ editor can
+  draw the curve fluxion renders and refuse `biquad(b0=1, a1=-2.1, a2=1.2)` (`unstable`, margin
+  `1 − √1.2`) without a JS copy of the filter design. |H(e^jω)| evaluated from the sections agrees
+  with the DFT of `process` on an impulse to 6.1e-6 relative above -60 dB and 1.3e-8 absolute in
+  the stopbands, against a written 1e-4 + 1e-6 bound. The README has the ten-line evaluator.
+
 - **Live mixing in the browser worklet (Epic L / L1–L4)** — `attachWorklet(ctx, chain, { input:
   true, channels: 2 })` is an **insert** effect: the node reads the Web Audio graph and processes
   each 128-frame quantum in the quantum it arrives, so it adds no latency and tracks started at the
