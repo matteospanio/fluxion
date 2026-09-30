@@ -1,4 +1,4 @@
-// fluxion actually runs in a real AudioWorklet (roadmap W4, L1, L2).
+// fluxion actually runs in a real AudioWorklet (roadmap W4, L1–L3).
 //
 // `worklet.test.mjs` answers "does a block cost an allocation" deterministically, which is the part
 // that must never regress. This answers a different question that only a browser can: can an
@@ -125,6 +125,18 @@ try {
     insert.worst === 0,
     "insert mode: each channel is Chain.process of that channel, with no offset",
     `worst difference ${insert.worst.toExponential(2)}`,
+  );
+
+  // Two tracks on one context (L3): the processor registers once, both nodes share one wasm
+  // instance, and the mix is the sum of the two offline renders.
+  const mixed = await page.evaluate(
+    async (chains) => await window.fluxionInsertRender({ chains, seconds: 1 }),
+    [chain, "lowpass(2000, 2) | reverb(0.6, 0.4, 0.3)"],
+  );
+  say(
+    mixed.worst === 0,
+    "two insert nodes on one context: the mix is the sum of both offline renders",
+    `worst difference ${mixed.worst.toExponential(2)}`,
   );
 
   say(problems.length === 0, "no page or console errors", problems.join("; ") || "clean");

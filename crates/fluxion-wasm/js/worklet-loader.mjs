@@ -14,7 +14,7 @@
 //   node.port.postMessage({ type: "audio", samples });      // feed it
 //   node.port.postMessage({ type: "gain", value: 0.5 });    // ramped, not stepped
 //
-// Or as an insert effect on a track, with no added latency (roadmap L1, L2):
+// Or as an insert effect on a track, with no added latency (roadmap L1–L3):
 //
 //   const fx = await attachWorklet(ctx, "lowpass(2000)", { input: true, channels: 2 });
 //   source.connect(fx).connect(ctx.destination);
@@ -37,9 +37,35 @@ async function moduleSource(base) {
   return URL.createObjectURL(new Blob([source], { type: "application/javascript" }));
 }
 
+// One registration per context and one compile per wasm file, however many nodes are built.
+// Registering the processor a second time on the same context throws — the name is taken — and a
+// mixer builds a node per track, so the first `attachWorklet` does the work and the rest wait on
+// it. Only the promise is kept; a failed attempt is forgotten, so a retry tries again.
+const registrations = new WeakMap();
+const modules = new Map();
+
+function once(cache, key, make) {
+  let pending = cache.get(key);
+  if (!pending) {
+    pending = make();
+    cache.set(key, pending);
+    pending.catch(() => cache.delete(key));
+  }
+  return pending;
+}
+
+async function register(context, base) {
+  const url = await moduleSource(base);
+  try {
+    await context.audioWorklet.addModule(url);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 /**
- * Register the processor and return a node running `chain` at the context's sample rate.
- * Types, and the messages both ways, are in worklet-loader.d.ts.
+ * Register the processor (once per context) and return a node running `chain` at the context's
+ * sample rate. Types, and the messages both ways, are in worklet-loader.d.ts.
  *
  * @param {BaseAudioContext} context
  * @param {string} chain in the shared chain syntax, e.g. `"highpass(80, 4) | gain(-3dB)"`
@@ -53,18 +79,13 @@ async function moduleSource(base) {
  */
 export async function attachWorklet(context, chain, options = {}) {
   const base = options.base ?? HERE;
-  const url = await moduleSource(base);
-  try {
-    await context.audioWorklet.addModule(url);
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-
-  // Compile once on the main thread; the worklet instantiates it synchronously, because
-  // `process()` can be called before any promise it started would resolve.
-  const module = await WebAssembly.compileStreaming(
-    fetch(new URL("./pkg/fluxion_wasm_bg.wasm", base)),
-  );
+  const wasm = new URL("./pkg/fluxion_wasm_bg.wasm", base).href;
+  const [module] = await Promise.all([
+    // Compiled on the main thread; the worklet instantiates it synchronously, because `process()`
+    // can be called before any promise it started would resolve.
+    once(modules, wasm, () => WebAssembly.compileStreaming(fetch(wasm))),
+    once(registrations, context, () => register(context, base)),
+  ]);
 
   const channels = options.channels ?? 1;
   const insert = options.input === true;

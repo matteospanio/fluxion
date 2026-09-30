@@ -32,7 +32,8 @@ export interface WorkletOptions {
 }
 
 /**
- * Register the processor and return a node running `chain` at the context's sample rate.
+ * Register the processor (once per context) and return a node running `chain` at the context's
+ * sample rate.
  */
 export function attachWorklet(
   context: BaseAudioContext,

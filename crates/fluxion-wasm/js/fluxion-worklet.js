@@ -1,4 +1,4 @@
-// The AudioWorkletProcessor half of fluxion playback (roadmap W4, W5, L1, L2).
+// The AudioWorkletProcessor half of fluxion playback (roadmap W4, W5, L1–L3).
 //
 // This file is *concatenated* after the `no-modules` wasm-bindgen glue and registered with
 // `audioWorklet.addModule()` — see `attachWorklet()` in worklet-loader.mjs. An AudioWorklet has no
@@ -31,9 +31,10 @@ class FluxionProcessor extends AudioWorkletProcessor {
     } = options.processorOptions;
 
     // Synchronous instantiation: `process()` may be called immediately after construction, and a
-    // promise would not have resolved by then. `initSync` hands back the instance exports, which
-    // is where the linear memory lives.
-    const wasm = wasm_bindgen.initSync({ module });
+    // promise would not have resolved by then. Every node on a context shares this worklet scope,
+    // and `initSync` hands the second node the instance the first one made — one linear memory for
+    // all of them, which is why `views()` has to watch it grow.
+    this.memory = wasm_bindgen.initSync({ module }).memory;
     this.channels = channels;
     this.rendered = 0;
     this.silence = new Float32Array(BLOCK);
@@ -42,14 +43,6 @@ class FluxionProcessor extends AudioWorkletProcessor {
     // pass-through), and the chain then runs exactly as it does in insert mode.
     this.feed = input ? null : this.voices("id", ringFrames);
     this.current = this.voices(chain);
-
-    // Views onto wasm memory, made once and after every player exists. Rebuilding them per block
-    // would allocate; taking them before the players were built would risk the buffer being
-    // detached by memory growth during their construction.
-    for (const voice of [...(this.feed ?? []), ...this.current]) {
-      voice.input = new Float32Array(wasm.memory.buffer, voice.player.inputPtr(), BLOCK);
-      voice.output = new Float32Array(wasm.memory.buffer, voice.player.outputPtr(), BLOCK);
-    }
 
     // Audio supplied up front. An OfflineAudioContext can finish rendering before a
     // `postMessage` is delivered, so anything that must be in the ring before the first block has
@@ -70,7 +63,29 @@ class FluxionProcessor extends AudioWorkletProcessor {
       const player = new wasm_bindgen.Player(chain, sampleRate, BLOCK, capacity);
       voices.push({ player, input: null, output: null });
     }
+    // Building players can grow wasm memory. Forgetting the buffer the views were made on makes the
+    // next `views()` remake all of them — these included, which have none yet.
+    this.buffer = null;
     return voices;
+  }
+
+  /// Views onto wasm memory, remade only when the memory has grown.
+  ///
+  /// Growth replaces `memory.buffer` and detaches every view onto the old one, and any node on the
+  /// context can cause it just by being built. Comparing identities costs nothing per block; making
+  /// views allocates, so it happens only when the buffer actually changed.
+  views() {
+    const buffer = this.memory.buffer;
+    if (buffer === this.buffer) {
+      return;
+    }
+    this.buffer = buffer;
+    for (const voices of [this.feed, this.current]) {
+      for (const voice of voices ?? []) {
+        voice.input = new Float32Array(buffer, voice.player.inputPtr(), BLOCK);
+        voice.output = new Float32Array(buffer, voice.player.outputPtr(), BLOCK);
+      }
+    }
   }
 
   /// Messages from the page. Parameter changes are applied here, between blocks, and take effect
@@ -119,6 +134,7 @@ class FluxionProcessor extends AudioWorkletProcessor {
     if (!this.feed) {
       return; // insert mode reads the graph, not the page
     }
+    this.views();
     for (let c = 0; c < this.channels; c++) {
       const data = ArrayBuffer.isView(samples) ? samples : samples?.[c];
       const feed = this.feed[c];
@@ -135,6 +151,7 @@ class FluxionProcessor extends AudioWorkletProcessor {
   }
 
   process(inputs, outputs) {
+    this.views();
     // An insert node with nothing connected gets `inputs[0] = []`: silence, not an error.
     const input = inputs[0];
     for (let c = 0; c < this.channels; c++) {

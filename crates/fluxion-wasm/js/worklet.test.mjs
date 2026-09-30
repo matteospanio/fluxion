@@ -1,4 +1,4 @@
-// The AudioWorklet path, checked deterministically (roadmap W4, W5, L1, L2).
+// The AudioWorklet path, checked deterministically (roadmap W4, W5, L1–L3).
 //
 // W4's check is "5 s of playback, no dropped blocks, the wasm-side allocation counter stays at 0".
 // Two of those three are not really about a browser: they are about what the code does per block,
@@ -188,10 +188,10 @@ check("setting a gain allocates nothing", () => {
   return "1000 parameter changes, 0 allocations";
 });
 
-// --- L1, L2: the processor a page actually runs -----------------------------------------------
+// --- L1–L3: the processor a page actually runs ------------------------------------------------
 //
 // Everything above drives `Player` directly. A page runs fluxion-worklet.js on top of the
-// no-modules glue, and insert mode and channels live in
+// no-modules glue, and insert mode, channels and the views onto wasm memory all live in
 // that file — so it is loaded here the way `attachWorklet` loads it, into a sandbox shaped like
 // AudioWorkletGlobalScope (no TextDecoder, no fetch, one wasm instance shared by every processor),
 // and `process()` is called the way the audio thread calls it.
@@ -226,6 +226,7 @@ scope.bytes = await readFile(url("./pkg/fluxion_wasm_bg.wasm"));
 const module = vm.runInContext("new WebAssembly.Module(bytes)", scope);
 scope.module = module;
 const Processor = registered["fluxion-processor"];
+const worklet = vm.runInContext("wasm_bindgen.initSync({ module })", scope);
 const workletAllocations = () => vm.runInContext("wasm_bindgen.allocations()", scope);
 
 /** A processor built the way `attachWorklet` builds one. */
@@ -320,6 +321,61 @@ check("ring mode carries N channels too: one array per channel, or one for all",
   same("a mono buffer on the right channel", b, a);
   same("a mono buffer", a, offline("gain(0.5)", left.subarray(0, BLOCK)));
   return "stereo ring bit-identical per channel; a mono buffer feeds every channel";
+});
+
+check("nine nodes on one wasm instance: the ninth grows memory, no view goes stale (L3)", () => {
+  const frames = BLOCK * 40;
+  const chains = [
+    CHAIN,
+    "reverb(0.8, 0.3, 0.4)",
+    "echo(0.05, 0.5, 0.5) | lowpass(3000, 2)",
+    "gain(0.25)",
+    "compand(0.01, 0.1, -30, 4, 6, 3) | highshelf(4000, -3, 0.7)",
+    "delay(0.02, 0.5) + gain(0.5)",
+    "bandpass(1000, 2) | gain(2)",
+    "id",
+  ];
+  const inputs = chains.map((_, i) => source(frames, 0x1000 + i));
+  // Half insert and half ring: both kinds hold views onto wasm memory, in different places.
+  const insert = (i) => i % 2 === 1;
+  const nodes = chains.map((chain, i) =>
+    insert(i)
+      ? node(chain, { input: true })
+      : node(chain, { ringFrames: frames + BLOCK * 4, prime: inputs[i] }),
+  );
+  const outs = chains.map(() => new Float32Array(frames));
+  const ninthInput = source(BLOCK * 20, 0x2000);
+  const ninthOut = new Float32Array(ninthInput.length);
+  let ninth = null;
+
+  const play = (from, to) => {
+    for (let b = from; b < to; b++) {
+      nodes.forEach((p, i) => {
+        const input = insert(i) ? [inputs[i].subarray(b * BLOCK, (b + 1) * BLOCK)] : undefined;
+        outs[i].set(quantum(p, input)[0], b * BLOCK);
+      });
+      if (ninth) {
+        const at = (b - 20) * BLOCK;
+        ninthOut.set(quantum(ninth, [ninthInput.subarray(at, at + BLOCK)])[0], at);
+      }
+    }
+  };
+
+  play(0, 20);
+  const before = worklet.memory.buffer;
+  const size = before.byteLength; // read now: growth detaches `before`, and it reads 0 after
+  // Thirty seconds of delay line is 5.8 MB, which the heap does not have lying around.
+  ninth = node("delay(30, 0.5)", { input: true });
+  if (worklet.memory.buffer === before) {
+    throw new Error("wasm memory did not grow, so this check would prove nothing");
+  }
+  play(20, 40);
+
+  chains.forEach((chain, i) => {
+    same(`node ${i + 1} (${chain})`, outs[i], offline(chain, inputs[i]));
+  });
+  same("the ninth node", ninthOut, offline("delay(30, 0.5)", ninthInput));
+  return `memory grew ${size} -> ${worklet.memory.buffer.byteLength} bytes mid-play; all nine bit-identical`;
 });
 
 check("reset clears the tail, the ring and the counters", () => {
