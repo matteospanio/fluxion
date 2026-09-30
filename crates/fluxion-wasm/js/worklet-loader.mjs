@@ -13,6 +13,11 @@
 //   node.connect(ctx.destination);
 //   node.port.postMessage({ type: "audio", samples });      // feed it
 //   node.port.postMessage({ type: "gain", value: 0.5 });    // ramped, not stepped
+//
+// Or as an insert effect on a track, with no added latency (roadmap L1, L2):
+//
+//   const fx = await attachWorklet(ctx, "lowpass(2000)", { input: true, channels: 2 });
+//   source.connect(fx).connect(ctx.destination);
 
 const HERE = import.meta.url;
 
@@ -34,13 +39,16 @@ async function moduleSource(base) {
 
 /**
  * Register the processor and return a node running `chain` at the context's sample rate.
+ * Types, and the messages both ways, are in worklet-loader.d.ts.
  *
  * @param {BaseAudioContext} context
  * @param {string} chain in the shared chain syntax, e.g. `"highpass(80, 4) | gain(-3dB)"`
- * @param {{ ringFrames?: number, outputChannels?: number, base?: string,
- *           prime?: Float32Array }} [options]
- *   `prime` is audio placed in the ring before the first block — the only way to feed an
- *   OfflineAudioContext, which can finish rendering before a postMessage arrives.
+ * @param {import("./worklet-loader").WorkletOptions} [options]
+ *   `input: true` makes an insert node, which processes what the graph connects to it with no
+ *   added latency; otherwise the node plays audio posted to it through a ring. `channels` is how
+ *   many independent channels the chain runs on. `prime` is audio placed in the ring before the
+ *   first block — the only way to feed an OfflineAudioContext in ring mode, which can finish
+ *   rendering before a postMessage arrives.
  * @returns {Promise<AudioWorkletNode>}
  */
 export async function attachWorklet(context, chain, options = {}) {
@@ -58,13 +66,24 @@ export async function attachWorklet(context, chain, options = {}) {
     fetch(new URL("./pkg/fluxion_wasm_bg.wasm", base)),
   );
 
+  const channels = options.channels ?? 1;
+  const insert = options.input === true;
   return new AudioWorkletNode(context, "fluxion-processor", {
-    numberOfInputs: 0,
+    numberOfInputs: insert ? 1 : 0,
     numberOfOutputs: 1,
-    outputChannelCount: [options.outputChannels ?? 1],
+    outputChannelCount: [insert ? channels : (options.outputChannels ?? channels)],
+    // Exactly `channels` in, whatever is connected: a mono source is spread over a stereo node
+    // (and stereo folded to mono) by the Web Audio rules, before the chain sees it.
+    ...(insert && {
+      channelCount: channels,
+      channelCountMode: "explicit",
+      channelInterpretation: "speakers",
+    }),
     processorOptions: {
       module,
       chain,
+      channels,
+      input: insert,
       ringFrames: options.ringFrames ?? 128 * 64,
       prime: options.prime,
     },

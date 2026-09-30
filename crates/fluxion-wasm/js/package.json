@@ -15,6 +15,7 @@
       "default": "./ops.js"
     },
     "./worklet": {
+      "types": "./worklet-loader.d.ts",
       "default": "./worklet-loader.mjs"
     }
   },
@@ -29,6 +30,7 @@
     "pkg/fluxion_wasm_bg.wasm.d.ts",
     "README.md",
     "worklet-loader.mjs",
+    "worklet-loader.d.ts",
     "fluxion-worklet.js",
     "worklet-textcodec.js",
     "pkg/no-modules/fluxion_wasm.js"

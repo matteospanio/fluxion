@@ -1,4 +1,4 @@
-// fluxion actually runs in a real AudioWorklet (roadmap W4).
+// fluxion actually runs in a real AudioWorklet (roadmap W4, L1, L2).
 //
 // `worklet.test.mjs` answers "does a block cost an allocation" deterministically, which is the part
 // that must never regress. This answers a different question that only a browser can: can an
@@ -111,6 +111,22 @@ try {
     "the worklet renders what the offline path renders",
     `worst difference ${worst.toExponential(2)}`,
   );
+
+  // Insert mode (L1, L2): a stereo buffer source through the node, left and right different. The
+  // offline render is what the same chain gives each channel on its own, and "the same" means
+  // bit-identical at the same frame — any latency the node added would show as a difference the
+  // size of the signal.
+  const insert = await page.evaluate(
+    async (chains) => await window.fluxionInsertRender({ chains, seconds: 1 }),
+    [chain],
+  );
+  say(insert.peak > 0.05, "insert mode: the output is audio", `peak ${insert.peak.toFixed(3)}`);
+  say(
+    insert.worst === 0,
+    "insert mode: each channel is Chain.process of that channel, with no offset",
+    `worst difference ${insert.worst.toExponential(2)}`,
+  );
+
   say(problems.length === 0, "no page or console errors", problems.join("; ") || "clean");
 } finally {
   await browser.close();
