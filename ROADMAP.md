@@ -87,6 +87,15 @@ flowchart LR
         N1[N1 oversampling wrapper] --> N2[N2 waveshaper and folder]
         N1 --> N3[N3 bitcrusher]
     end
+    subgraph L["Epic L · live mixing in the browser"]
+        L1[L1 insert mode] --> L2[L2 many channels]
+        L1 --> L3[L3 many nodes per context]
+        L1 --> L4[L4 live chain swap]
+        L5[L5 realtime lowering of the chunk-local ops]
+        L4 --> L6[L6 live params on named nodes]
+        L6 --> L7[L7 transport and automation]
+        L1 --> L8[L8 realtime limiter with latency]
+    end
     subgraph D["Epic D · timeline helpers"]
         D1[D1 crossfade]
         D2[D2 automation curves] --> D3[D3 same curves live and offline]
@@ -113,6 +122,11 @@ flowchart LR
     A3 --> FM5
     D4 --> FM6((F-M6))
     FM2 --> FM6
+    W4 --> L1
+    L2 --> FM8((F-M8))
+    L3 --> FM8
+    L4 --> FM8
+    L5 --> FM8
 ```
 
 Eight tracks, almost no lines between them: one track per person (or per session) and nobody
@@ -254,6 +268,36 @@ engine, once, with tests.
 
 ---
 
+## Epic L — Live mixing in the browser
+
+F-M2 made the worklet *play*: one mono chain, fed from a ring the page fills. That is the right
+shape for previewing a buffer, and the wrong one for a mixer. A browser DAW plays N stereo tracks
+at once, each through its own chain, started by the Web Audio transport so they stay aligned to
+the sample, and it changes those chains while they play. None of that is specific to one host —
+it is what "fluxion as the engine behind a web timeline" (F-M6) means once the timeline has a
+play button. The first user is a sound-design studio (soundfood ai-studio) that renders on the
+server with fluxion and wants to hear the same DSP live; nothing here is shaped around it.
+
+The order follows what a mixer cannot do without. L1–L4 are the worklet becoming an *insert*
+effect; L5 closes the gap between the ops the batch engine has and the ones the realtime engine
+can run; L6–L8 are what a mixer wants next, scheduled but not blocking F-M8.
+
+| # | Task | Depends on | The check written first |
+|---|------|-----------|--------------------------|
+| [ ] L1 | Insert mode: the node reads its input from the Web Audio graph (`numberOfInputs: 1`) and processes each 128-frame quantum as it arrives, adding **zero** latency — so nodes fed by sources started at the same `when` stay sample-aligned | W4 | Offline context: a buffer source through an insert node equals `Chain.process` on the same buffer, sample for sample, with no offset |
+| [ ] L2 | Many channels: `channels: N` runs N independent per-channel states, the batch engine's per-channel semantics | L1 | A stereo input with different left and right: each output channel equals `Chain.process` of that channel alone |
+| [ ] L3 | Many nodes per context: the processor is registered once per `BaseAudioContext`, and every node's views onto the shared wasm memory survive that memory growing when a later node is built | L1 | Eight nodes on one context, a ninth built while they play: all nine outputs still match the offline render; no detached-buffer error |
+| [ ] L4 | Live chain replacement: `{type: "chain", chain, crossfadeMs}` swaps in a new chain under an equal-gain crossfade; a chain that cannot run is refused with a message on the port and the old one keeps playing | L1 | Swapping `gain(1)` for `gain(0.5)` mid-stream: the largest per-sample step stays within what the crossfade allows, and a bad chain yields an error message and unchanged output |
+| [ ] L5 | Realtime lowering for the chunk-local ops that only render in batch today — `tremolo`, `overdrive`, `gate`, `chorus`, `flanger`, `phaser` — with LFO phase and delay lines carried across blocks | — | For each op, `to_rt_graph` streamed in 128-frame blocks equals the batch `process` of the same input: bit-identical, or within a tolerance written in the test |
+| [ ] L6 | *(next)* Live parameter changes on named nodes without resetting state: `{type: "param", node, param, value}` — filters re-designed and cross-faded with `RtGraph::set_coeffs`, gains and mixes smoothed | L4 | Moving a lowpass cutoff mid-stream matches the offline render of the same step through automation (D3), and no per-sample step exceeds the smoothed bound |
+| [ ] L7 | *(next)* Transport position and automation in the player: `seek(frame)`, lanes read at absolute frames, so live playback started at 1:30 and a bounce agree on what every parameter was doing | L6, D2 | Playing from frame F with an automated chain equals frames `[F, F + n)` of `renderRegionAutomated` |
+| [ ] L8 | *(next)* A realtime limiter with lookahead that reports its latency (`latencyFrames()`), so a host can compensate the other tracks — the last piece a master bus needs to sound live as it renders | L1 | Output equals the batch limiter delayed by the reported latency, within a written tolerance |
+
+`loudnorm`, `normalize` and `reverse` stay batch-only, and not as a ponytail: each one has to see
+the whole signal before its first output sample, which no audio callback can.
+
+---
+
 ## Milestones
 
 | ID | Milestone | How we know it is true | What it opens |
@@ -265,6 +309,7 @@ engine, once, with tests.
 | ✅ F-M4 | **time tools** | Streaming rate conversion on every input; stretch and pitch as separate controls, tested against a reference | Import at any rate, scrubbing, tempo and pitch edits |
 | ✅ F-M5 | **routing and taps** | A keyed gate works end to end; spectrum and meter taps are provably invisible to the audio | Duckers, keyed dynamics, live analysers |
 | ✅ F-M6 | **host-render ready** | Epic D done: a timeline of clips, fades and automation renders bit-exact, in one pass or in pieces, native and wasm | Fluxion as the single engine behind a timeline |
+| F-M8 | **live mixing** | Epic L's L1–L5: N stereo insert nodes on one context, sample-aligned with the transport, chains swapped live without a click, and every chunk-local op playable | A browser DAW that plays what it will render |
 
 **Reached so far.**
 
