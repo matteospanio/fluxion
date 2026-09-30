@@ -63,47 +63,89 @@ pub fn gate_keyed(
     release_s: f32,
     fs: u32,
 ) -> Vec<f32> {
-    let threshold = 10f32.powf(threshold_db / 20.0);
-    // The floor the gate closes to. `range` of 0 is a gate that does nothing, which is a legitimate
-    // setting and not worth special-casing.
-    let floor = 10f32.powf(-range_db.max(0.0) / 20.0);
-    let hold_samples = (hold_s.max(0.0) * fs as f32).round() as u64;
-
-    // The detector is peak with an instantaneous attack: a gate has to open on the transient that
-    // starts the note, and an RMS detector would still be thinking about it.
-    let mut detector = Follower::new(0.0, DETECTOR_RELEASE_S, Detector::Peak, fs);
-    // The gain itself is smoothed rather than switched, which is what attack and release *are*.
-    let attack = crate::follower::smoothing_coef(attack_s, fs);
-    let release = crate::follower::smoothing_coef(release_s, fs);
-
-    let mut gain = floor;
-    let mut held = 0u64;
-
+    let mut gate = Gate::new(threshold_db, range_db, attack_s, hold_s, release_s, fs);
     x.iter()
         .enumerate()
-        .map(|(i, &sample)| {
-            let level = detector.step(key.get(i).copied().unwrap_or(0.0));
-
-            // Open while the key is loud enough, and for `hold` samples after it stops being.
-            let open = if level >= threshold {
-                held = hold_samples;
-                true
-            } else if held > 0 {
-                held -= 1;
-                true
-            } else {
-                false
-            };
-
-            let (target, coef) = if open {
-                (1.0, attack)
-            } else {
-                (floor, release)
-            };
-            gain = coef * gain + (1.0 - coef) * target;
-            sample * gain
-        })
+        .map(|(i, &sample)| gate.step(key.get(i).copied().unwrap_or(0.0), sample))
         .collect()
+}
+
+/// The gate one frame at a time: the offline [`gate_keyed`] and the realtime gate node both run
+/// this, so they agree however a stream is cut into blocks. What a block boundary must not lose —
+/// the detector's envelope, the smoothed gain, and how much of `hold` is left — is all in here.
+#[derive(Clone, Debug)]
+pub struct Gate {
+    threshold: f32,
+    floor: f32,
+    hold_samples: u64,
+    attack: f32,
+    release: f32,
+    detector: Follower,
+    gain: f32,
+    held: u64,
+}
+
+impl Gate {
+    /// Design a gate: levels in dB, times in seconds.
+    pub fn new(
+        threshold_db: f32,
+        range_db: f32,
+        attack_s: f32,
+        hold_s: f32,
+        release_s: f32,
+        fs: u32,
+    ) -> Gate {
+        // The floor the gate closes to. `range` of 0 is a gate that does nothing, which is a
+        // legitimate setting and not worth special-casing.
+        let floor = 10f32.powf(-range_db.max(0.0) / 20.0);
+        Gate {
+            threshold: 10f32.powf(threshold_db / 20.0),
+            floor,
+            hold_samples: (hold_s.max(0.0) * fs as f32).round() as u64,
+            // The gain itself is smoothed rather than switched, which is what attack and release
+            // *are*.
+            attack: crate::follower::smoothing_coef(attack_s, fs),
+            release: crate::follower::smoothing_coef(release_s, fs),
+            // The detector is peak with an instantaneous attack: a gate has to open on the
+            // transient that starts the note, and an RMS detector would still be thinking about it.
+            detector: Follower::new(0.0, DETECTOR_RELEASE_S, Detector::Peak, fs),
+            gain: floor,
+            held: 0,
+        }
+    }
+
+    /// Advance one frame: measure the level on `key`, apply the gain to `x`. An unkeyed gate passes
+    /// the same sample as both.
+    #[inline]
+    pub fn step(&mut self, key: f32, x: f32) -> f32 {
+        let level = self.detector.step(key);
+
+        // Open while the key is loud enough, and for `hold` samples after it stops being.
+        let open = if level >= self.threshold {
+            self.held = self.hold_samples;
+            true
+        } else if self.held > 0 {
+            self.held -= 1;
+            true
+        } else {
+            false
+        };
+
+        let (target, coef) = if open {
+            (1.0, self.attack)
+        } else {
+            (self.floor, self.release)
+        };
+        self.gain = coef * self.gain + (1.0 - coef) * target;
+        x * self.gain
+    }
+
+    /// Closed, with nothing held and a silent detector — how a new gate starts.
+    pub fn reset(&mut self) {
+        self.detector.reset();
+        self.gain = self.floor;
+        self.held = 0;
+    }
 }
 
 #[cfg(test)]

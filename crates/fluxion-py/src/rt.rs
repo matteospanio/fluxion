@@ -110,8 +110,8 @@ impl RtChain {
         }
         let inner = to_rt_graph(&chain.graph, fs).ok_or_else(|| {
             PyValueError::new_err(
-                "chain cannot run in realtime: it contains a whole-signal or modulated op \
-                 (normalize / fade / reverse / tremolo / overdrive / chorus / flanger / phaser) \
+                "chain cannot run in realtime: it contains a whole-signal op \
+                 (normalize / fade / reverse / limiter / loudnorm / pitchshift), a keyed op \
                  or a feedback loop",
             )
         })?;

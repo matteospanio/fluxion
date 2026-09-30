@@ -42,13 +42,14 @@ pub use delay::{delay, delay_frac, delay_vjp, echo, echo_vjp};
 pub use design::design_param_grad;
 pub use dynamics::{CompandCoeffs, compand, limit};
 pub use effect::{
-    FadeShape, fade, gain, gain_vjp, normalize_peak, normalize_vjp, overdrive, reverse, tremolo,
+    FadeShape, Overdrive, Tremolo, fade, gain, gain_vjp, normalize_peak, normalize_vjp, overdrive,
+    reverse, tremolo,
 };
 pub use fir::{
     FIR_FFT_THRESHOLD, fft_convolve, fir_filter, fir_filter_auto, fir_vjp, overlap_save,
 };
 pub use follower::{Detector, Follower, envelope};
-pub use gate::{gate, gate_keyed};
+pub use gate::{Gate, gate, gate_keyed};
 pub use iir::{
     Biquad, BiquadGrad, Sos, biquad_forward, biquad_vjp, butterworth_highpass, butterworth_lowpass,
     sos_filter, sos_filter_in_place, sos_filter_interleaved, sos_filter_interleaved_chunk,
@@ -58,7 +59,7 @@ pub use loudness::{
     channel_weights, integrated_loudness, k_weighting, loudness_normalize, loudness_range,
     sample_peak, short_term_loudness, true_peak, true_peak_envelope,
 };
-pub use modulation::{chorus, flanger, phaser};
+pub use modulation::{Chorus, Flanger, Lfo, Phaser, chorus, flanger, phaser};
 pub use rbj::{allpass, bandpass, high_shelf, low_shelf, notch, peaking};
 pub use resample::{Quality, Resampler};
 pub use reverb::reverb;

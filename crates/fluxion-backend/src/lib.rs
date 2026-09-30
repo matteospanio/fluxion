@@ -381,7 +381,22 @@ pub fn eval_with<B: Backend>(b: &B, graph: &Graph, x: B::Buf, fs: u32, ctx: &Ctx
             }
             x
         }
-        Graph::Feedback { forward, feedback } => b.feedback(x, forward, feedback, fs),
+        Graph::Feedback { forward, feedback } => {
+            // The loop runs on realtime nodes, which have no key input, so a keyed op inside it
+            // would quietly listen to itself instead of the key in scope. Refuse rather than
+            // render something plausible and wrong.
+            if ctx.key.is_some() {
+                let mut keyed = false;
+                for g in [forward, feedback] {
+                    region::walk(g, &mut |kind| keyed |= kind.takes_key());
+                }
+                assert!(
+                    !keyed,
+                    "a keyed op inside a `~` loop cannot hear its key — move it out of the loop"
+                );
+            }
+            b.feedback(x, forward, feedback, fs)
+        }
         // A side input replaces the signal rather than joining it: what flows on from here is the
         // side signal, and `+` is what puts the two back together.
         Graph::Side(n) => match ctx.sides.get(*n) {
@@ -859,8 +874,10 @@ pub fn freeze(graph: &Graph, fs: u32) -> Option<FrozenSos> {
 /// semantics, so streaming it block-by-block matches the batch output. Call
 /// [`RtGraph::prepare`](fluxion_rt::RtGraph::prepare) before going realtime.
 ///
-/// Returns `None` for graphs containing an op that isn't chunk-local — currently `Normalize` (it
-/// needs the whole signal's peak) and any not-yet-supported op.
+/// Returns `None` for graphs containing an op that has no streaming form — `normalize`, `fade`,
+/// `reverse`, `loudnorm` and `pitchshift` need the whole signal, and a realtime `limiter` is still
+/// to come — and for the constructs a one-input realtime graph cannot carry yet: a `~` loop, a side
+/// input, a key, a tap.
 pub fn to_rt_graph(graph: &Graph, fs: u32) -> Option<RtGraph> {
     match graph {
         Graph::Id => Some(RtGraph::gain(1.0)),
@@ -891,10 +908,29 @@ fn op_rt(op: &Op, fs: u32) -> Option<RtGraph> {
         OpKind::Fir => Some(RtGraph::fir(p.clone())), // taps ARE the params (G8 realtime FIR)
         // Compand is chunk-local (per-sample envelope follower) → realtime-playable.
         OpKind::Compand => Some(RtGraph::compand(p[0], p[1], p[2], p[3], p[4], p[5], fs)),
+        // Each of these nodes runs the offline kernel's own per-frame step (ROADMAP L5), so the
+        // stream is the batch render cut into blocks.
+        OpKind::Tremolo => Some(RtGraph::Tremolo(fluxion_ops::Tremolo::new(p[0], p[1], fs))),
+        OpKind::Overdrive => Some(RtGraph::Overdrive(fluxion_ops::Overdrive::new(p[0], p[1]))),
+        OpKind::Chorus => Some(RtGraph::Chorus(fluxion_ops::Chorus::new(
+            p[0], p[1], p[2], p[3], fs,
+        ))),
+        OpKind::Flanger => Some(RtGraph::Flanger(fluxion_ops::Flanger::new(
+            p[0], p[1], p[2], p[3], p[4], fs,
+        ))),
+        OpKind::Phaser => Some(RtGraph::Phaser(fluxion_ops::Phaser::new(
+            p[0], p[1], p[2], p[3], fs,
+        ))),
+        // Only ever the gate listening to itself: `to_rt_graph` refuses a `Graph::Keyed` whole, so
+        // a gate that was given a key never gets here to be lowered as one that was not.
+        OpKind::Gate => Some(RtGraph::Gate(fluxion_ops::Gate::new(
+            p[0], p[1], p[2], p[3], p[4], fs,
+        ))),
         // Not chunk-local or not-yet-wired for realtime:
-        //  - Normalize / Fade / Reverse need the whole signal (global peak / total length / order).
-        //  - Tremolo / Overdrive / Chorus / Flanger / Phaser are memoryless or modulated; a realtime
-        //    LFO / modulated-delay node is a follow-up (ponytail).
+        //  - Normalize / Fade / Reverse / Loudnorm need the whole signal (peak / length / order /
+        //    programme loudness).
+        //  - Limiter looks ahead, so a realtime one has latency to report (ROADMAP L8).
+        //  - PitchShift stretches the whole signal and then resamples it; no streaming form yet.
         _ => None,
     }
 }
@@ -1255,7 +1291,7 @@ mod avx2_group {
 mod tests {
     use super::{
         FrozenSos, certify_graph, freeze, graph_to_sos, is_differentiable, process, process_batch,
-        sos_filter_batch, to_rt_graph,
+        process_with, sos_filter_batch, to_rt_graph,
     };
     use fluxion_core::{Graph, Op, OpKind, Signal};
 
@@ -1300,7 +1336,7 @@ mod tests {
     }
 
     #[test]
-    fn nonlinear_ops_process_on_cpu_but_arent_realtime_or_differentiable() {
+    fn nonlinear_ops_process_on_cpu_but_arent_differentiable() {
         let fs = 48_000;
         // Overdrive is a CPU waveshaper: hard drive saturates, silence stays silent.
         let od = process(
@@ -1313,7 +1349,8 @@ mod tests {
             process(&op_default(OpKind::Reverse), &sig(vec![1.0, 2.0, 3.0])).channels[0],
             vec![3.0, 2.0, 1.0]
         );
-        // These are neither differentiable nor realtime-lowerable (whole-signal or modulated).
+        // None of these differentiate. The modulated and nonlinear ones play live (ROADMAP L5);
+        // fade and reverse cannot, because both need to know where the signal ends.
         for kind in [
             OpKind::Fade,
             OpKind::Tremolo,
@@ -1329,9 +1366,11 @@ mod tests {
                 "{} should not differentiate",
                 kind.name()
             );
-            assert!(
+            let whole_signal = matches!(kind, OpKind::Fade | OpKind::Reverse);
+            assert_eq!(
                 to_rt_graph(&g, fs).is_none(),
-                "{} should not be realtime",
+                whole_signal,
+                "{} realtime lowering",
                 kind.name()
             );
         }
@@ -1503,6 +1542,110 @@ mod tests {
         for (i, (a, b)) in streamed.iter().zip(&batch).enumerate() {
             assert!((a - b).abs() < 1e-3, "at {i}: {a} vs {b}");
         }
+    }
+
+    /// ROADMAP L5: every chunk-local op plays live exactly as it renders.
+    ///
+    /// Pre: an input with loud and quiet stretches, so the gate is seen opening, holding and
+    /// closing, and half a second long, so the delay lines fill and the LFOs move. Each op at its
+    /// defaults, at representative settings, and at the edges of its ranges: an LFO at rate 0 and
+    /// one at audio rate, a delay of zero (the read lands on the write head), a feedback loop with
+    /// no delay in it, a gate with no range or no hold.
+    ///
+    /// Post: `to_rt_graph` streamed in blocks of 1, 64, 127, 128 and 1000 frames is **bit-identical**
+    /// to `process`, down to the sign of zero. No tolerance, even for the ops calling `cos` or
+    /// `tanh` per sample: both engines run the same per-sample step on the same machine, so the
+    /// only thing that differs is where the blocks end — and the LFO phase, the delay lines, the
+    /// envelope and the hold counter are all carried across that boundary. (The ULP differences
+    /// tabulated in `fluxion-wasm/tests/parity.rs` are between two platforms' libms, not between
+    /// two engines.)
+    #[test]
+    fn chunk_local_ops_stream_like_process() {
+        let fs = 48_000;
+        let cases = [
+            "tremolo",
+            "tremolo(0, 1)",
+            "tremolo(20000, 1)",
+            "overdrive",
+            "overdrive(0, 0)",
+            "overdrive(100, 1)",
+            "gate",
+            "gate(-20, 24, 0.002, 0.02, 0.05)",
+            "gate(-20, 0, 0, 0, 0)",
+            "gate(0, 120, 0, 5, 5)",
+            "chorus",
+            "chorus(3, 0.002, 0.004, 0.5)",
+            "chorus(3, 0, 0, 1)",
+            "chorus(100, 0.00001, 0, 1)",
+            "flanger",
+            "flanger(2, 0.001, 0.001, 0.5, 0.5)",
+            "flanger(2, 0, 0, 0.95, 1)",
+            "flanger(100, 0.00001, 0, -0.95, 1)",
+            "phaser",
+            "phaser(3, 0.7, 0.5, 0.5)",
+            "phaser(0, 0, -0.95, 1)",
+            "phaser(100, 1, 0.95, 1)",
+            // The new nodes inside the algebra, not only alone.
+            "gate(-30) | (chorus + phaser) | tremolo(4, 0.3) | overdrive(6, 0.1)",
+        ];
+        // Noise over a slow on/off envelope: 60 ms at -6 dB, 40 ms at -66 dB.
+        let mut state: u32 = 0x1234_5678;
+        let x: Vec<f32> = (0..fs as usize / 2)
+            .map(|n| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let noise = (state >> 8) as f32 / 16_777_216.0 * 2.0 - 1.0;
+                noise * if n % 4_800 < 2_880 { 0.5 } else { 0.0005 }
+            })
+            .collect();
+
+        for chain in cases {
+            let g: Graph = chain.parse().unwrap();
+            let batch = process(&g, &Signal::new(fs, vec![x.clone()]))
+                .channels
+                .remove(0);
+            for block in [1, 64, 127, 128, 1000] {
+                let mut rt = to_rt_graph(&g, fs)
+                    .unwrap_or_else(|| panic!("`{chain}` has no realtime lowering"));
+                rt.prepare(block);
+                let mut out = vec![0.0f32; block];
+                let mut streamed = Vec::with_capacity(x.len());
+                for chunk in x.chunks(block) {
+                    let out = &mut out[..chunk.len()];
+                    rt.process(chunk, out);
+                    streamed.extend_from_slice(out);
+                }
+                if let Some(i) = (0..x.len()).find(|&i| streamed[i].to_bits() != batch[i].to_bits())
+                {
+                    panic!(
+                        "`{chain}` in {block}-frame blocks differs from process at frame {i}: \
+                         {} vs {}",
+                        streamed[i], batch[i]
+                    );
+                }
+            }
+        }
+    }
+
+    /// A keyed gate stays batch-only. A realtime graph has one input, and a key is a second signal
+    /// that would have to reach the same callback sample-aligned — a second ring per key, which is
+    /// its own piece of work. Lowering it as an unkeyed gate would play something plausible and
+    /// wrong: the programme opening itself instead of the key opening it.
+    #[test]
+    fn a_keyed_gate_is_not_lowered_as_an_unkeyed_one() {
+        let keyed: Graph = "gate(-30, 40) < side(0)".parse().unwrap();
+        assert!(to_rt_graph(&keyed, 48_000).is_none());
+    }
+
+    /// The batch engine runs a `~` loop on realtime nodes, which have no key input — so a gate in a
+    /// loop under a `<` would quietly listen to itself. It is refused instead.
+    #[test]
+    #[should_panic(expected = "key")]
+    fn a_keyed_op_inside_a_feedback_loop_is_refused() {
+        let g = Graph::op(OpKind::Gate, [-30.0, 40.0, 0.001, 0.01, 0.1])
+            .feedback(Graph::op(OpKind::Gain, [0.5]))
+            .keyed(Graph::side(0));
+        let x = sig(vec![0.5; 64]);
+        process_with(&g, &x, &[&x]);
     }
 
     #[test]

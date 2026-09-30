@@ -104,7 +104,7 @@ fn check_regionable(graph: &Graph) -> Result<(), RegionError> {
 }
 
 /// Visit every op in the graph.
-fn walk(graph: &Graph, f: &mut impl FnMut(OpKind)) {
+pub(crate) fn walk(graph: &Graph, f: &mut impl FnMut(OpKind)) {
     match graph {
         Graph::Op(op) => f(op.kind),
         Graph::Series(a, b) | Graph::Parallel(a, b) => {

@@ -139,6 +139,44 @@ fn rtgraph_process_is_allocation_free() {
 }
 
 #[test]
+fn modulated_and_nonlinear_nodes_are_allocation_free() {
+    // ROADMAP L5's nodes carry delay lines and LFO state; all of it must be sized in `new`.
+    use fluxion_ops::{Chorus, Flanger, Gate, Overdrive, Phaser, Tremolo};
+    let fs = 48_000;
+    let mut g = RtGraph::series(
+        RtGraph::series(
+            RtGraph::Gate(Gate::new(-30.0, 40.0, 0.001, 0.01, 0.1, fs)),
+            RtGraph::parallel(
+                RtGraph::Chorus(Chorus::new(1.5, 0.002, 0.025, 0.5, fs)),
+                RtGraph::Flanger(Flanger::new(0.5, 0.002, 0.001, 0.5, 0.5, fs)),
+            ),
+        ),
+        RtGraph::series(
+            RtGraph::Phaser(Phaser::new(0.5, 0.5, 0.5, 0.5, fs)),
+            RtGraph::series(
+                RtGraph::Tremolo(Tremolo::new(5.0, 0.5, fs)),
+                RtGraph::Overdrive(Overdrive::new(20.0, 0.2)),
+            ),
+        ),
+    );
+    g.prepare(128);
+    let input: Vec<f32> = (0..128).map(|i| 0.25 * (0.05 * i as f32).sin()).collect();
+    let mut out = vec![0.0f32; 128];
+
+    let _ = rt_section(|| {});
+    g.process(&input, &mut out);
+
+    let (_, allocs) = rt_section(|| {
+        // Long enough for every delay line to wrap many times over.
+        for _ in 0..1000 {
+            g.process(&input, &mut out);
+        }
+    });
+    assert_eq!(allocs, 0, "a modulated node allocated after prepare()");
+    assert!(out.iter().all(|x| x.is_finite()), "non-finite output");
+}
+
+#[test]
 fn meta_tracker_detects_allocation() {
     // Guard against a false-negative test: a real allocation inside a section must be counted.
     let _ = rt_section(|| {});

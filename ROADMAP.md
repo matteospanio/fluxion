@@ -288,13 +288,15 @@ can run; L6–L8 are what a mixer wants next, scheduled but not blocking F-M8.
 | [x] L2 | Many channels: `channels: N` runs N independent per-channel states, the batch engine's per-channel semantics | L1 | A stereo input with different left and right: each output channel equals `Chain.process` of that channel alone |
 | [x] L3 | Many nodes per context: the processor is registered once per `BaseAudioContext`, and every node's views onto the shared wasm memory survive that memory growing when a later node is built | L1 | Eight nodes on one context, a ninth built while they play: all nine outputs still match the offline render; no detached-buffer error |
 | [x] L4 | Live chain replacement: `{type: "chain", chain, crossfadeMs}` swaps in a new chain under an equal-gain crossfade; a chain that cannot run is refused with a message on the port and the old one keeps playing | L1 | Swapping `gain(1)` for `gain(0.5)` mid-stream: the largest per-sample step stays within what the crossfade allows, and a bad chain yields an error message and unchanged output |
-| [ ] L5 | Realtime lowering for the chunk-local ops that only render in batch today — `tremolo`, `overdrive`, `gate`, `chorus`, `flanger`, `phaser` — with LFO phase and delay lines carried across blocks | — | For each op, `to_rt_graph` streamed in 128-frame blocks equals the batch `process` of the same input: bit-identical, or within a tolerance written in the test |
+| [x] L5 | Realtime lowering for the chunk-local ops that only render in batch today — `tremolo`, `overdrive`, `gate`, `chorus`, `flanger`, `phaser` — with LFO phase and delay lines carried across blocks | — | For each op, `to_rt_graph` streamed in 128-frame blocks equals the batch `process` of the same input: bit-identical, or within a tolerance written in the test |
 | [ ] L6 | *(next)* Live parameter changes on named nodes without resetting state: `{type: "param", node, param, value}` — filters re-designed and cross-faded with `RtGraph::set_coeffs`, gains and mixes smoothed | L4 | Moving a lowpass cutoff mid-stream matches the offline render of the same step through automation (D3), and no per-sample step exceeds the smoothed bound |
 | [ ] L7 | *(next)* Transport position and automation in the player: `seek(frame)`, lanes read at absolute frames, so live playback started at 1:30 and a bounce agree on what every parameter was doing | L6, D2 | Playing from frame F with an automated chain equals frames `[F, F + n)` of `renderRegionAutomated` |
 | [ ] L8 | *(next)* A realtime limiter with lookahead that reports its latency (`latencyFrames()`), so a host can compensate the other tracks — the last piece a master bus needs to sound live as it renders | L1 | Output equals the batch limiter delayed by the reported latency, within a written tolerance |
 
 `loudnorm`, `normalize` and `reverse` stay batch-only, and not as a ponytail: each one has to see
-the whole signal before its first output sample, which no audio callback can.
+the whole signal before its first output sample, which no audio callback can. The keyed gate
+(`gate < side(0)`) stays batch-only too after L5, for a different reason: a realtime chain has one
+input, and the key would be a second — that is side inputs in the worklet, not a missing node.
 
 ---
 

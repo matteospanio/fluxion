@@ -2,6 +2,8 @@
 
 use std::f32::consts::PI;
 
+use crate::modulation::Lfo;
+
 /// Multiply a channel in place by a linear gain factor.
 pub fn gain(channel: &mut [f32], factor: f32) {
     for x in channel {
@@ -63,15 +65,73 @@ pub fn fade(channel: &mut [f32], fade_in: usize, fade_out: usize, shape: FadeSha
     }
 }
 
+/// [`tremolo`], one frame at a time. The offline function and the realtime tremolo node both run
+/// this, so they agree however a stream is cut into blocks; the only state is the frame the
+/// [`Lfo`] is at.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Tremolo {
+    lfo: Lfo,
+    depth: f32,
+    n: u64,
+}
+
+impl Tremolo {
+    /// Design a tremolo. `depth` is clamped to `0..1`.
+    pub fn new(rate_hz: f32, depth: f32, fs: u32) -> Tremolo {
+        Tremolo {
+            lfo: Lfo::new(rate_hz, fs),
+            depth: depth.clamp(0.0, 1.0),
+            n: 0,
+        }
+    }
+
+    /// Advance one frame.
+    #[inline]
+    pub fn step(&mut self, x: f32) -> f32 {
+        let g = 1.0 - self.depth * self.lfo.at(self.n);
+        self.n += 1;
+        x * g
+    }
+
+    /// Back to frame 0.
+    pub fn reset(&mut self) {
+        self.n = 0;
+    }
+}
+
 /// Tremolo: multiply a channel in place by a low-frequency amplitude LFO,
 /// `g[n] = 1 − depth·½·(1 − cos(2π·rate·n/fs))` — unity at `n = 0`, dipping by up to `depth` (0..1)
 /// at `rate` Hz. Length-preserving.
 pub fn tremolo(channel: &mut [f32], rate_hz: f32, depth: f32, fs: u32) {
-    let depth = depth.clamp(0.0, 1.0);
-    let w = 2.0 * PI * rate_hz / fs as f32;
-    for (n, x) in channel.iter_mut().enumerate() {
-        let g = 1.0 - depth * 0.5 * (1.0 - (w * n as f32).cos());
-        *x *= g;
+    let mut t = Tremolo::new(rate_hz, depth, fs);
+    for x in channel.iter_mut() {
+        *x = t.step(*x);
+    }
+}
+
+/// [`overdrive`]'s curve with its constants worked out once — shared with the realtime overdrive
+/// node, which is why it is a type rather than two lines inside the loop.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Overdrive {
+    drive: f32,
+    colour: f32,
+    bias: f32,
+}
+
+impl Overdrive {
+    /// Design the curve for `gain_db` of drive and a `colour` bias.
+    pub fn new(gain_db: f32, colour: f32) -> Overdrive {
+        Overdrive {
+            drive: 10f32.powf(gain_db / 20.0),
+            colour,
+            bias: colour.tanh(),
+        }
+    }
+
+    /// Shape one sample. Memoryless, so there is nothing to carry between blocks.
+    #[inline]
+    pub fn step(&self, x: f32) -> f32 {
+        (self.drive * x + self.colour).tanh() - self.bias
     }
 }
 
@@ -79,10 +139,9 @@ pub fn tremolo(channel: &mut [f32], rate_hz: f32, depth: f32, fs: u32) {
 /// (adds even harmonics), in place. `y = tanh(drive·x + colour) − tanh(colour)` keeps silence silent.
 /// Memoryless and nonlinear (not differentiable here). Length-preserving.
 pub fn overdrive(channel: &mut [f32], gain_db: f32, colour: f32) {
-    let drive = 10f32.powf(gain_db / 20.0);
-    let bias = colour.tanh();
+    let od = Overdrive::new(gain_db, colour);
     for x in channel.iter_mut() {
-        *x = (drive * *x + colour).tanh() - bias;
+        *x = od.step(*x);
     }
 }
 

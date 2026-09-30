@@ -31,18 +31,21 @@ const FRAMES: usize = 24_000;
 
 /// The bound W6 asks us to write down, and what it is measured against.
 ///
-/// 26 of the 32 cases are **bit-identical** to native. The six that are not are exactly the ops
+/// 28 of the 36 cases are **bit-identical** to native. The ones that are not are exactly the ops
 /// that call a transcendental function *per sample*, where wasm uses the `libm` crate and native
-/// uses the platform's:
+/// uses the platform's. Five of them sit under this shared bound:
 ///
 /// | case           | worst difference | why                                  |
 /// |----------------|------------------|--------------------------------------|
 /// | `overdrive`    | 2.4e-7           | `tanh` soft-clipper                  |
-/// | `phaser`       | 2.4e-7           | `sin` LFO, per sample                |
+/// | `phaser`       | 2.4e-7           | `cos` LFO, per sample                |
 /// | `compand`      | 1.2e-7           | `exp`/`ln` in the envelope follower  |
 /// | `fade`         | 6.0e-8           | quarter-sine curve                   |
-/// | `tremolo`      | 4.5e-8           | `sin` LFO, per sample                |
 /// | `chain:nested` | 4.5e-8           | contains `compand`                   |
+///
+/// `tremolo` calls the same `cos` and happens to agree on every argument this case reaches; it
+/// read 6.0e-8 before ROADMAP L5 changed where its phase comes from. The other three set their own
+/// bound — see [`tolerance_for`].
 ///
 /// f32's epsilon is 1.2e-7, so the worst of those is two ULP — the last bit of a `tanh`, not a
 /// difference in the DSP. Every designed filter is bit-identical, which says the two libms agree
@@ -54,18 +57,30 @@ const FRAMES: usize = 24_000;
 /// drift toward the bound is visible rather than hidden behind a pass.
 const TOLERANCE: f32 = 1e-6;
 
-/// Per-case tolerance, for the one case where the shared bound measures the wrong thing.
+/// Per-case tolerance, for the cases where the shared bound measures the wrong thing.
 ///
-/// `pitchshift` is the only entry and its reason is structural, not rounding. A phase vocoder
+/// `pitchshift`'s reason is structural, not rounding. A phase vocoder
 /// decides **which bins are spectral peaks** by comparing magnitudes, then locks every other bin's
 /// phase to the peak it belongs to. That is a discrete decision taken on a continuous quantity, so
 /// one last-bit difference between two libms' `cos` can move a peak by a bin and re-assign a whole
 /// region's phases for that frame. The measured worst is 2.1e-5 — 7e-5 of the sample it sits on,
 /// about -83 dB, and inaudible — but it is not a last-bit difference, and stretching the shared
-/// bound to cover it would stop the other 34 cases from watching for anything.
+/// bound to cover it would stop the other cases from watching for anything.
+///
+/// `chorus` and `flanger` are the other two, and theirs is an amplifier rather than a decision. The
+/// LFO's `cos` differs in the last bit between the two libms like everyone else's, but here it sets
+/// a *delay*: one ULP of the LFO moves the swept read position by one ULP of the delay in samples
+/// — up to 3e-5 of a sample over the 1–6 ms these cases sweep — and the interpolation multiplies it by
+/// the slope of the signal it is reading. Measured worst 7.9e-6 (`chorus`) and 2.4e-6 (`flanger`),
+/// both around -100 dB; 3e-5 keeps the shared bound's 4x headroom over them. They were
+/// bit-identical before ROADMAP L5 moved the LFO's phase to `f64`, which was luck, not structure:
+/// the same `cos` on other arguments already separated `tremolo` and `phaser`. An LFO that owned its
+/// cosine (a polynomial, no libm) would make all four LFO ops bit-identical here; nothing has needed
+/// that yet.
 fn tolerance_for(name: &str) -> f32 {
     match name {
         "pitchshift" => 1e-4,
+        "chorus" | "flanger" => 3e-5,
         _ => TOLERANCE,
     }
 }

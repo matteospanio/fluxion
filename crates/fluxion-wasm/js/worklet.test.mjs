@@ -108,6 +108,45 @@ check("block-by-block playback matches the offline render", () => {
   return `worst difference ${worst.toExponential(2)}`;
 });
 
+check("every chunk-local op plays live, exactly as it renders, allocating nothing", () => {
+  // ROADMAP L5. These six used to be refused by `new Player`. Each node runs the offline kernel's
+  // own per-frame step, so inside one wasm build the stream and the render are the same numbers:
+  // equality, not a tolerance.
+  const chains = [
+    "tremolo(5, 0.5)",
+    "overdrive(20, 0.2)",
+    "gate(-20, 24, 0.002, 0.02, 0.05)",
+    "chorus(1.5, 0.002, 0.025, 0.5)",
+    "flanger(0.5, 0.002, 0.001, 0.5, 0.5)",
+    "phaser(0.5, 0.5, 0.5, 0.5)",
+  ];
+  const frames = BLOCK * 200;
+  const audio = source(frames);
+  for (const chain of chains) {
+    const offline = Chain.fromText(chain).process(audio, FS);
+    const player = new Player(chain, FS, BLOCK, BLOCK * 8);
+    const input = view(player.inputPtr(), BLOCK);
+    const output = view(player.outputPtr(), BLOCK);
+    const streamed = new Float32Array(frames);
+    const play = (b) => {
+      input.set(audio.subarray(b * BLOCK, (b + 1) * BLOCK));
+      player.push(BLOCK);
+      player.render();
+      streamed.set(output, b * BLOCK);
+    };
+    play(0); // wasm-bindgen's first calls allocate; what is measured is the steady state
+    const before = allocations();
+    for (let b = 1; b < frames / BLOCK; b++) play(b);
+    const allocated = allocations() - before;
+    if (allocated !== 0) throw new Error(`'${chain}' allocated ${allocated} times while playing`);
+    const i = streamed.findIndex((v, k) => !Object.is(v, offline[k]));
+    if (i !== -1) {
+      throw new Error(`'${chain}' plays ${streamed[i]} at frame ${i} but renders ${offline[i]}`);
+    }
+  }
+  return `${chains.length} ops, bit-identical to the offline render, 0 allocations`;
+});
+
 check("a starved ring is reported, not hidden", () => {
   // Underrun has to be visible. A player that silently emitted silence would look identical to one
   // that was working, which is the failure mode this counter exists to prevent.

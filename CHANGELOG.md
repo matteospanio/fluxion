@@ -50,6 +50,27 @@ All notable changes to fluxion are documented here. The format is based on
   not be handed over. And a chain that cannot run no longer throws from the processor
   constructor: the node passes audio through and posts the `error`, because a thrown constructor
   leaves a silent node and a `processorerror` with nothing in it a host can show.
+- **Every chunk-local op plays live (Epic L / L5)** — `tremolo`, `overdrive`, `gate`, `chorus`,
+  `flanger` and `phaser` now lower to `RtGraph` nodes, so `to_rt_graph` accepts them and so does
+  everything built on it: the browser `Player`, Python's `RtChain`, C's `fx_rt_new` and the CLI's
+  streaming path. Before, one of them anywhere in a chain meant the whole chain could not play.
+  Each op is now a small state machine in `fluxion-ops` (`Tremolo`, `Overdrive`, `Gate`, `Chorus`,
+  `Flanger`, `Phaser`, the arrangement `CompandCoeffs` already had), designed in `new` and advanced
+  one frame at a time by `step`; the offline function runs it over the whole signal and the node
+  runs it over each block. So the parity is structural and the check can be strict: 23 chains —
+  each op at defaults, representative settings and range edges, plus a chain of all six — streamed
+  in blocks of 1, 64, 127, 128 and 1000 frames are **bit-identical** to `process`, compared with
+  `to_bits`. The same holds inside the wasm build, where the new worklet check also finds zero
+  allocations while the six play; natively, `rt_safety.rs` finds zero after `prepare`.
+  The keyed gate (`gate < side(0)`) stays offline-only, because a realtime node has one input and
+  the key would be a second. It is refused rather than lowered as an unkeyed gate, which would
+  play something plausible and wrong. For the same reason the batch engine now refuses a keyed op
+  inside a `~` loop, whose realtime-lowered body would have quietly listened to itself.
+  wasm against native: `chorus` and `flanger` now differ by 7.9e-6 and 2.4e-6 (they had been
+  bit-identical by luck) and carry a written 3e-5 bound in `parity.rs`. Their delay is swept by the
+  LFO, so a last-bit difference between two libms' `cos` moves the read position and the
+  interpolation multiplies it by the signal's slope. `tremolo` went the other way and is now
+  bit-identical; 28 of 36 cases are.
 
 - **Render any region (Epic D / D4 — completes milestone F-M6)** — `render_region(graph, input,
   from, to)`, `chain.render_region` in Python, `chain.renderRegion` in the browser. The window is
@@ -84,6 +105,23 @@ All notable changes to fluxion are documented here. The format is based on
   entirely. `Curve::db_ramp` is the constructor for the one people mean.
 
 ### Fixed
+
+- **The modulated effects lost precision as a signal got longer** — found making them stream
+  (L5), because a live session is long. `tremolo`, `chorus`, `flanger` and `phaser` computed their
+  LFO phase as `w·n` and the chorus/flanger read position as `n − d`, both in `f32` on the absolute
+  frame number. Both decay with `n`. By 30 s at 48 kHz the fractional delay was rounded to eighths
+  of a frame; at 2^23 frames (175 s) there was no fraction left, and the swept delay moved in
+  whole-frame steps — a zipper. A 1 kHz tremolo's phase was good only to an eighth of a radian by
+  5.8 minutes. The phase now comes from the frame number in `f64` (`modulation::Lfo`, the same
+  raised cosine, with no accumulated phase and an exact rate), and the delay is read relative to a
+  write cursor, which does not depend on `n` at all.
+  This changes batch output. Over the first half second it moves a 5 Hz `tremolo` and the `phaser`
+  by at most 4.2e-7; a 1 kHz `tremolo` by 6.7e-5 and `chorus`/`flanger` by 4e-4, which is the old
+  error already showing. By 200 s the old and new chorus differ by 0.14, which is the zipper. One
+  more change, at the other end: the old read returned silence whenever the tap was less than a
+  frame before the start of the signal, instead of interpolating the first sample against the
+  silence before it, so each chorus/flanger output had one wrong frame where its delay first
+  reached the signal.
 
 - **Coefficient crossfades in the realtime engine were 3 dB loud (`fluxion-rt`)** — `SosStream`
   blended the outgoing and incoming cascades with an **equal-power** law, `cos·old + sin·new`. But
