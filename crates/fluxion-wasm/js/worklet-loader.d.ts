@@ -33,7 +33,8 @@ export interface WorkletOptions {
 
 /**
  * Register the processor (once per context) and return a node running `chain` at the context's
- * sample rate.
+ * sample rate. An empty chain is a pass-through. A chain that cannot run does not throw: the node
+ * passes audio through and posts an {@link ErrorMessage}.
  */
 export function attachWorklet(
   context: BaseAudioContext,
@@ -52,14 +53,26 @@ export interface AudioMessage {
   samples: Float32Array | Float32Array[];
 }
 
-/** Ramp the output gain (linear) to `value` over `rampMs` (default 20). */
+/** Ramp the output gain (linear) to `value` over `rampMs` (default 20). Survives a chain swap. */
 export interface GainMessage {
   type: "gain";
   value: number;
   rampMs?: number;
 }
 
-/** Clear the chain's state (filter memory, delay lines, tails) and the ring — for stop or seek. */
+/**
+ * Replace the chain, crossfading (equal-gain, linear) over `crossfadeMs` (default 20; 0 switches
+ * at the next quantum). The new chain starts with clean state and hears the same input as the old
+ * one through the fade. A swap sent during a fade waits for it to end; if several wait, only the
+ * latest plays. Answered with a {@link ChainMessage} or an {@link ErrorMessage}.
+ */
+export interface SwapMessage {
+  type: "chain";
+  chain: string;
+  crossfadeMs?: number;
+}
+
+/** Clear every chain's state (filter memory, delay lines, tails) and the ring — for stop or seek. */
 export interface ResetMessage {
   type: "reset";
 }
@@ -78,11 +91,33 @@ export interface StopMessage {
 export type ToWorklet =
   | AudioMessage
   | GainMessage
+  | SwapMessage
   | ResetMessage
   | StatsRequest
   | StopMessage;
 
 // --- worklet -> page ---------------------------------------------------------------------------
+
+/**
+ * A chain — the initial one or a swap — was built and accepted. Every chain the node is given gets
+ * exactly one reply, this or an {@link ErrorMessage}. An accepted swap plays next, unless a later
+ * one replaces it while it waits for a running fade to end.
+ */
+export interface ChainMessage {
+  type: "chain";
+  chain: string;
+  ok: true;
+}
+
+/**
+ * A chain was refused: it does not parse, or it contains an op that cannot run in an audio
+ * callback. What was playing keeps playing; for the initial chain, that is a pass-through.
+ */
+export interface ErrorMessage {
+  type: "error";
+  chain: string;
+  message: string;
+}
 
 /** The reply to {@link StatsRequest}. */
 export interface WorkletStats {
@@ -98,4 +133,4 @@ export interface WorkletStats {
 }
 
 /** Everything the node's port can post back. */
-export type FromWorklet = WorkletStats;
+export type FromWorklet = ChainMessage | ErrorMessage | WorkletStats;

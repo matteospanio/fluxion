@@ -14,10 +14,11 @@
 //   node.port.postMessage({ type: "audio", samples });      // feed it
 //   node.port.postMessage({ type: "gain", value: 0.5 });    // ramped, not stepped
 //
-// Or as an insert effect on a track, with no added latency (roadmap L1–L3):
+// Or as an insert effect on a track, with no added latency (roadmap L1–L4):
 //
 //   const fx = await attachWorklet(ctx, "lowpass(2000)", { input: true, channels: 2 });
 //   source.connect(fx).connect(ctx.destination);
+//   fx.port.postMessage({ type: "chain", chain: "lowpass(800)", crossfadeMs: 20 });
 
 const HERE = import.meta.url;
 
@@ -68,7 +69,8 @@ async function register(context, base) {
  * sample rate. Types, and the messages both ways, are in worklet-loader.d.ts.
  *
  * @param {BaseAudioContext} context
- * @param {string} chain in the shared chain syntax, e.g. `"highpass(80, 4) | gain(-3dB)"`
+ * @param {string} chain in the shared chain syntax, e.g. `"highpass(80, 4) | gain(-3dB)"`; empty
+ *   means pass-through
  * @param {import("./worklet-loader").WorkletOptions} [options]
  *   `input: true` makes an insert node, which processes what the graph connects to it with no
  *   added latency; otherwise the node plays audio posted to it through a ring. `channels` is how

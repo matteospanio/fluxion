@@ -1,4 +1,4 @@
-// The AudioWorklet path, checked deterministically (roadmap W4, W5, L1–L3).
+// The AudioWorklet path, checked deterministically (roadmap W4, W5, L1–L4).
 //
 // W4's check is "5 s of playback, no dropped blocks, the wasm-side allocation counter stays at 0".
 // Two of those three are not really about a browser: they are about what the code does per block,
@@ -188,10 +188,10 @@ check("setting a gain allocates nothing", () => {
   return "1000 parameter changes, 0 allocations";
 });
 
-// --- L1–L3: the processor a page actually runs ------------------------------------------------
+// --- L1–L4: the processor a page actually runs ------------------------------------------------
 //
 // Everything above drives `Player` directly. A page runs fluxion-worklet.js on top of the
-// no-modules glue, and insert mode, channels and the views onto wasm memory all live in
+// no-modules glue, and insert mode, channels, the views onto wasm memory and chain swaps all live in
 // that file — so it is loaded here the way `attachWorklet` loads it, into a sandbox shaped like
 // AudioWorkletGlobalScope (no TextDecoder, no fetch, one wasm instance shared by every processor),
 // and `process()` is called the way the audio thread calls it.
@@ -263,6 +263,7 @@ const same = (what, a, b) => {
   const d = worst(a, b);
   if (d !== 0) throw new Error(`${what} differs by ${d.toExponential(2)}; it should be bit-identical`);
 };
+const largestStep = (x) => x.reduce((w, v, i) => (i ? Math.max(w, Math.abs(v - x[i - 1])) : 0), 0);
 
 check("insert mode: the output is Chain.process of the input, with no offset (L1)", () => {
   // Bit-identical at the same index is what "zero latency" means: one frame of offset would leave
@@ -378,6 +379,126 @@ check("nine nodes on one wasm instance: the ninth grows memory, no view goes sta
   return `memory grew ${size} -> ${worklet.memory.buffer.byteLength} bytes mid-play; all nine bit-identical`;
 });
 
+check("swapping gain(1) for gain(0.5) crossfades: no step larger than the fade allows (L4)", () => {
+  const p = node("gain(1)", { input: true });
+  const dc = new Float32Array(BLOCK).fill(1); // DC in, so the output *is* the gain curve
+  const curve = [];
+  for (let b = 0; b < 30; b++) {
+    if (b === 10) tell(p, { type: "chain", chain: "gain(0.5)", crossfadeMs: 20 });
+    curve.push(...quantum(p, [dc])[0]);
+  }
+  const swap = 10 * BLOCK;
+  const fade = Math.round(0.02 * FS);
+  if (curve.slice(0, swap).some((v) => v !== 1)) throw new Error("the old chain changed before the swap");
+  if (curve.slice(swap + fade).some((v) => v !== 0.5)) throw new Error("not the new chain after the fade");
+  const step = largestStep(curve);
+  // A linear fade of 0.5 over 960 samples moves 5.2e-4 per sample; a hard switch would move 0.5.
+  if (!(step <= 0.5 / fade + 1e-6)) throw new Error(`a step of ${step.toExponential(2)} — that is a click`);
+  const reply = p.port.sent.find((m) => m.type === "chain" && m.chain === "gain(0.5)");
+  if (!reply?.ok) throw new Error(`the swap was not acknowledged: ${JSON.stringify(p.port.sent)}`);
+  return `largest per-sample step ${step.toExponential(2)} (bound ${(0.5 / fade).toExponential(2)})`;
+});
+
+check("across a swap: the old chain before, the new chain after, both fed the same input", () => {
+  const from = CHAIN;
+  const to = "lowpass(2000, 2) | echo(0.01, 0.4, 0.5)";
+  const audio = source(BLOCK * 60);
+  const p = node(from, { input: true });
+  const swapAt = 20;
+  const [out] = stream(p, [audio], (b) => {
+    if (b === swapAt) tell(p, { type: "chain", chain: to, crossfadeMs: 10 });
+  });
+  const swap = swapAt * BLOCK;
+  const fade = Math.round(0.01 * FS);
+  same("before the swap", out.subarray(0, swap), offline(from, audio).subarray(0, swap));
+  // The new chain starts cold at the swap and hears everything from there on — during the fade too,
+  // or its filters and echo would still be settling when it takes over.
+  same(
+    "after the fade",
+    out.subarray(swap + fade),
+    offline(to, audio.subarray(swap)).subarray(fade),
+  );
+  return "bit-identical to the old chain before and to the new one after";
+});
+
+check("a chain that cannot run is refused on the port, and the old one keeps playing", () => {
+  const audio = source(BLOCK * 30);
+  const p = node(CHAIN, { input: true });
+  const [out] = stream(p, [audio], (b) => {
+    if (b === 10) tell(p, { type: "chain", chain: "reverse" });
+    if (b === 15) tell(p, { type: "chain", chain: "hipass(80)" });
+  });
+  same("the output", out, offline(CHAIN, audio));
+  const errors = p.port.sent.filter((m) => m.type === "error");
+  if (errors.length !== 2) throw new Error(`expected two refusals, got ${JSON.stringify(p.port.sent)}`);
+  if (errors[0].chain !== "reverse" || !/audio callback/.test(errors[0].message)) {
+    throw new Error(`the refusal of 'reverse' does not say why: ${errors[0].message}`);
+  }
+  if (errors[1].chain !== "hipass(80)" || !/highpass/.test(errors[1].message)) {
+    throw new Error(`the refusal of a typo does not suggest the fix: ${errors[1].message}`);
+  }
+  return "both refused with a reason; output bit-identical to the old chain throughout";
+});
+
+check("an initial chain that cannot run passes audio through, and says why", () => {
+  const audio = source(BLOCK * 10);
+  const p = node("reverse", { input: true }); // must not throw: a thrown constructor is a dead node
+  const [out] = stream(p, [audio]);
+  same("the output", out, audio);
+  const [error] = p.port.sent;
+  if (error?.type !== "error" || error.chain !== "reverse" || !/audio callback/.test(error.message)) {
+    throw new Error(`expected an error message first, got ${JSON.stringify(p.port.sent)}`);
+  }
+  return "pass-through, and an error on the port";
+});
+
+check("an empty chain is a pass-through, at construction and on a swap", () => {
+  const audio = source(BLOCK * 30);
+  const p = node("", { input: true });
+  const [out] = stream(p, [audio], (b) => {
+    if (b === 10) tell(p, { type: "chain", chain: "gain(0.5)", crossfadeMs: 0 });
+    if (b === 20) tell(p, { type: "chain", chain: "  \n", crossfadeMs: 0 });
+  });
+  const cut = (x, b) => x.subarray(b * BLOCK, (b + 10) * BLOCK);
+  same("the empty chain", cut(out, 0), cut(audio, 0));
+  same("gain(0.5)", cut(out, 10), cut(offline("gain(0.5)", audio), 10));
+  same("the whitespace chain", cut(out, 20), cut(audio, 20));
+  const acks = p.port.sent.filter((m) => m.type === "chain" && m.ok).map((m) => m.chain);
+  if (acks.join("|") !== "|gain(0.5)|  \n") throw new Error(`acknowledged ${JSON.stringify(acks)}`);
+  return "identity, and a crossfadeMs of 0 switches at the quantum boundary";
+});
+
+check("the node's gain carries across a swap", () => {
+  const p = node("gain(1)", { input: true });
+  const dc = new Float32Array(BLOCK).fill(1);
+  tell(p, { type: "gain", value: 0.5, rampMs: 0 });
+  tell(p, { type: "chain", chain: "id", crossfadeMs: 0 });
+  const [out] = quantum(p, [dc]);
+  if (out.some((v) => v !== 0.5)) throw new Error(`gain reset by the swap: ${out[0]}`);
+  return "a new chain starts at the gain the node already had";
+});
+
+check("a swap that arrives mid-fade waits for it, and the latest one wins", () => {
+  const p = node("gain(1)", { input: true });
+  const dc = new Float32Array(BLOCK).fill(1);
+  const curve = [];
+  for (let b = 0; b < 40; b++) {
+    if (b === 10) tell(p, { type: "chain", chain: "gain(0.5)", crossfadeMs: 20 });
+    if (b === 11) {
+      tell(p, { type: "chain", chain: "gain(0.9)", crossfadeMs: 20 });
+      tell(p, { type: "chain", chain: "gain(0.25)", crossfadeMs: 20 });
+    }
+    curve.push(...quantum(p, [dc])[0]);
+  }
+  const fade = Math.round(0.02 * FS);
+  const step = largestStep(curve);
+  if (!(step <= 0.5 / fade + 1e-6)) throw new Error(`a step of ${step.toExponential(2)}`);
+  if (curve.at(-1) !== 0.25) throw new Error(`landed on ${curve.at(-1)}, not the latest chain`);
+  if (curve[10 * BLOCK + fade - 1] !== 0.5) throw new Error("the first fade was cut short");
+  if (curve.some((v) => v > 1 || v < 0.25)) throw new Error("the superseded chain was heard");
+  return `two fades back to back, largest step ${step.toExponential(2)}`;
+});
+
 check("reset clears the tail, the ring and the counters", () => {
   const p = node("reverb(0.9, 0.2, 1)", { input: true });
   stream(p, [source(BLOCK * 20)]);
@@ -396,7 +517,7 @@ check("reset clears the tail, the ring and the counters", () => {
   return "silence in, silence out; nothing buffered";
 });
 
-check("steady-state quanta allocate nothing", () => {
+check("steady-state quanta allocate nothing, through a crossfade too", () => {
   const p = node(CHAIN, { input: true, channels: 2 });
   const input = [source(BLOCK), source(BLOCK, 0x9e37_79b9)];
   const out = [[new Float32Array(BLOCK), new Float32Array(BLOCK)]];
@@ -405,11 +526,19 @@ check("steady-state quanta allocate nothing", () => {
   };
   run(4); // wasm-bindgen's own first calls allocate; what is measured is the steady state
 
-  const before = workletAllocations();
+  let before = workletAllocations();
   run(400);
   const steady = workletAllocations() - before;
-  if (steady !== 0) throw new Error(`${steady} allocations in 400 steady quanta`);
-  return "400 stereo quanta, 0 allocations";
+  // The swap itself builds players, and may allocate. The quanta after it — the fade, and the
+  // quantum that frees the old chain — may not.
+  tell(p, { type: "chain", chain: "lowpass(5000, 2) | reverb(0.5, 0.5, 0.2)", crossfadeMs: 20 });
+  before = workletAllocations();
+  run(100);
+  const fading = workletAllocations() - before;
+  if (steady !== 0 || fading !== 0) {
+    throw new Error(`${steady} allocations in 400 steady quanta, ${fading} across the fade`);
+  }
+  return "400 stereo quanta and a crossfade, 0 allocations";
 });
 
 // --- run --------------------------------------------------------------------------------------

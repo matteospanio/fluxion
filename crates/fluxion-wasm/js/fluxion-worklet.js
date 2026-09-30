@@ -1,4 +1,4 @@
-// The AudioWorkletProcessor half of fluxion playback (roadmap W4, W5, L1–L3).
+// The AudioWorkletProcessor half of fluxion playback (roadmap W4, W5, L1–L4).
 //
 // This file is *concatenated* after the `no-modules` wasm-bindgen glue and registered with
 // `audioWorklet.addModule()` — see `attachWorklet()` in worklet-loader.mjs. An AudioWorklet has no
@@ -9,14 +9,19 @@
 // **Insert mode** (`input: true`) processes whatever the Web Audio graph connects to the node, each
 // 128-frame quantum as it arrives: no ring and no added latency, so tracks started at the same
 // `when` stay sample-aligned through their chains. Either way the chain itself sees the same thing
-// — a quantum in, a quantum out — so there is one path through `process()`.
+// — a quantum in, a quantum out — which is what lets one crossfade serve both.
 //
-// Everything below runs on the audio thread. Nothing here may allocate, block, or wait.
+// Everything below runs on the audio thread. `process()` must not allocate, block, or wait. The
+// messages may allocate — a chain swap builds new players — because they arrive between quanta.
 
 /* global wasm_bindgen, registerProcessor, AudioWorkletProcessor, sampleRate */
 
 // 128 is what the Web Audio API hands every processor, every call — there is no other size.
 const BLOCK = 128;
+
+// What an empty chain means. `id` is the chain syntax's own pass-through and lowers to a gain of
+// exactly 1: bit-identical to the input, through the same code path as every other chain.
+const IDENTITY = "id";
 
 class FluxionProcessor extends AudioWorkletProcessor {
   constructor(options) {
@@ -36,13 +41,33 @@ class FluxionProcessor extends AudioWorkletProcessor {
     // all of them, which is why `views()` has to watch it grow.
     this.memory = wasm_bindgen.initSync({ module }).memory;
     this.channels = channels;
+    this.gain = 1;
     this.rendered = 0;
     this.silence = new Float32Array(BLOCK);
 
-    // Ring mode keeps its ring in a pass-through player per channel (`id` is the chain syntax's
-    // pass-through), and the chain then runs exactly as it does in insert mode.
-    this.feed = input ? null : this.voices("id", ringFrames);
-    this.current = this.voices(chain);
+    // Ring mode keeps its ring in a pass-through player per channel, and the chain then runs exactly
+    // as it does in insert mode. That is what makes a swap in ring mode the same operation as in
+    // insert mode: the new chain has to hear the same input as the old one, and audio already
+    // sitting in the old chain's own ring could not be handed over to it.
+    this.feed = input ? null : this.voices(IDENTITY, ringFrames);
+
+    // An initial chain that cannot run leaves the node passing audio through, and says why. A
+    // constructor that threw would leave a node that outputs silence and a `processorerror` with
+    // nothing in it a host could show to a user.
+    try {
+      this.current = this.voices(chain);
+      this.port.postMessage({ type: "chain", chain, ok: true });
+    } catch (e) {
+      this.current = this.voices(IDENTITY);
+      this.port.postMessage({ type: "error", chain, message: String(e?.message ?? e) });
+    }
+
+    // Swap state: `fading` is the chain on its way out, `pending` a swap that arrived during a fade
+    // and waits for it to end.
+    this.fading = null;
+    this.pending = null;
+    this.faded = 0;
+    this.fadeLength = 0;
 
     // Audio supplied up front. An OfflineAudioContext can finish rendering before a
     // `postMessage` is delivered, so anything that must be in the ring before the first block has
@@ -56,11 +81,14 @@ class FluxionProcessor extends AudioWorkletProcessor {
   }
 
   /// One player per channel for `chain`: N independent states, the batch engine's per-channel
-  /// semantics. Throws if the chain does not parse or cannot run in a callback.
+  /// semantics. Throws if the chain does not parse or cannot run in a callback — on the first
+  /// channel, before anything is built, since every channel runs the same chain.
   voices(chain, capacity = BLOCK * 4) {
+    const text = String(chain ?? "").trim() === "" ? IDENTITY : chain;
     const voices = [];
     for (let c = 0; c < this.channels; c++) {
-      const player = new wasm_bindgen.Player(chain, sampleRate, BLOCK, capacity);
+      const player = new wasm_bindgen.Player(text, sampleRate, BLOCK, capacity);
+      player.setGain(this.gain, 0);
       voices.push({ player, input: null, output: null });
     }
     // Building players can grow wasm memory. Forgetting the buffer the views were made on makes the
@@ -80,7 +108,7 @@ class FluxionProcessor extends AudioWorkletProcessor {
       return;
     }
     this.buffer = buffer;
-    for (const voices of [this.feed, this.current]) {
+    for (const voices of [this.feed, this.current, this.fading, this.pending?.voices]) {
       for (const voice of voices ?? []) {
         voice.input = new Float32Array(buffer, voice.player.inputPtr(), BLOCK);
         voice.output = new Float32Array(buffer, voice.player.outputPtr(), BLOCK);
@@ -88,8 +116,7 @@ class FluxionProcessor extends AudioWorkletProcessor {
     }
   }
 
-  /// Messages from the page. Parameter changes are applied here, between blocks, and take effect
-  /// as a ramp rather than a step — see `Player::set_gain`.
+  /// Messages from the page, handled between quanta.
   control(message) {
     switch (message.type) {
       case "audio":
@@ -98,15 +125,25 @@ class FluxionProcessor extends AudioWorkletProcessor {
         this.push(message.samples);
         break;
       case "gain":
-        for (const voice of this.current) {
-          voice.player.setGain(message.value, message.rampMs ?? 20);
+        // A ramp rather than a step — see `Player::set_gain`. Remembered, so a chain swapped in
+        // later starts at the node's level instead of jumping back to 1.
+        this.gain = message.value;
+        for (const voices of [this.current, this.fading, this.pending?.voices]) {
+          for (const voice of voices ?? []) {
+            voice.player.setGain(message.value, message.rampMs ?? 20);
+          }
         }
         break;
+      case "chain":
+        this.swap(message.chain, message.crossfadeMs ?? 20);
+        break;
       case "reset":
-        // Stop, seek: whatever the chain remembers — a reverb tail, a delay line, audio waiting in
+        // Stop, seek: whatever the chains remember — a reverb tail, a delay line, audio waiting in
         // the ring — belongs to the old position.
-        for (const voice of [...(this.feed ?? []), ...this.current]) {
-          voice.player.reset();
+        for (const voices of [this.feed, this.current, this.fading, this.pending?.voices]) {
+          for (const voice of voices ?? []) {
+            voice.player.reset();
+          }
         }
         this.rendered = 0;
         break;
@@ -126,6 +163,54 @@ class FluxionProcessor extends AudioWorkletProcessor {
         break;
       default:
         break;
+    }
+  }
+
+  /// Replace the chain under a crossfade. Building the new players allocates, which is why this
+  /// happens on a message and never inside `process()`.
+  ///
+  /// ponytail: the message is still handled on the audio thread, between two quanta. A stereo
+  /// filter or reverb chain builds in about 20 µs, under 1% of a quantum at 48 kHz; a 30 s delay
+  /// line takes about 0.7 ms, and more the first time, when memory has to grow. The upgrade is
+  /// live parameters (L6), which change a chain without building one.
+  swap(chain, crossfadeMs) {
+    let voices;
+    try {
+      voices = this.voices(chain);
+    } catch (e) {
+      // Refused — and the old chain never stopped playing.
+      this.port.postMessage({ type: "error", chain, message: String(e?.message ?? e) });
+      return;
+    }
+    this.port.postMessage({ type: "chain", chain, ok: true });
+    const length = Math.round((crossfadeMs / 1000) * sampleRate);
+    if (this.fading) {
+      // A fade is running. Cutting it short would leave a step, so this one waits for it, and only
+      // the latest waiting chain is kept.
+      // ponytail: a swap sent mid-fade starts up to one fade late. Fine for what a debounced knob
+      // sends; a host that swaps faster than it fades wants a three-way mix instead.
+      this.release(this.pending?.voices);
+      this.pending = { voices, length };
+      return;
+    }
+    this.begin(voices, length);
+  }
+
+  begin(voices, length) {
+    if (!(length > 0)) {
+      this.release(this.current);
+      this.current = voices;
+      return;
+    }
+    this.fading = this.current;
+    this.current = voices;
+    this.faded = 0;
+    this.fadeLength = length;
+  }
+
+  release(voices) {
+    for (const voice of voices ?? []) {
+      voice.player.free();
     }
   }
 
@@ -164,6 +249,9 @@ class FluxionProcessor extends AudioWorkletProcessor {
       }
       // Pushed and rendered in the same quantum: this is the zero added latency.
       play(this.current[c], source);
+      if (this.fading) {
+        play(this.fading[c], source);
+      }
     }
 
     // Output channels past the node's own (ring mode's `outputChannels`) repeat its last one, so a
@@ -171,7 +259,36 @@ class FluxionProcessor extends AudioWorkletProcessor {
     const output = outputs[0];
     const last = this.channels - 1;
     for (let k = 0; k < output.length; k++) {
-      output[k].set(this.current[k < last ? k : last].output);
+      const c = k < last ? k : last;
+      const now = this.current[c].output;
+      if (!this.fading) {
+        output[k].set(now);
+        continue;
+      }
+      // Equal-gain (linear) crossfade. Both chains hear the same input, so their outputs are
+      // correlated and add in amplitude: gains that sum to 1 hold the level, where equal-power
+      // gains would bulge +3 dB in the middle of every swap.
+      const old = this.fading[c].output;
+      const out = output[k];
+      for (let i = 0; i < BLOCK; i++) {
+        const a = Math.min(1, (this.faded + i + 1) / this.fadeLength);
+        out[i] = old[i] * (1 - a) + now[i] * a;
+      }
+    }
+
+    if (this.fading) {
+      this.faded += BLOCK;
+      if (this.faded >= this.fadeLength) {
+        // Freeing hands memory back and never allocates, so the quantum a fade ends in is as
+        // allocation-free as any other.
+        this.release(this.fading);
+        this.fading = null;
+        if (this.pending) {
+          const { voices, length } = this.pending;
+          this.pending = null;
+          this.begin(voices, length);
+        }
+      }
     }
 
     this.rendered++;
