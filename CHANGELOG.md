@@ -55,6 +55,23 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Fixed
 
+- **The modulated effects lost precision as a signal got longer** — found making them stream
+  (L5), because a live session is long. `tremolo`, `chorus`, `flanger` and `phaser` computed their
+  LFO phase as `w·n` and the chorus/flanger read position as `n − d`, both in `f32` on the absolute
+  frame number. Both decay with `n`. By 30 s at 48 kHz the fractional delay was rounded to eighths
+  of a frame; at 2^23 frames (175 s) there was no fraction left, and the swept delay moved in
+  whole-frame steps — a zipper. A 1 kHz tremolo's phase was good only to an eighth of a radian by
+  5.8 minutes. The phase now comes from the frame number in `f64` (`modulation::Lfo`, the same
+  raised cosine, with no accumulated phase and an exact rate), and the delay is read relative to a
+  write cursor, which does not depend on `n` at all.
+  This changes batch output. Over the first half second it moves a 5 Hz `tremolo` and the `phaser`
+  by at most 4.2e-7; a 1 kHz `tremolo` by 6.7e-5 and `chorus`/`flanger` by 4e-4, which is the old
+  error already showing. By 200 s the old and new chorus differ by 0.14, which is the zipper. One
+  more change, at the other end: the old read returned silence whenever the tap was less than a
+  frame before the start of the signal, instead of interpolating the first sample against the
+  silence before it, so each chorus/flanger output had one wrong frame where its delay first
+  reached the signal.
+
 - **Coefficient crossfades in the realtime engine were 3 dB loud (`fluxion-rt`)** — `SosStream`
   blended the outgoing and incoming cascades with an **equal-power** law, `cos·old + sin·new`. But
   the two branches are the *same input* through two similar filters, so their outputs are strongly
