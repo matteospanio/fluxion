@@ -284,6 +284,65 @@ impl Chain {
     pub fn op_count(&self) -> usize {
         self.graph.leaf_count()
     }
+
+    /// The designed second-order sections of a pure-filter chain at `fs` — what an EQ editor
+    /// evaluates to draw the curve fluxion will actually render (ROADMAP W9).
+    ///
+    /// Flat, five numbers per section, sections in the order the signal meets them:
+    /// `[b0, b1, b2, a1, a2,  b0, b1, b2, a1, a2, ...]`, with `a0` normalized to 1 and left out.
+    /// Section k is `H_k(z) = (b0 + b1·z⁻¹ + b2·z⁻²) / (1 + a1·z⁻¹ + a2·z⁻²)`, and the chain's
+    /// response is the product over k. Same layout and same `f32` values as Python's
+    /// `Chain.sos_coeffs(fs)` — both flatten the backend's `graph_to_sos`.
+    ///
+    /// `undefined` when the chain is not one filter cascade — where Python raises: an op that is
+    /// not a filter, a `+` branch, a `~` loop, a side input or a tap. That includes `gain`, which
+    /// is **not** folded into the sections: `peaking(3000, 6) | gain(-3dB)` gives `undefined`. A
+    /// host drawing an EQ builds one-op chains per band and applies its output gain itself.
+    /// `name:` labels are transparent. `biquad(...)` is a filter here: its five parameters come
+    /// back as they were written.
+    #[wasm_bindgen(js_name = sosCoeffs)]
+    pub fn sos_coeffs(&self, fs: u32) -> Option<Vec<f32>> {
+        fluxion::graph_to_sos(&self.graph, fs).map(|sos| {
+            sos.iter()
+                .flat_map(|b| [b.b0, b.b1, b.b2, b.a1, b.a2])
+                .collect()
+        })
+    }
+
+    /// Certify the chain's stability at `fs`: `{ verdict, margin }`, the certificate Python's
+    /// `Chain.certify(fs)` returns as a tuple and the one `fx_rt_new` gates on (ROADMAP W9).
+    ///
+    /// `verdict`, best to worst: `certified-stable`; `marginally-stable` (within f32 noise of the
+    /// unit circle, e.g. a lossless design); `indeterminate` (non-finite coefficients — an `fs` of
+    /// 0 does it); `not-certified` (a `~` loop, which has no certificate yet); `unstable`.
+    /// `margin` is `1 − spectral radius` of the designed f32 sections for filters and `1 − loop
+    /// gain` for the feedback effects: positive inside, negative outside, `NaN` if indeterminate.
+    ///
+    /// Why this rather than a `stable(fs): boolean` from the Jury triangle of `sosCoeffs`: the
+    /// certificate *is* that pole test, on the same frozen f32 coefficients, plus the band that
+    /// tells a lossless design from a blow-up and a margin to show — and it covers the whole
+    /// chain, so it answers where `sosCoeffs` returns `undefined`. Refuse `unstable` to do what
+    /// `fx_rt_new` and Python's `RtChain` do; refuse everything but the first two to do what the
+    /// CLI does before it ships a `.fxg`.
+    #[wasm_bindgen(
+        unchecked_return_type = "{ verdict: \"certified-stable\" | \"marginally-stable\" | \"indeterminate\" | \"not-certified\" | \"unstable\"; margin: number }"
+    )]
+    pub fn certify(&self, fs: u32) -> js_sys::Object {
+        let cert = fluxion::certify_graph(&self.graph, fs);
+        let out = js_sys::Object::new();
+        // Our keys on a fresh object: these cannot fail.
+        let _ = js_sys::Reflect::set(
+            &out,
+            &JsValue::from_str("verdict"),
+            &JsValue::from_str(&cert.verdict.to_string()),
+        );
+        let _ = js_sys::Reflect::set(
+            &out,
+            &JsValue::from_str("margin"),
+            &JsValue::from_f64(f64::from(cert.margin)),
+        );
+        out
+    }
 }
 
 /// How many frames a `renderRegion(from, to)` has to compute — `to`, not `to - from`.
@@ -560,10 +619,40 @@ impl Player {
 mod tests {
     //! These run natively — the crate is also an `rlib`, so whatever is not wasm-specific is
     //! covered by `cargo test --workspace` like everything else.
-    use super::version;
+    use super::{Chain, version};
 
     #[test]
     fn version_is_the_crate_version() {
         assert_eq!(version(), env!("CARGO_PKG_VERSION"));
+    }
+
+    fn chain(text: &str) -> Chain {
+        Chain {
+            graph: text.parse().expect("test chain parses"),
+        }
+    }
+
+    /// Pre-condition: a two-section Butterworth, a gain, a label, a non-filter op.
+    /// Post-condition: five numbers per section in Python's `[b0, b1, b2, a1, a2]` order, `None`
+    /// for anything that is not one cascade — the scalar `gain` included — and a label changes
+    /// nothing.
+    #[test]
+    fn sos_coeffs_is_the_python_layout() {
+        let lp = chain("lowpass(1000, 4)")
+            .sos_coeffs(48_000)
+            .expect("a filter");
+        let sos = fluxion::graph_to_sos(&"lowpass(1000, 4)".parse().unwrap(), 48_000).unwrap();
+        assert_eq!(sos.len(), 2);
+        let python: Vec<f32> = sos
+            .iter()
+            .flat_map(|b| [b.b0, b.b1, b.b2, b.a1, b.a2])
+            .collect();
+        assert_eq!(lp, python);
+        assert_eq!(chain("band: lowpass(1000, 4)").sos_coeffs(48_000), Some(lp));
+        assert_eq!(
+            chain("lowpass(1000, 4) | gain(-3dB)").sos_coeffs(48_000),
+            None
+        );
+        assert_eq!(chain("compand").sos_coeffs(48_000), None);
     }
 }

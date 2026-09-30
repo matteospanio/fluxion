@@ -19,7 +19,7 @@
 
 use std::collections::BTreeSet;
 
-use fluxion::{Graph, OpKind, Signal, process};
+use fluxion::{Graph, OpKind, Signal, graph_to_sos, process};
 
 const FS: u32 = 48_000;
 
@@ -256,6 +256,29 @@ const CASES: &[Case] = &[
     },
 ];
 
+/// The chains `Chain.sosCoeffs` is checked on (roadmap W9): one of each kind an EQ editor draws —
+/// a multi-section Butterworth, an RBJ bell, a Chebyshev whose ripple puts its poles closest to the
+/// unit circle, and a shelf.
+const SOS_CASES: &[&str] = &[
+    "lowpass(1000, 4)",
+    "peaking(3000, 6, 1.5)",
+    "cheby1_lowpass(2000, 6, 1)",
+    "highshelf(8000, 3, 0.7)",
+];
+
+/// Native `graph_to_sos`, flattened the way Python's `Chain.sos_coeffs` flattens it
+/// (`crates/fluxion-py/src/lib.rs`): `[b0, b1, b2, a1, a2]` per section, `a0` normalized to 1 and
+/// left out. Written out here rather than borrowed from either binding, so a binding that changes
+/// its layout disagrees with this instead of with itself.
+fn sos_flat(chain: &str) -> Vec<f32> {
+    let graph: Graph = chain.parse().expect("SOS case parses");
+    graph_to_sos(&graph, FS)
+        .unwrap_or_else(|| panic!("`{chain}` is not a pure filter cascade"))
+        .iter()
+        .flat_map(|b| [b.b0, b.b1, b.b2, b.a1, b.a2])
+        .collect()
+}
+
 /// A deterministic input — and deterministic **across platforms**, which rules out `sin`.
 ///
 /// An earlier version summed three sines. Every value differed by an ULP between glibc and Apple's
@@ -389,6 +412,10 @@ fn write_reference() {
         "tolerance": TOLERANCE,
         "input": dry,
         "cases": cases,
+        "sos": SOS_CASES
+            .iter()
+            .map(|c| serde_json::json!({ "chain": c, "expected": sos_flat(c) }))
+            .collect::<Vec<_>>(),
     });
     std::fs::write(&path, serde_json::to_string(&json).unwrap()).unwrap();
     eprintln!(
