@@ -65,7 +65,8 @@ error: unknown op 'hipass'
 
 ## Live playback
 
-The same chain text, on the audio thread:
+The same chain text, on the audio thread — playing audio the page hands it, or as an insert
+effect in a Web Audio graph.
 
 ```js
 import { attachWorklet } from "fluxion/worklet";
@@ -83,10 +84,44 @@ Once started, the wasm side allocates nothing — asserted, not assumed: the mod
 allocations and the test requires the count not to move across five seconds of playback. A
 parameter change is a ramp, because a gain that jumps between blocks is a click.
 
+### As an insert effect
+
+```js
+const fx = await attachWorklet(ctx, "highpass(80) | reverb(0.5)", { input: true, channels: 2 });
+source.connect(fx).connect(ctx.destination);
+source.start(when);
+```
+
+`input: true` gives the node an input, and each 128-frame quantum is processed as it arrives: no
+ring and **no added latency**, so tracks whose sources start at the same `when` stay
+sample-aligned through their chains. `channels: N` runs N independent copies of the chain, one per
+channel, as the offline engine does; whatever is connected is first mixed to N channels by the Web
+Audio rules. (`channels` works in ring mode too: post one `Float32Array` per channel, or one for
+all of them.) Build as many nodes on a context as there are tracks — the processor registers once
+and they all share one wasm instance.
+
+Change the chain while it plays:
+
+```js
+fx.port.postMessage({ type: "chain", chain: "lowpass(800) | reverb(0.5)", crossfadeMs: 20 });
+fx.port.onmessage = ({ data }) => {
+  if (data.type === "error") console.warn(data.chain, data.message); // the old chain plays on
+};
+```
+
+The new chain starts clean and hears the same input as the old one while a linear crossfade moves
+between them. Every chain gets one answer: `{ type: "chain", chain, ok: true }`, or
+`{ type: "error", chain, message }` for one that cannot run — a typo, or `reverse`, which needs the
+whole signal — and then the old chain keeps playing. A node whose *first* chain cannot run passes
+audio through and says so the same way. An empty chain is a pass-through, so removing every effect
+needs no rewiring. On stop or seek, `{ type: "reset" }` clears what the chains remember — filter
+state, delay lines, reverb tails — so nothing from the old position leaks into the new one.
+
+Types for the options and for every message, both ways, are in `worklet-loader.d.ts`.
 `crates/fluxion-wasm/js/demo.html` is a working page.
 
 Playing offline instead — for a waveform, or a bounce — is the `Chain` API above. The two produce
-identical samples, which is checked in CI both in Node and inside a browser.
+identical samples, which is checked in CI both in Node and inside a browser, in both modes.
 
 ## Not yet
 

@@ -21,6 +21,36 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Added
 
+- **Live mixing in the browser worklet (Epic L / L1–L4)** — `attachWorklet(ctx, chain, { input:
+  true, channels: 2 })` is an **insert** effect: the node reads the Web Audio graph and processes
+  each 128-frame quantum in the quantum it arrives, so it adds no latency and tracks started at the
+  same `when` stay sample-aligned through their chains. `channels: N` runs N independent chain
+  states, the batch engine's per-channel semantics, in insert and ring mode alike. Any number of
+  nodes share one context: the processor registers once per context and the wasm compiles once per
+  URL. `{ type: "chain", chain, crossfadeMs }` swaps the chain while it plays, under a per-sample
+  linear crossfade with both chains fed the same input; a chain that cannot run is refused with
+  `{ type: "error", chain, message }` and the old one plays on. An empty chain is a pass-through,
+  and `{ type: "reset" }` clears every tail for a stop or a seek. Types for the options and every
+  message are in the new `worklet-loader.d.ts`, wired into `exports["./worklet"].types`.
+  Measured, not assumed: an insert node's output is **bit-identical** to `Chain.process` at the same
+  frame in Node and in Chrome — stereo, per channel, and two tracks summed at one destination. A
+  `gain(1)` → `gain(0.5)` swap over 20 ms moves at most 5.21e-4 per sample, which is the fade's
+  own slope; after the fade the output is bit-identical to the new chain's offline render of the
+  input from the swap on. 400 stereo quanta and a whole crossfade allocate nothing; the swap
+  itself builds its players on the audio thread, between two quanta, which costs about 20 µs for a
+  stereo filter or reverb chain and 0.7 ms for a 30 s delay line.
+  The bug L3 names is real and now has a test that fails without the fix: nodes on one context
+  share one wasm instance, and a ninth node with a 30 s delay line grows its memory from 1.57 to
+  7.34 MB mid-play, detaching every view the other eight hold. The processor now compares
+  `memory.buffer` with the buffer its views were made on, once per quantum, and remakes them only
+  when it changed. Without that, the next quantum throws on a detached `ArrayBuffer`.
+  Two behaviour changes, both in ring mode. The chain now runs behind a pass-through player that
+  holds the ring, so a swap in ring mode is the same operation as in insert mode — the new chain
+  has to hear the input the old one hears, and audio already inside the old chain's own ring could
+  not be handed over. And a chain that cannot run no longer throws from the processor
+  constructor: the node passes audio through and posts the `error`, because a thrown constructor
+  leaves a silent node and a `processorerror` with nothing in it a host can show.
+
 - **Render any region (Epic D / D4 — completes milestone F-M6)** — `render_region(graph, input,
   from, to)`, `chain.render_region` in Python, `chain.renderRegion` in the browser. The window is
   bit-identical to that window of a whole render, and not because it was tested into agreement: it
