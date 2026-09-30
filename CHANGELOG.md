@@ -21,6 +21,28 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Added
 
+- **Every chunk-local op plays live (Epic L / L5)** — `tremolo`, `overdrive`, `gate`, `chorus`,
+  `flanger` and `phaser` now lower to `RtGraph` nodes, so `to_rt_graph` accepts them and so does
+  everything built on it: the browser `Player`, Python's `RtChain`, C's `fx_rt_new` and the CLI's
+  streaming path. Before, one of them anywhere in a chain meant the whole chain could not play.
+  Each op is now a small state machine in `fluxion-ops` (`Tremolo`, `Overdrive`, `Gate`, `Chorus`,
+  `Flanger`, `Phaser`, the arrangement `CompandCoeffs` already had), designed in `new` and advanced
+  one frame at a time by `step`; the offline function runs it over the whole signal and the node
+  runs it over each block. So the parity is structural and the check can be strict: 23 chains —
+  each op at defaults, representative settings and range edges, plus a chain of all six — streamed
+  in blocks of 1, 64, 127, 128 and 1000 frames are **bit-identical** to `process`, compared with
+  `to_bits`. The same holds inside the wasm build, where the new worklet check also finds zero
+  allocations while the six play; natively, `rt_safety.rs` finds zero after `prepare`.
+  The keyed gate (`gate < side(0)`) stays offline-only, because a realtime node has one input and
+  the key would be a second. It is refused rather than lowered as an unkeyed gate, which would
+  play something plausible and wrong. For the same reason the batch engine now refuses a keyed op
+  inside a `~` loop, whose realtime-lowered body would have quietly listened to itself.
+  wasm against native: `chorus` and `flanger` now differ by 7.9e-6 and 2.4e-6 (they had been
+  bit-identical by luck) and carry a written 3e-5 bound in `parity.rs`. Their delay is swept by the
+  LFO, so a last-bit difference between two libms' `cos` moves the read position and the
+  interpolation multiplies it by the signal's slope. `tremolo` went the other way and is now
+  bit-identical; 28 of 36 cases are.
+
 - **Render any region (Epic D / D4 — completes milestone F-M6)** — `render_region(graph, input,
   from, to)`, `chain.render_region` in Python, `chain.renderRegion` in the browser. The window is
   bit-identical to that window of a whole render, and not because it was tested into agreement: it

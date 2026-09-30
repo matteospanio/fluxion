@@ -112,7 +112,8 @@ class Fade(Chain):
 
 
 class Tremolo(Chain):
-    """Tremolo: amplitude LFO at `rate` Hz dipping by `depth` (0..1). Length-preserving.
+    """Tremolo: amplitude LFO at `rate` Hz dipping by `depth` (0..1). Length-preserving, realtime-
+    playable.
 
     rate: default 5.0, range 0.0..20000.0 Hz
     depth: default 0.5, range 0.0..1.0
@@ -124,7 +125,7 @@ class Tremolo(Chain):
 
 class Overdrive(Chain):
     """Overdrive: `gain` dB of drive through a `tanh` soft-clipper with a `colour` asymmetry bias.
-    Nonlinear (not differentiable here).
+    Nonlinear (not differentiable here), realtime-playable.
 
     gain: default 20.0, range 0.0..100.0 dB
     colour: default 0.2, range 0.0..1.0
@@ -162,7 +163,7 @@ class Reverse(Chain):
 
 class Chorus(Chain):
     """Chorus: an LFO-modulated fractional-delay voice (`rate` Hz, `depth` s, `delay` s) blended by
-    `mix`. Feed-forward (no feedback). Length-preserving.
+    `mix`. Feed-forward (no feedback). Length-preserving, realtime-playable.
 
     rate: default 1.5, range 0.0..100.0 Hz
     depth: default 0.002, range 0.0..1.0 s
@@ -176,7 +177,7 @@ class Chorus(Chain):
 
 class Flanger(Chain):
     """Flanger: a short LFO-modulated delay (`rate` Hz, `depth` s, `delay` s) with `feedback`, blended
-    by `mix`. Length-preserving.
+    by `mix`. Length-preserving, realtime-playable.
 
     rate: default 0.5, range 0.0..100.0 Hz
     depth: default 0.002, range 0.0..1.0 s
@@ -220,7 +221,7 @@ class Loudnorm(Chain):
 
 class Phaser(Chain):
     """Phaser: an LFO-swept cascade of first-order all-pass stages (`rate` Hz, `depth`) with
-    `feedback`, blended by `mix`. Length-preserving.
+    `feedback`, blended by `mix`. Length-preserving, realtime-playable.
 
     rate: default 0.5, range 0.0..100.0 Hz
     depth: default 0.5, range 0.0..1.0
@@ -251,7 +252,9 @@ class Gate(Chain):
     the noise it removed. Takes a key (the `<` operator): with one, the gate listens to that signal
     and acts on this one — a different microphone opening this channel. Written without `<` it
     listens to itself, which is an ordinary noise gate. Written *with* `<` but handed no signal it
-    hears silence and closes, which is the safe reading of a key that went missing.
+    hears silence and closes, which is the safe reading of a key that went missing. The unkeyed
+    gate is realtime-playable; the keyed one renders offline only, because a realtime chain has one
+    input and the key would be a second.
 
     threshold: default -40.0, range -100.0..0.0 dB
     range: default 60.0, range 0.0..120.0 dB

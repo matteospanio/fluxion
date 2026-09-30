@@ -145,14 +145,14 @@ export const OPS = Object.freeze({
     name: "tremolo",
     group: "effect",
     variadic: false,
-    doc: "Tremolo: amplitude LFO at `rate` Hz dipping by `depth` (0..1). Length-preserving.",
+    doc: "Tremolo: amplitude LFO at `rate` Hz dipping by `depth` (0..1). Length-preserving, realtime-playable.",
     params: [{ name: "rate", unit: "hz", default: 5.0, min: 0.0, max: 20000.0 }, { name: "depth", unit: "linear", default: 0.5, min: 0.0, max: 1.0 }],
   },
   "overdrive": {
     name: "overdrive",
     group: "effect",
     variadic: false,
-    doc: "Overdrive: `gain` dB of drive through a `tanh` soft-clipper with a `colour` asymmetry bias. Nonlinear (not differentiable here).",
+    doc: "Overdrive: `gain` dB of drive through a `tanh` soft-clipper with a `colour` asymmetry bias. Nonlinear (not differentiable here), realtime-playable.",
     params: [{ name: "gain", unit: "db", default: 20.0, min: 0.0, max: 100.0 }, { name: "colour", unit: "linear", default: 0.2, min: 0.0, max: 1.0 }],
   },
   "compand": {
@@ -180,14 +180,14 @@ export const OPS = Object.freeze({
     name: "chorus",
     group: "effect",
     variadic: false,
-    doc: "Chorus: an LFO-modulated fractional-delay voice (`rate` Hz, `depth` s, `delay` s) blended by `mix`. Feed-forward (no feedback). Length-preserving.",
+    doc: "Chorus: an LFO-modulated fractional-delay voice (`rate` Hz, `depth` s, `delay` s) blended by `mix`. Feed-forward (no feedback). Length-preserving, realtime-playable.",
     params: [{ name: "rate", unit: "hz", default: 1.5, min: 0.0, max: 100.0 }, { name: "depth", unit: "seconds", default: 0.002, min: 0.0, max: 1.0 }, { name: "delay", unit: "seconds", default: 0.025, min: 0.0, max: 1.0 }, { name: "mix", unit: "linear", default: 0.5, min: 0.0, max: 1.0 }],
   },
   "flanger": {
     name: "flanger",
     group: "effect",
     variadic: false,
-    doc: "Flanger: a short LFO-modulated delay (`rate` Hz, `depth` s, `delay` s) with `feedback`, blended by `mix`. Length-preserving.",
+    doc: "Flanger: a short LFO-modulated delay (`rate` Hz, `depth` s, `delay` s) with `feedback`, blended by `mix`. Length-preserving, realtime-playable.",
     params: [{ name: "rate", unit: "hz", default: 0.5, min: 0.0, max: 100.0 }, { name: "depth", unit: "seconds", default: 0.002, min: 0.0, max: 1.0 }, { name: "delay", unit: "seconds", default: 0.001, min: 0.0, max: 1.0 }, { name: "feedback", unit: "linear", default: 0.5, min: -0.95, max: 0.95 }, { name: "mix", unit: "linear", default: 0.5, min: 0.0, max: 1.0 }],
   },
   "limiter": {
@@ -208,7 +208,7 @@ export const OPS = Object.freeze({
     name: "phaser",
     group: "effect",
     variadic: false,
-    doc: "Phaser: an LFO-swept cascade of first-order all-pass stages (`rate` Hz, `depth`) with `feedback`, blended by `mix`. Length-preserving.",
+    doc: "Phaser: an LFO-swept cascade of first-order all-pass stages (`rate` Hz, `depth`) with `feedback`, blended by `mix`. Length-preserving, realtime-playable.",
     params: [{ name: "rate", unit: "hz", default: 0.5, min: 0.0, max: 100.0 }, { name: "depth", unit: "linear", default: 0.5, min: 0.0, max: 1.0 }, { name: "feedback", unit: "linear", default: 0.5, min: -0.95, max: 0.95 }, { name: "mix", unit: "linear", default: 0.5, min: 0.0, max: 1.0 }],
   },
   "pitchshift": {
@@ -222,7 +222,7 @@ export const OPS = Object.freeze({
     name: "gate",
     group: "effect",
     variadic: false,
-    doc: "Noise gate: below `threshold` the signal is turned down by `range` dB, opening over `attack` seconds, staying open for at least `hold` after the level drops, and closing over `release`. `range` is a reduction, not a mute, because a gate that slams to silence is more audible than the noise it removed. Takes a key (the `<` operator): with one, the gate listens to that signal and acts on this one \u2014 a different microphone opening this channel. Written without `<` it listens to itself, which is an ordinary noise gate. Written *with* `<` but handed no signal it hears silence and closes, which is the safe reading of a key that went missing.",
+    doc: "Noise gate: below `threshold` the signal is turned down by `range` dB, opening over `attack` seconds, staying open for at least `hold` after the level drops, and closing over `release`. `range` is a reduction, not a mute, because a gate that slams to silence is more audible than the noise it removed. Takes a key (the `<` operator): with one, the gate listens to that signal and acts on this one \u2014 a different microphone opening this channel. Written without `<` it listens to itself, which is an ordinary noise gate. Written *with* `<` but handed no signal it hears silence and closes, which is the safe reading of a key that went missing. The unkeyed gate is realtime-playable; the keyed one renders offline only, because a realtime chain has one input and the key would be a second.",
     params: [{ name: "threshold", unit: "db", default: -40.0, min: -100.0, max: 0.0 }, { name: "range", unit: "db", default: 60.0, min: 0.0, max: 120.0 }, { name: "attack", unit: "seconds", default: 0.001, min: 0.0, max: 1.0 }, { name: "hold", unit: "seconds", default: 0.01, min: 0.0, max: 5.0 }, { name: "release", unit: "seconds", default: 0.1, min: 0.0, max: 5.0 }],
   },
 });
