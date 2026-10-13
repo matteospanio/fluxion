@@ -177,7 +177,8 @@ int fx_abi_smoke(void);
  * receives the `FX_VERDICT_*` code and `margin_out` the stability margin (`1 − spectral radius`;
  * NaN if indeterminate) — written whenever certification ran, including when construction is then
  * refused. An `FX_VERDICT_UNSTABLE` graph is refused. Graphs containing an op with no realtime
- * lowering (normalize / fade / reverse / the modulated effects / feedback) are refused too.
+ * lowering (normalize / fade / reverse / limiter / loudnorm / pitchshift / a keyed op / feedback)
+ * are refused too.
  *
  * All allocation happens here; [`fx_rt_process`] is allocation-free afterwards.
  *

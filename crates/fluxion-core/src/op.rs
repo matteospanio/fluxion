@@ -237,14 +237,15 @@ ops! {
         ParamSpec::new("shape", Unit::Linear, 1.0, 0.0, 2.0),
     ];
 
-    /// Tremolo: amplitude LFO at `rate` Hz dipping by `depth` (0..1). Length-preserving.
+    /// Tremolo: amplitude LFO at `rate` Hz dipping by `depth` (0..1). Length-preserving,
+    /// realtime-playable.
     Tremolo => "tremolo", Effect, [
         ParamSpec::new("rate", Unit::Hz, 5.0, 0.0, 20_000.0),
         ParamSpec::new("depth", Unit::Linear, 0.5, 0.0, 1.0),
     ];
 
     /// Overdrive: `gain` dB of drive through a `tanh` soft-clipper with a `colour` asymmetry bias.
-    /// Nonlinear (not differentiable here).
+    /// Nonlinear (not differentiable here), realtime-playable.
     Overdrive => "overdrive", Effect, [
         ParamSpec::new("gain", Unit::Db, 20.0, 0.0, 100.0),
         ParamSpec::new("colour", Unit::Linear, 0.2, 0.0, 1.0),
@@ -278,7 +279,7 @@ ops! {
     ];
 
     /// Chorus: an LFO-modulated fractional-delay voice (`rate` Hz, `depth` s, `delay` s) blended by
-    /// `mix`. Feed-forward (no feedback). Length-preserving.
+    /// `mix`. Feed-forward (no feedback). Length-preserving, realtime-playable.
     Chorus => "chorus", Effect, [
         ParamSpec::new("rate", Unit::Hz, 1.5, 0.0, 100.0),
         ParamSpec::new("depth", Unit::Seconds, 0.002, 0.0, 1.0),
@@ -287,7 +288,7 @@ ops! {
     ];
 
     /// Flanger: a short LFO-modulated delay (`rate` Hz, `depth` s, `delay` s) with `feedback`,
-    /// blended by `mix`. Length-preserving.
+    /// blended by `mix`. Length-preserving, realtime-playable.
     Flanger => "flanger", Effect, [
         ParamSpec::new("rate", Unit::Hz, 0.5, 0.0, 100.0),
         ParamSpec::new("depth", Unit::Seconds, 0.002, 0.0, 1.0),
@@ -316,7 +317,7 @@ ops! {
     ];
 
     /// Phaser: an LFO-swept cascade of first-order all-pass stages (`rate` Hz, `depth`) with
-    /// `feedback`, blended by `mix`. Length-preserving.
+    /// `feedback`, blended by `mix`. Length-preserving, realtime-playable.
     Phaser => "phaser", Effect, [
         ParamSpec::new("rate", Unit::Hz, 0.5, 0.0, 100.0),
         ParamSpec::new("depth", Unit::Linear, 0.5, 0.0, 1.0),
@@ -339,7 +340,9 @@ ops! {
     /// Takes a **key** (the `<` operator): with one, the gate listens to that signal and acts on
     /// this one — a different microphone opening this channel. Written without `<` it listens to
     /// itself, which is an ordinary noise gate. Written *with* `<` but handed no signal it hears
-    /// silence and closes, which is the safe reading of a key that went missing.
+    /// silence and closes, which is the safe reading of a key that went missing. The unkeyed gate
+    /// is realtime-playable; the keyed one renders offline only, because a realtime chain has one
+    /// input and the key would be a second.
     Gate => "gate", Effect, [
         ParamSpec::new("threshold", Unit::Db, -40.0, -100.0, 0.0),
         ParamSpec::new("range", Unit::Db, 60.0, 0.0, 120.0),

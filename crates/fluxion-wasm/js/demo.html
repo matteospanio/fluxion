@@ -11,9 +11,9 @@
 
   const log = (m) => (document.getElementById("out").textContent = m);
 
-  /** Deterministic noise, so a failure is reproducible. */
-  function source(frames) {
-    let state = 0x1234_5678;
+  /** Deterministic noise, so a failure is reproducible. A different seed, a different signal. */
+  function source(frames, seed = 0x1234_5678) {
+    let state = seed;
     return Float32Array.from({ length: frames }, () => {
       state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
       return ((state >>> 8) / 16_777_216) * 1.2 - 0.6;
@@ -59,6 +59,47 @@
     for (let i = 0; i < frames; i++) {
       peak = Math.max(peak, Math.abs(rendered[i]));
       worst = Math.max(worst, Math.abs(rendered[i] - offline[i]));
+    }
+    return { frames, peak, worst };
+  };
+
+  // Insert mode, the way a mixer uses it: one stereo track per chain, each a buffer source through
+  // its own insert node, all started at the same `when` and summed at the destination.
+  window.fluxionInsertRender = async ({ chains, seconds }) => {
+    const fs = 48000;
+    const frames = Math.floor(fs * seconds);
+    const ctx = new OfflineAudioContext({ numberOfChannels: 2, length: frames, sampleRate: fs });
+    await init({ module_or_path: new URL("./pkg/fluxion_wasm_bg.wasm", import.meta.url) });
+
+    // What the destination should receive: each track's offline render, per channel, summed in
+    // float32 as the destination sums its inputs.
+    const expected = [new Float32Array(frames), new Float32Array(frames)];
+    for (const [track, chain] of chains.entries()) {
+      const left = source(frames, 0x1000 + 2 * track);
+      const right = source(frames, 0x1001 + 2 * track);
+      const buffer = ctx.createBuffer(2, frames, fs);
+      buffer.copyToChannel(left, 0);
+      buffer.copyToChannel(right, 1);
+      const src = new AudioBufferSourceNode(ctx, { buffer });
+      const node = await attachWorklet(ctx, chain, { input: true, channels: 2 });
+      src.connect(node).connect(ctx.destination);
+      src.start(0);
+
+      [left, right].forEach((x, c) => {
+        const y = Chain.fromText(chain).process(x, fs);
+        for (let i = 0; i < frames; i++) expected[c][i] += y[i];
+      });
+    }
+
+    const rendered = await ctx.startRendering();
+    let peak = 0;
+    let worst = 0;
+    for (let c = 0; c < 2; c++) {
+      const got = rendered.getChannelData(c);
+      for (let i = 0; i < frames; i++) {
+        peak = Math.max(peak, Math.abs(got[i]));
+        worst = Math.max(worst, Math.abs(got[i] - expected[c][i]));
+      }
     }
     return { frames, peak, worst };
   };

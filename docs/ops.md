@@ -131,11 +131,11 @@ same op as a function and a class respectively, both named from the row below.
 
 > `fadein` 0..3600 s · `fadeout` 0..3600 s · `shape` 0..2
 
-**`tremolo(rate=5, depth=0.5)`** — Tremolo: amplitude LFO at `rate` Hz dipping by `depth` (0..1). Length-preserving.
+**`tremolo(rate=5, depth=0.5)`** — Tremolo: amplitude LFO at `rate` Hz dipping by `depth` (0..1). Length-preserving, realtime-playable.
 
 > `rate` 0..20000 Hz · `depth` 0..1
 
-**`overdrive(gain=20, colour=0.2)`** — Overdrive: `gain` dB of drive through a `tanh` soft-clipper with a `colour` asymmetry bias. Nonlinear (not differentiable here).
+**`overdrive(gain=20, colour=0.2)`** — Overdrive: `gain` dB of drive through a `tanh` soft-clipper with a `colour` asymmetry bias. Nonlinear (not differentiable here), realtime-playable.
 
 > `gain` 0..100 dB · `colour` 0..1
 
@@ -145,11 +145,11 @@ same op as a function and a class respectively, both named from the row below.
 
 **`reverse`** — Per-channel time reversal (no parameters). Length-preserving, but not realtime (it needs the whole signal).
 
-**`chorus(rate=1.5, depth=0.002, delay=0.025, mix=0.5)`** — Chorus: an LFO-modulated fractional-delay voice (`rate` Hz, `depth` s, `delay` s) blended by `mix`. Feed-forward (no feedback). Length-preserving.
+**`chorus(rate=1.5, depth=0.002, delay=0.025, mix=0.5)`** — Chorus: an LFO-modulated fractional-delay voice (`rate` Hz, `depth` s, `delay` s) blended by `mix`. Feed-forward (no feedback). Length-preserving, realtime-playable.
 
 > `rate` 0..100 Hz · `depth` 0..1 s · `delay` 0..1 s · `mix` 0..1
 
-**`flanger(rate=0.5, depth=0.002, delay=0.001, feedback=0.5, mix=0.5)`** — Flanger: a short LFO-modulated delay (`rate` Hz, `depth` s, `delay` s) with `feedback`, blended by `mix`. Length-preserving.
+**`flanger(rate=0.5, depth=0.002, delay=0.001, feedback=0.5, mix=0.5)`** — Flanger: a short LFO-modulated delay (`rate` Hz, `depth` s, `delay` s) with `feedback`, blended by `mix`. Length-preserving, realtime-playable.
 
 > `rate` 0..100 Hz · `depth` 0..1 s · `delay` 0..1 s · `feedback` -0.95..0.95 · `mix` 0..1
 
@@ -161,7 +161,7 @@ same op as a function and a class respectively, both named from the row below.
 
 > `target` -70..0 dB · `ceiling` -60..0 dB
 
-**`phaser(rate=0.5, depth=0.5, feedback=0.5, mix=0.5)`** — Phaser: an LFO-swept cascade of first-order all-pass stages (`rate` Hz, `depth`) with `feedback`, blended by `mix`. Length-preserving.
+**`phaser(rate=0.5, depth=0.5, feedback=0.5, mix=0.5)`** — Phaser: an LFO-swept cascade of first-order all-pass stages (`rate` Hz, `depth`) with `feedback`, blended by `mix`. Length-preserving, realtime-playable.
 
 > `rate` 0..100 Hz · `depth` 0..1 · `feedback` -0.95..0.95 · `mix` 0..1
 
@@ -169,7 +169,7 @@ same op as a function and a class respectively, both named from the row below.
 
 > `cents` -2400..2400
 
-**`gate(threshold=-40, range=60, attack=0.001, hold=0.01, release=0.1)`** — Noise gate: below `threshold` the signal is turned down by `range` dB, opening over `attack` seconds, staying open for at least `hold` after the level drops, and closing over `release`. `range` is a reduction, not a mute, because a gate that slams to silence is more audible than the noise it removed. Takes a key (the `<` operator): with one, the gate listens to that signal and acts on this one — a different microphone opening this channel. Written without `<` it listens to itself, which is an ordinary noise gate. Written *with* `<` but handed no signal it hears silence and closes, which is the safe reading of a key that went missing.
+**`gate(threshold=-40, range=60, attack=0.001, hold=0.01, release=0.1)`** — Noise gate: below `threshold` the signal is turned down by `range` dB, opening over `attack` seconds, staying open for at least `hold` after the level drops, and closing over `release`. `range` is a reduction, not a mute, because a gate that slams to silence is more audible than the noise it removed. Takes a key (the `<` operator): with one, the gate listens to that signal and acts on this one — a different microphone opening this channel. Written without `<` it listens to itself, which is an ordinary noise gate. Written *with* `<` but handed no signal it hears silence and closes, which is the safe reading of a key that went missing. The unkeyed gate is realtime-playable; the keyed one renders offline only, because a realtime chain has one input and the key would be a second.
 
 > `threshold` -100..0 dB · `range` 0..120 dB · `attack` 0..1 s · `hold` 0..5 s · `release` 0..5 s
 

@@ -1,16 +1,17 @@
 //! General-graph realtime executor (plan task G3, beyond a linear cascade).
 //!
 //! [`SosStream`] runs one cascade; [`RtGraph`] runs the full graph algebra — `Series` (chain) and
-//! `Parallel` (sum) composition of filter, gain, delay, echo, comb/all-pass (reverb) and FIR nodes —
-//! block-by-block and allocation-free. The intermediate buffers that `Series`/`Parallel` need are sized once by
-//! [`RtGraph::prepare`]; delay/echo own their fixed-size rings; after that [`RtGraph::process`]
-//! never allocates, so it is audio-thread safe.
+//! `Parallel` (sum) composition of filter, gain, delay, echo, comb/all-pass (reverb), FIR, dynamics
+//! and modulated-effect nodes — block-by-block and allocation-free. The intermediate buffers that
+//! `Series`/`Parallel` need are sized once by [`RtGraph::prepare`]; the delay-based nodes own
+//! fixed-size rings sized when they are built; after that [`RtGraph::process`] never allocates, so
+//! it is audio-thread safe.
 //!
 //! Mirrors `fluxion_core::Graph`'s `|` (series) and `+` (parallel). Lowering an arbitrary
 //! `fluxion_core::Graph` (designing each op's coefficients) to an `RtGraph` is
 //! `fluxion_backend::to_rt_graph` (like `freeze`); here are the runtime building blocks.
 
-use fluxion_ops::{Biquad, CompandCoeffs};
+use fluxion_ops::{Biquad, Chorus, CompandCoeffs, Flanger, Gate, Overdrive, Phaser, Tremolo};
 
 use crate::stream::SosStream;
 
@@ -126,6 +127,22 @@ pub enum RtGraph {
         /// Envelope-follower state (peak level).
         env: f32,
     },
+    // The ops below are the offline kernels' own per-frame steps (ROADMAP L5), so a stream of
+    // them is the batch render cut into blocks — bit for bit. Each carries its whole state: the
+    // frame its LFO is at, its delay line, its envelope.
+    /// Tremolo ([`fluxion_ops::tremolo`]).
+    Tremolo(Tremolo),
+    /// Overdrive ([`fluxion_ops::overdrive`]). Memoryless.
+    Overdrive(Overdrive),
+    /// Noise gate listening to its own input ([`fluxion_ops::gate()`]). A keyed gate has no realtime
+    /// form: the key is a second signal, and a node has one input.
+    Gate(Gate),
+    /// Chorus ([`fluxion_ops::chorus`]).
+    Chorus(Chorus),
+    /// Flanger ([`fluxion_ops::flanger`]).
+    Flanger(Flanger),
+    /// Phaser ([`fluxion_ops::phaser`]).
+    Phaser(Phaser),
 }
 
 impl RtGraph {
@@ -305,7 +322,13 @@ impl RtGraph {
             | RtGraph::Comb { .. }
             | RtGraph::Allpass { .. }
             | RtGraph::Fir { .. }
-            | RtGraph::Compand { .. } => {}
+            | RtGraph::Compand { .. }
+            | RtGraph::Tremolo(_)
+            | RtGraph::Overdrive(_)
+            | RtGraph::Gate(_)
+            | RtGraph::Chorus(_)
+            | RtGraph::Flanger(_)
+            | RtGraph::Phaser(_) => {}
             RtGraph::Series {
                 first,
                 second,
@@ -481,6 +504,36 @@ impl RtGraph {
                     *o = y;
                 }
             }
+            RtGraph::Tremolo(t) => {
+                for (o, &x) in output.iter_mut().zip(input) {
+                    *o = t.step(x);
+                }
+            }
+            RtGraph::Overdrive(d) => {
+                for (o, &x) in output.iter_mut().zip(input) {
+                    *o = d.step(x);
+                }
+            }
+            RtGraph::Gate(g) => {
+                for (o, &x) in output.iter_mut().zip(input) {
+                    *o = g.step(x, x);
+                }
+            }
+            RtGraph::Chorus(c) => {
+                for (o, &x) in output.iter_mut().zip(input) {
+                    *o = c.step(x);
+                }
+            }
+            RtGraph::Flanger(f) => {
+                for (o, &x) in output.iter_mut().zip(input) {
+                    *o = f.step(x);
+                }
+            }
+            RtGraph::Phaser(p) => {
+                for (o, &x) in output.iter_mut().zip(input) {
+                    *o = p.step(x);
+                }
+            }
         }
     }
 
@@ -531,6 +584,12 @@ impl RtGraph {
             RtGraph::Compand { env, .. } => {
                 *env = 0.0;
             }
+            RtGraph::Tremolo(t) => t.reset(),
+            RtGraph::Overdrive(_) => {}
+            RtGraph::Gate(g) => g.reset(),
+            RtGraph::Chorus(c) => c.reset(),
+            RtGraph::Flanger(f) => f.reset(),
+            RtGraph::Phaser(p) => p.reset(),
         }
     }
 

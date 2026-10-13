@@ -21,6 +21,71 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Added
 
+- **Filter coefficients and stability in the browser (W9)** — `Chain.sosCoeffs(fs)` returns the
+  designed second-order sections of a pure-filter chain as a `Float32Array`, `[b0, b1, b2, a1, a2]`
+  per section with `a0 = 1` — Python's `sos_coeffs` layout, and the same values: all four checked
+  chains (`lowpass(1000, 4)`, `peaking(3000, 6, 1.5)`, `cheby1_lowpass(2000, 6, 1)`,
+  `highshelf(8000, 3, 0.7)`) are bit-identical to native `graph_to_sos` in CI, and were to the
+  Python wheel when checked by hand. It is `undefined` where Python raises: any non-filter op,
+  `gain` included (it is not folded into the sections), a `+` branch, a loop, a side input or a
+  tap; `name:` labels are transparent. `Chain.certify(fs)` returns `{ verdict, margin }`, the
+  certificate Python's `certify` returns as a tuple and `fx_rt_new` gates on, so an EQ editor can
+  draw the curve fluxion renders and refuse `biquad(b0=1, a1=-2.1, a2=1.2)` (`unstable`, margin
+  `1 − √1.2`) without a JS copy of the filter design. |H(e^jω)| evaluated from the sections agrees
+  with the DFT of `process` on an impulse to 6.1e-6 relative above -60 dB and 1.3e-8 absolute in
+  the stopbands, against a written 1e-4 + 1e-6 bound. The README has the ten-line evaluator.
+
+- **Live mixing in the browser worklet (Epic L / L1–L4)** — `attachWorklet(ctx, chain, { input:
+  true, channels: 2 })` is an **insert** effect: the node reads the Web Audio graph and processes
+  each 128-frame quantum in the quantum it arrives, so it adds no latency and tracks started at the
+  same `when` stay sample-aligned through their chains. `channels: N` runs N independent chain
+  states, the batch engine's per-channel semantics, in insert and ring mode alike. Any number of
+  nodes share one context: the processor registers once per context and the wasm compiles once per
+  URL. `{ type: "chain", chain, crossfadeMs }` swaps the chain while it plays, under a per-sample
+  linear crossfade with both chains fed the same input; a chain that cannot run is refused with
+  `{ type: "error", chain, message }` and the old one plays on. An empty chain is a pass-through,
+  and `{ type: "reset" }` clears every tail for a stop or a seek. Types for the options and every
+  message are in the new `worklet-loader.d.ts`, wired into `exports["./worklet"].types`.
+  Measured, not assumed: an insert node's output is **bit-identical** to `Chain.process` at the same
+  frame in Node and in Chrome — stereo, per channel, and two tracks summed at one destination. A
+  `gain(1)` → `gain(0.5)` swap over 20 ms moves at most 5.21e-4 per sample, which is the fade's
+  own slope; after the fade the output is bit-identical to the new chain's offline render of the
+  input from the swap on. 400 stereo quanta and a whole crossfade allocate nothing; the swap
+  itself builds its players on the audio thread, between two quanta, which costs about 20 µs for a
+  stereo filter or reverb chain and 0.7 ms for a 30 s delay line.
+  The bug L3 names is real and now has a test that fails without the fix: nodes on one context
+  share one wasm instance, and a ninth node with a 30 s delay line grows its memory from 1.57 to
+  7.34 MB mid-play, detaching every view the other eight hold. The processor now compares
+  `memory.buffer` with the buffer its views were made on, once per quantum, and remakes them only
+  when it changed. Without that, the next quantum throws on a detached `ArrayBuffer`.
+  Two behaviour changes, both in ring mode. The chain now runs behind a pass-through player that
+  holds the ring, so a swap in ring mode is the same operation as in insert mode — the new chain
+  has to hear the input the old one hears, and audio already inside the old chain's own ring could
+  not be handed over. And a chain that cannot run no longer throws from the processor
+  constructor: the node passes audio through and posts the `error`, because a thrown constructor
+  leaves a silent node and a `processorerror` with nothing in it a host can show.
+- **Every chunk-local op plays live (Epic L / L5)** — `tremolo`, `overdrive`, `gate`, `chorus`,
+  `flanger` and `phaser` now lower to `RtGraph` nodes, so `to_rt_graph` accepts them and so does
+  everything built on it: the browser `Player`, Python's `RtChain`, C's `fx_rt_new` and the CLI's
+  streaming path. Before, one of them anywhere in a chain meant the whole chain could not play.
+  Each op is now a small state machine in `fluxion-ops` (`Tremolo`, `Overdrive`, `Gate`, `Chorus`,
+  `Flanger`, `Phaser`, the arrangement `CompandCoeffs` already had), designed in `new` and advanced
+  one frame at a time by `step`; the offline function runs it over the whole signal and the node
+  runs it over each block. So the parity is structural and the check can be strict: 23 chains —
+  each op at defaults, representative settings and range edges, plus a chain of all six — streamed
+  in blocks of 1, 64, 127, 128 and 1000 frames are **bit-identical** to `process`, compared with
+  `to_bits`. The same holds inside the wasm build, where the new worklet check also finds zero
+  allocations while the six play; natively, `rt_safety.rs` finds zero after `prepare`.
+  The keyed gate (`gate < side(0)`) stays offline-only, because a realtime node has one input and
+  the key would be a second. It is refused rather than lowered as an unkeyed gate, which would
+  play something plausible and wrong. For the same reason the batch engine now refuses a keyed op
+  inside a `~` loop, whose realtime-lowered body would have quietly listened to itself.
+  wasm against native: `chorus` and `flanger` now differ by 7.9e-6 and 2.4e-6 (they had been
+  bit-identical by luck) and carry a written 3e-5 bound in `parity.rs`. Their delay is swept by the
+  LFO, so a last-bit difference between two libms' `cos` moves the read position and the
+  interpolation multiplies it by the signal's slope. `tremolo` went the other way and is now
+  bit-identical; 28 of 36 cases are.
+
 - **Render any region (Epic D / D4 — completes milestone F-M6)** — `render_region(graph, input,
   from, to)`, `chain.render_region` in Python, `chain.renderRegion` in the browser. The window is
   bit-identical to that window of a whole render, and not because it was tested into agreement: it
@@ -54,6 +119,23 @@ All notable changes to fluxion are documented here. The format is based on
   entirely. `Curve::db_ramp` is the constructor for the one people mean.
 
 ### Fixed
+
+- **The modulated effects lost precision as a signal got longer** — found making them stream
+  (L5), because a live session is long. `tremolo`, `chorus`, `flanger` and `phaser` computed their
+  LFO phase as `w·n` and the chorus/flanger read position as `n − d`, both in `f32` on the absolute
+  frame number. Both decay with `n`. By 30 s at 48 kHz the fractional delay was rounded to eighths
+  of a frame; at 2^23 frames (175 s) there was no fraction left, and the swept delay moved in
+  whole-frame steps — a zipper. A 1 kHz tremolo's phase was good only to an eighth of a radian by
+  5.8 minutes. The phase now comes from the frame number in `f64` (`modulation::Lfo`, the same
+  raised cosine, with no accumulated phase and an exact rate), and the delay is read relative to a
+  write cursor, which does not depend on `n` at all.
+  This changes batch output. Over the first half second it moves a 5 Hz `tremolo` and the `phaser`
+  by at most 4.2e-7; a 1 kHz `tremolo` by 6.7e-5 and `chorus`/`flanger` by 4e-4, which is the old
+  error already showing. By 200 s the old and new chorus differ by 0.14, which is the zipper. One
+  more change, at the other end: the old read returned silence whenever the tap was less than a
+  frame before the start of the signal, instead of interpolating the first sample against the
+  silence before it, so each chorus/flanger output had one wrong frame where its delay first
+  reached the signal.
 
 - **Coefficient crossfades in the realtime engine were 3 dB loud (`fluxion-rt`)** — `SosStream`
   blended the outgoing and incoming cascades with an **equal-power** law, `cos·old + sin·new`. But

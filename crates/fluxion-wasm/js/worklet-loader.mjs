@@ -13,6 +13,12 @@
 //   node.connect(ctx.destination);
 //   node.port.postMessage({ type: "audio", samples });      // feed it
 //   node.port.postMessage({ type: "gain", value: 0.5 });    // ramped, not stepped
+//
+// Or as an insert effect on a track, with no added latency (roadmap L1–L4):
+//
+//   const fx = await attachWorklet(ctx, "lowpass(2000)", { input: true, channels: 2 });
+//   source.connect(fx).connect(ctx.destination);
+//   fx.port.postMessage({ type: "chain", chain: "lowpass(800)", crossfadeMs: 20 });
 
 const HERE = import.meta.url;
 
@@ -32,39 +38,75 @@ async function moduleSource(base) {
   return URL.createObjectURL(new Blob([source], { type: "application/javascript" }));
 }
 
-/**
- * Register the processor and return a node running `chain` at the context's sample rate.
- *
- * @param {BaseAudioContext} context
- * @param {string} chain in the shared chain syntax, e.g. `"highpass(80, 4) | gain(-3dB)"`
- * @param {{ ringFrames?: number, outputChannels?: number, base?: string,
- *           prime?: Float32Array }} [options]
- *   `prime` is audio placed in the ring before the first block — the only way to feed an
- *   OfflineAudioContext, which can finish rendering before a postMessage arrives.
- * @returns {Promise<AudioWorkletNode>}
- */
-export async function attachWorklet(context, chain, options = {}) {
-  const base = options.base ?? HERE;
+// One registration per context and one compile per wasm file, however many nodes are built.
+// Registering the processor a second time on the same context throws — the name is taken — and a
+// mixer builds a node per track, so the first `attachWorklet` does the work and the rest wait on
+// it. Only the promise is kept; a failed attempt is forgotten, so a retry tries again.
+const registrations = new WeakMap();
+const modules = new Map();
+
+function once(cache, key, make) {
+  let pending = cache.get(key);
+  if (!pending) {
+    pending = make();
+    cache.set(key, pending);
+    pending.catch(() => cache.delete(key));
+  }
+  return pending;
+}
+
+async function register(context, base) {
   const url = await moduleSource(base);
   try {
     await context.audioWorklet.addModule(url);
   } finally {
     URL.revokeObjectURL(url);
   }
+}
 
-  // Compile once on the main thread; the worklet instantiates it synchronously, because
-  // `process()` can be called before any promise it started would resolve.
-  const module = await WebAssembly.compileStreaming(
-    fetch(new URL("./pkg/fluxion_wasm_bg.wasm", base)),
-  );
+/**
+ * Register the processor (once per context) and return a node running `chain` at the context's
+ * sample rate. Types, and the messages both ways, are in worklet-loader.d.ts.
+ *
+ * @param {BaseAudioContext} context
+ * @param {string} chain in the shared chain syntax, e.g. `"highpass(80, 4) | gain(-3dB)"`; empty
+ *   means pass-through
+ * @param {import("./worklet-loader").WorkletOptions} [options]
+ *   `input: true` makes an insert node, which processes what the graph connects to it with no
+ *   added latency; otherwise the node plays audio posted to it through a ring. `channels` is how
+ *   many independent channels the chain runs on. `prime` is audio placed in the ring before the
+ *   first block — the only way to feed an OfflineAudioContext in ring mode, which can finish
+ *   rendering before a postMessage arrives.
+ * @returns {Promise<AudioWorkletNode>}
+ */
+export async function attachWorklet(context, chain, options = {}) {
+  const base = options.base ?? HERE;
+  const wasm = new URL("./pkg/fluxion_wasm_bg.wasm", base).href;
+  const [module] = await Promise.all([
+    // Compiled on the main thread; the worklet instantiates it synchronously, because `process()`
+    // can be called before any promise it started would resolve.
+    once(modules, wasm, () => WebAssembly.compileStreaming(fetch(wasm))),
+    once(registrations, context, () => register(context, base)),
+  ]);
 
+  const channels = options.channels ?? 1;
+  const insert = options.input === true;
   return new AudioWorkletNode(context, "fluxion-processor", {
-    numberOfInputs: 0,
+    numberOfInputs: insert ? 1 : 0,
     numberOfOutputs: 1,
-    outputChannelCount: [options.outputChannels ?? 1],
+    outputChannelCount: [insert ? channels : (options.outputChannels ?? channels)],
+    // Exactly `channels` in, whatever is connected: a mono source is spread over a stereo node
+    // (and stereo folded to mono) by the Web Audio rules, before the chain sees it.
+    ...(insert && {
+      channelCount: channels,
+      channelCountMode: "explicit",
+      channelInterpretation: "speakers",
+    }),
     processorOptions: {
       module,
       chain,
+      channels,
+      input: insert,
       ringFrames: options.ringFrames ?? 128 * 64,
       prime: options.prime,
     },
