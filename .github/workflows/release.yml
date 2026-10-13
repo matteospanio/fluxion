@@ -1,9 +1,12 @@
 name: release
 
 # Everything a version tag ships, from one workflow: the Python wheels and sdist (PyPI), the Rust
-# crates (crates.io) and the browser package (npm), then the GitHub release with the files on it.
+# crates (crates.io) and the browser package (GitHub Packages), then the GitHub release with the
+# files on it.
 #
-# The packages are `fluxion-dsp` on all three registries — `fluxion` is taken on each of them.
+# The packages are `fluxion-dsp` on PyPI and crates.io — `fluxion` is taken on both — and
+# `@matteospanio/fluxion-dsp` on GitHub's npm registry, which takes only the scope of the
+# repository's owner.
 #
 # On a pull request that touches the packaging, the same jobs build and dry-run, so a broken
 # release is found before the tag rather than after it. Nothing publishes outside a `v*` tag.
@@ -12,7 +15,7 @@ name: release
 #   PyPI       a trusted publisher for `fluxion-dsp`: this repository, workflow `release.yml`,
 #              environment `pypi`. No token.
 #   crates.io  the repository secret CARGO_REGISTRY_TOKEN (scopes publish-new, publish-update).
-#   npm        the repository secret NPM_TOKEN (publish rights on `fluxion-dsp`).
+#   GitHub     nothing: the workflow's own GITHUB_TOKEN publishes the npm package.
 
 on:
   push:
@@ -165,13 +168,13 @@ jobs:
             done
           done
 
-  # The browser package: the wasm, its glue and the AudioWorklet files.
+  # The browser package: the wasm, its glue and the AudioWorklet files, on GitHub Packages.
   npm:
-    name: npm package
+    name: npm package (GitHub Packages)
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write          # npm provenance: the package says which workflow built it
+      packages: write          # GitHub Packages, with the workflow's own token
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -181,7 +184,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          registry-url: "https://registry.npmjs.org"
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@matteospanio"
       # wasm-bindgen-cli and the wasm-bindgen crate are a matched pair; take the version from the
       # lockfile rather than guessing.
       - name: install wasm-bindgen-cli at the locked version
@@ -194,17 +198,18 @@ jobs:
         working-directory: crates/fluxion-wasm/js
         run: |
           npm pack
-          tar -tzf fluxion-dsp-*.tgz
+          tar -tzf matteospanio-fluxion-dsp-*.tgz
       - uses: actions/upload-artifact@v4
         with:
           name: npm
-          path: crates/fluxion-wasm/js/fluxion-dsp-*.tgz
+          path: crates/fluxion-wasm/js/matteospanio-fluxion-dsp-*.tgz
       - name: npm publish
         if: startsWith(github.ref, 'refs/tags/v')
         working-directory: crates/fluxion-wasm/js
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # No --provenance: npm's provenance attestations are for its own public registry.
+        run: npm publish
 
   # CPU wheels + sdist to PyPI, via Trusted Publishing (OIDC — no API token). It depends only on
   # the CPU wheels and the sdist: the `+cu12` GPU wheel is never uploaded (PyPI rejects PEP 440

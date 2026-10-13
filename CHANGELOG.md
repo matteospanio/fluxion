@@ -8,7 +8,8 @@ Release checklist (maintainers), before tagging vX.Y.Z:
      and `fluxion-py` versions; update the link references at the bottom.
   6. Tag `vX.Y.Z`: `.github/workflows/release.yml` publishes the wheels to PyPI (Trusted Publishing,
      GitHub environment `pypi`), the crates to crates.io in dependency order (`CARGO_REGISTRY_TOKEN`)
-     and the browser package to npm (`NPM_TOKEN`), then makes the GitHub release.
+     and the browser package to GitHub Packages (the workflow's own `GITHUB_TOKEN`), then makes the
+     GitHub release.
 -->
 
 # Changelog
@@ -23,10 +24,12 @@ All notable changes to fluxion are documented here. The format is based on
 
 ### Changed
 
-- **Published as `fluxion-dsp`, on PyPI, crates.io and npm** — `fluxion` was taken on all three
-  registries (and `fluxion-core` on crates.io), so the packages are now `pip install fluxion-dsp`,
-  `cargo add fluxion-dsp`, `cargo install fluxion-dsp-cli` and `npm install fluxion-dsp`, and every
-  crate of the workspace is `fluxion-dsp-*`. Only the package names changed: the Rust libraries keep
+- **Published as `fluxion-dsp` on PyPI and crates.io, and as `@matteospanio/fluxion-dsp` on GitHub
+  Packages** — `fluxion` was taken on PyPI, crates.io and npm (and `fluxion-core` on crates.io), so
+  the packages are now `pip install fluxion-dsp`, `cargo add fluxion-dsp`, `cargo install
+  fluxion-dsp-cli` and `npm install @matteospanio/fluxion-dsp`, and every crate of the workspace is
+  `fluxion-dsp-*`. GitHub's npm registry asks for a token with `read:packages` even to install a
+  public package: the README's Install section has the `.npmrc`. Only the package names changed: the Rust libraries keep
   theirs (`use fluxion::…`, `use fluxion_core::…`), the Python module is still `import fluxion`, and
   the CLI binary is still `fluxion`. One tag publishes all three, from `.github/workflows/release.yml`.
 - **`init()` finds its `.wasm` by itself in a browser** — the web glue was built with

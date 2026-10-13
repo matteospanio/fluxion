@@ -1,5 +1,5 @@
 {
-  "name": "fluxion-dsp",
+  "name": "@matteospanio/fluxion-dsp",
   "version": "0.3.0",
   "description": "Differentiable, cross-vendor audio DSP in the browser — the same engine as the Rust library, the CLI and the Python package.",
   "type": "module",
@@ -48,6 +48,9 @@
     "directory": "crates/fluxion-wasm/js"
   },
   "homepage": "https://github.com/matteospanio/fluxion",
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "keywords": [
     "audio",
     "dsp",
