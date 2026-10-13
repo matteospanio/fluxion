@@ -1,5 +1,5 @@
 [package]
-name = "fluxion-cli"
+name = "fluxion-dsp-cli"
 description = "Fluxion: a modern, SoX-style command-line interface for audio DSP."
 readme = "../../README.md"
 version.workspace = true
@@ -25,12 +25,12 @@ path = "src/main.rs"
 realtime = ["dep:fluxion-rt"]
 
 [dependencies]
-fluxion = { path = "../fluxion-facade", version = "0.2.0", features = ["realtime"] }
-fluxion-io = { path = "../fluxion-io", version = "0.2.0", features = ["checkpoint"] }
+fluxion = { package = "fluxion-dsp", path = "../fluxion-facade", version = "0.3.0", features = ["realtime"] }
+fluxion-io = { package = "fluxion-dsp-io", path = "../fluxion-io", version = "0.3.0", features = ["checkpoint"] }
 # Loudness / true-peak metering for `stat`; the facade does not re-export the measurement
 # functions because they are not graph ops.
-fluxion-ops = { path = "../fluxion-ops", version = "0.2.0" }
-fluxion-rt = { path = "../fluxion-rt", version = "0.2.0", optional = true, features = ["cpal"] }
+fluxion-ops = { package = "fluxion-dsp-ops", path = "../fluxion-ops", version = "0.3.0" }
+fluxion-rt = { package = "fluxion-dsp-rt", path = "../fluxion-rt", version = "0.3.0", optional = true, features = ["cpal"] }
 clap = { version = "4", features = ["derive"] }
 # Already in the offline backbone (fluxion-core uses it for `.fxg`); reused here so
 # `effects --json` emits properly escaped JSON instead of hand-rolled string concat.

@@ -1,5 +1,6 @@
 [package]
-name = "fluxion"
+name = "fluxion-dsp"
+readme = "../../README.md"
 description = "Differentiable, cross-vendor, framework-agnostic audio DSP with a functional graph API."
 version.workspace = true
 edition.workspace = true
@@ -10,6 +11,12 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
+
+[lib]
+# Published as `fluxion-dsp`, like every crate of the family: `fluxion` and
+# `fluxion-core` belong to other projects on crates.io. The library keeps its
+# name, so code still writes `use fluxion::…`.
+name = "fluxion"
 
 [lints]
 workspace = true
@@ -24,8 +31,8 @@ autodiff = ["dep:fluxion-autodiff", "fluxion-autodiff/burn"]
 realtime = ["dep:fluxion-rt"]
 
 [dependencies]
-fluxion-core = { path = "../fluxion-core" }
-fluxion-ops = { path = "../fluxion-ops" }
-fluxion-backend = { path = "../fluxion-backend" }
-fluxion-autodiff = { path = "../fluxion-autodiff", optional = true }
-fluxion-rt = { path = "../fluxion-rt", optional = true }
+fluxion-core = { package = "fluxion-dsp-core", path = "../fluxion-core", version = "0.3.0" }
+fluxion-ops = { package = "fluxion-dsp-ops", path = "../fluxion-ops", version = "0.3.0" }
+fluxion-backend = { package = "fluxion-dsp-backend", path = "../fluxion-backend", version = "0.3.0" }
+fluxion-autodiff = { package = "fluxion-dsp-autodiff", path = "../fluxion-autodiff", version = "0.3.0", optional = true }
+fluxion-rt = { package = "fluxion-dsp-rt", path = "../fluxion-rt", version = "0.3.0", optional = true }

@@ -1,5 +1,5 @@
 [package]
-name = "fluxion-ops"
+name = "fluxion-dsp-ops"
 description = "Fluxion: DSP primitives with hand-derived analytic forward + backward (VJP)."
 readme = "../../README.md"
 version.workspace = true
@@ -12,11 +12,17 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[lib]
+# Published as `fluxion-dsp-ops`, like every crate of the family: `fluxion` and
+# `fluxion-core` belong to other projects on crates.io. The library keeps its
+# name, so code still writes `use fluxion_ops::…`.
+name = "fluxion_ops"
+
 [lints]
 workspace = true
 
 [dependencies]
-fluxion-core = { path = "../fluxion-core", version = "0.2.0" }
+fluxion-core = { package = "fluxion-dsp-core", path = "../fluxion-core", version = "0.3.0" }
 rustfft = "6"  # FFT linear convolution for long FIR kernels (D5)
 # Burn/CubeCL backends are added in later milestones.
 

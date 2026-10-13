@@ -1,5 +1,5 @@
 [package]
-name = "fluxion-io"
+name = "fluxion-dsp-io"
 description = "Fluxion: audio decode/encode (Symphonia) and Arrow/Parquet batch IO."
 readme = "../../README.md"
 version.workspace = true
@@ -11,6 +11,12 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
+
+[lib]
+# Published as `fluxion-dsp-io`, like every crate of the family: `fluxion` and
+# `fluxion-core` belong to other projects on crates.io. The library keeps its
+# name, so code still writes `use fluxion_io::…`.
+name = "fluxion_io"
 
 [lints]
 workspace = true
@@ -25,7 +31,7 @@ parquet = ["dep:arrow", "dep:parquet"]
 checkpoint = ["dep:safetensors"]
 
 [dependencies]
-fluxion-core = { path = "../fluxion-core", version = "0.2.0" }
+fluxion-core = { package = "fluxion-dsp-core", path = "../fluxion-core", version = "0.3.0" }
 hound = "3.5"
 symphonia = { version = "0.5", features = ["all-codecs", "all-formats"] }
 # Batch IO (feature `parquet`). default-features off keeps the transitive tree to the array/schema

@@ -1,6 +1,6 @@
 //! Learn a low-pass **cutoff** by gradient descent through Burn's autograd.
 //!
-//! Run with: `cargo run -p fluxion-autodiff --example learn_cutoff --features burn`
+//! Run with: `cargo run -p fluxion-dsp-autodiff --example learn_cutoff --features burn`
 //!
 //! This is the DDSP core end-to-end: a filter *designed* from a single trainable `cutoff` parameter
 //! (kept on the always-stable design manifold) is optimised by back-propagating an audio-domain loss

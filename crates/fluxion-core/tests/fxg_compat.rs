@@ -58,7 +58,7 @@ fn every_current_op_round_trips_through_fxg() {
 /// existing variant moved (the point of the file is to catch exactly that):
 ///
 /// ```text
-/// cargo test -p fluxion-core --test fxg_compat -- --ignored write_fixture
+/// cargo test -p fluxion-dsp-core --test fxg_compat -- --ignored write_fixture
 /// ```
 ///
 /// Then bump `V1_OP_COUNT` to match and say why in the commit message.

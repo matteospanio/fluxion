@@ -5,12 +5,21 @@ Differentiable, cross-vendor audio DSP in the browser — the same engine as the
 to WebAssembly. Preview and export come from the same DSP, because it *is* the same DSP: the
 output is checked against the native library sample for sample in CI.
 
+It is on GitHub Packages, whose npm registry asks for a token even to install a public package —
+a personal access token (classic) with `read:packages`. So the project's `.npmrc` points the scope
+there first:
+
+```ini
+@matteospanio:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
+```
+
 ```bash
-npm install fluxion
+npm install @matteospanio/fluxion-dsp
 ```
 
 ```js
-import init, { Chain } from "fluxion";
+import init, { Chain } from "@matteospanio/fluxion-dsp";
 
 await init();
 
@@ -22,7 +31,7 @@ const out = chain.process(samples, 48000);   // Float32Array in, Float32Array ou
 hand it the bytes:
 
 ```js
-await init({ module_or_path: await readFile("node_modules/fluxion/pkg/fluxion_wasm_bg.wasm") });
+await init({ module_or_path: await readFile("node_modules/@matteospanio/fluxion-dsp/pkg/fluxion_wasm_bg.wasm") });
 ```
 
 ## The chain syntax

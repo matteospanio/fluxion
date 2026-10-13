@@ -9,7 +9,7 @@
 //!
 //! Emits JSON lines: per-iterate {loss, stability margin, params}, then a summary with the
 //! magnitude-response curves (coloration, ideal inverse = -coloration, learned EQ) and the frozen
-//! artifact path. Run: `cargo run -p fluxion-autodiff --release --features burn --example
+//! artifact path. Run: `cargo run -p fluxion-dsp-autodiff --release --features burn --example
 //! eq_inversion -- [design|raw|rawfree] [out.fxg]`
 
 use burn::backend::{Autodiff, NdArray};

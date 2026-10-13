@@ -11,7 +11,7 @@ cargo test                  # unit tests + doctests
 cargo clippy --all-targets  # lint (CI denies warnings)
 cargo fmt                   # format
 cargo bench --no-run        # compile the Criterion benches (fluxion-ops, fluxion-backend)
-cargo run -p fluxion-cli    # the CLI (binary name: fluxion)
+cargo run -p fluxion-dsp-cli    # the CLI (binary name: fluxion)
 ```
 
 `cargo fmt --all --check` and `cargo clippy --workspace --all-targets -- -D warnings` must pass, and

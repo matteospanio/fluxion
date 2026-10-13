@@ -1,5 +1,5 @@
 [package]
-name = "fluxion-backend"
+name = "fluxion-dsp-backend"
 description = "Fluxion: lowering of the DSP graph to CubeCL (CUDA/HIP/Metal/Vulkan/WGSL) and CPU SIMD."
 readme = "../../README.md"
 version.workspace = true
@@ -12,6 +12,12 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[lib]
+# Published as `fluxion-dsp-backend`, like every crate of the family: `fluxion` and
+# `fluxion-core` belong to other projects on crates.io. The library keeps its
+# name, so code still writes `use fluxion_backend::…`.
+name = "fluxion_backend"
+
 [lints]
 workspace = true
 
@@ -21,9 +27,9 @@ workspace = true
 cuda = ["dep:cubecl"]
 
 [dependencies]
-fluxion-core = { path = "../fluxion-core", version = "0.2.0" }
-fluxion-ops = { path = "../fluxion-ops", version = "0.2.0" }
-fluxion-rt = { path = "../fluxion-rt", version = "0.2.0" }
+fluxion-core = { package = "fluxion-dsp-core", path = "../fluxion-core", version = "0.3.0" }
+fluxion-ops = { package = "fluxion-dsp-ops", path = "../fluxion-ops", version = "0.3.0" }
+fluxion-rt = { package = "fluxion-dsp-rt", path = "../fluxion-rt", version = "0.3.0" }
 rayon = "1"
 cubecl = { version = "0.10", features = ["cuda"], optional = true }
 
@@ -36,7 +42,7 @@ criterion = { version = "0.5", default-features = false, features = ["cargo_benc
 # in the comparator benches.
 mimalloc = "0.1"
 # WAV IO for the soundlamp case-study example only.
-fluxion-io = { path = "../fluxion-io", version = "0.2.0" }
+fluxion-io = { package = "fluxion-dsp-io", path = "../fluxion-io", version = "0.3.0" }
 
 [[bench]]
 name = "batch"

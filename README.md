@@ -37,15 +37,16 @@ from Training GPU to Real-Time Edge* (IS² 2026) — see [Citation](#citation) a
 
 One codebase, five ways in:
 
-- **Rust library** — `fluxion` on crates.io: compose effects with `|` (series) and `+`
+- **Rust library** — `fluxion-dsp` on crates.io: compose effects with `|` (series) and `+`
   (parallel), run them batched on CPU/GPU, differentiate them, or freeze them for realtime.
 - **CLI** — `fluxion`, a SoX substitute with named effects and long flags (not SoX's interface,
   most of SoX's jobs).
-- **Python** — `fluxion` on PyPI: a torchfx-style API (`Wave`, effect classes, `|` and `+`),
+- **Python** — `fluxion-dsp` on PyPI: a torchfx-style API (`Wave`, effect classes, `|` and `+`),
   zero-copy DLPack interop, torch/JAX autograd adapters, batched data augmentation.
 - **C ABI** — a small panic-safe surface (`fluxion.h`) for C/C++/Swift consumers.
-- **Browser** — `npm install fluxion`: the same engine as WebAssembly, offline render today,
-  AudioWorklet playback next. Its output is checked against the native library in CI.
+- **Browser** — `@matteospanio/fluxion-dsp` on GitHub Packages: the same engine as WebAssembly,
+  offline render and AudioWorklet playback, live mixing included. Its output is checked against the
+  native library in CI.
 
 All of them build the same graph and share one text form for it —
 `"highpass(80, 4) | gain(-3dB)"` means the same thing everywhere. See
@@ -56,16 +57,31 @@ All of them build the same graph and share one text form for it —
 
 ```bash
 # Rust library
-cargo add fluxion                 # batch/CPU core (pure Rust, builds offline)
-cargo add fluxion -F autodiff     # + whole-graph differentiation through Burn
-cargo add fluxion -F realtime     # + the realtime engine re-exports
+cargo add fluxion-dsp                 # batch/CPU core (pure Rust, builds offline)
+cargo add fluxion-dsp -F autodiff     # + whole-graph differentiation through Burn
+cargo add fluxion-dsp -F realtime     # + the realtime engine re-exports
 
-# CLI
-cargo install fluxion-cli                          # file processing, no audio-device deps
-cargo install fluxion-cli --features realtime      # + play/record via CPAL
+# CLI (the binary is `fluxion`)
+cargo install fluxion-dsp-cli                          # file processing, no audio-device deps
+cargo install fluxion-dsp-cli --features realtime      # + play/record via CPAL
 
 # Python (wheels: Linux x86_64/aarch64, macOS Intel/AS, Windows; numpy is the only hard dep)
-pip install fluxion               # extras: [torch] [jax] [interop] (safetensors) [dataset] (parquet)
+pip install fluxion-dsp           # extras: [torch] [jax] [interop] (safetensors) [dataset] (parquet)
+
+# Browser and Node (WebAssembly + AudioWorklet), from GitHub Packages: the .npmrc below first
+npm install @matteospanio/fluxion-dsp
+```
+
+The packages are called `fluxion-dsp` because `fluxion` is taken on PyPI, crates.io and npm. Only the
+package names differ: in code it is still `use fluxion::…`, `import fluxion` and the `fluxion` CLI.
+
+The browser package is on GitHub Packages, whose npm registry asks for a token even to install a
+public package: a personal access token (classic) with `read:packages`, and in the project's
+`.npmrc`:
+
+```ini
+@matteospanio:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
 ```
 
 Dependencies are deliberately thin: the default build is pure Rust and compiles offline; heavy
@@ -208,25 +224,25 @@ The measurement harnesses used in the paper's evaluation ship as ordinary `cargo
 
 | Experiment | Command |
 |------------|---------|
-| CPU batch throughput | `cargo run --release -p fluxion-backend --example paper_bench` |
-| Training-step throughput (analytic adjoint) | `cargo run --release -p fluxion-autodiff --example train_step_bench --features burn` |
-| EQ inversion: train → certify → freeze → play | `cargo run --release -p fluxion-autodiff --example eq_inversion --features burn` |
-| Real-time callback latency CCDF | `cargo run --release -p fluxion-rt --example latency_ccdf` |
-| 1024-tap FIR per-block latency | `cargo run --release -p fluxion-rt --example fir_latency` |
-| Certified live hot-swap loop | `cargo run --release -p fluxion-backend --example hotswap_demo` |
-| Multichannel per-channel-chain case study | `cargo run --release -p fluxion-backend --example soundlamp_demo` |
+| CPU batch throughput | `cargo run --release -p fluxion-dsp-backend --example paper_bench` |
+| Training-step throughput (analytic adjoint) | `cargo run --release -p fluxion-dsp-autodiff --example train_step_bench --features burn` |
+| EQ inversion: train → certify → freeze → play | `cargo run --release -p fluxion-dsp-autodiff --example eq_inversion --features burn` |
+| Real-time callback latency CCDF | `cargo run --release -p fluxion-dsp-rt --example latency_ccdf` |
+| 1024-tap FIR per-block latency | `cargo run --release -p fluxion-dsp-rt --example fir_latency` |
+| Certified live hot-swap loop | `cargo run --release -p fluxion-dsp-backend --example hotswap_demo` |
+| Multichannel per-channel-chain case study | `cargo run --release -p fluxion-dsp-backend --example soundlamp_demo` |
 
 Two didactic examples show the differentiable path in miniature: `learn_cutoff`
-(`-p fluxion-autodiff --features burn`) trains a low-pass cutoff by gradient descent, and
-`fit_filter` (`-p fluxion-ops`) fits biquad coefficients with the analytic gradient alone.
+(`-p fluxion-dsp-autodiff --features burn`) trains a low-pass cutoff by gradient descent, and
+`fit_filter` (`-p fluxion-dsp-ops`) fits biquad coefficients with the analytic gradient alone.
 
 ## Develop
 
 ```bash
 cargo build && cargo test        # whole workspace (offline, pure Rust)
 cargo clippy --all-targets       # lints are CI-gated (-D warnings), incl. missing_docs
-cargo bench -p fluxion-ops       # Criterion benchmarks
-cargo run -p fluxion-cli -- effects
+cargo bench -p fluxion-dsp-ops       # Criterion benchmarks
+cargo run -p fluxion-dsp-cli -- effects
 cd crates/fluxion-py && maturin develop && pytest tests/   # Python package
 ```
 

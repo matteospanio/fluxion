@@ -5,7 +5,7 @@
 //! `SetCoeffs` automation over the lock-free ring (the realistic worst case: crossfades active).
 //! Emits one JSON line per config with p50/p90/p99/p999/max (µs) and the deadline fraction.
 //!
-//! Run: `cargo run -p fluxion-rt --release --example latency_ccdf`
+//! Run: `cargo run -p fluxion-dsp-rt --release --example latency_ccdf`
 
 use std::time::Instant;
 

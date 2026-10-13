@@ -2,7 +2,7 @@
 //
 // Re-exports the wasm module's API plus the op catalog, so a consumer has one import:
 //
-//   import init, { Chain, OPS } from "fluxion";
+//   import init, { Chain, OPS } from "@matteospanio/fluxion-dsp";
 //   await init();
 //   const out = Chain.fromText("highpass(80, 4) | gain(-3dB)").process(samples, 48000);
 //

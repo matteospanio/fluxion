@@ -149,7 +149,7 @@ are cheap; their value is that they become the *definition of done* for everythi
 |---|---|---|
 | Rust (`fluxion`) | engine and app developers | everything: chain building, offline run, realtime, freeze/load, analysis taps |
 | CLI (`fluxion`) | terminal users, scripts, CI | file in → file out: every offline op as a verb, `stat` for measurements, chain syntax for combinations |
-| Python (`pip install fluxion`) | data/ML people, notebooks, batch jobs | offline processing on arrays (NumPy/torch, zero-copy), every op as a plain function plus the chain API, measurements as dicts |
+| Python (`pip install fluxion-dsp`) | data/ML people, notebooks, batch jobs | offline processing on arrays (NumPy/torch, zero-copy), every op as a plain function plus the chain API, measurements as dicts |
 | C header (`fluxion.h`) | C/C++/Swift hosts, plugin shells | the stable core: build chain from text, run on buffers, freeze/load; small on purpose |
 | JS/wasm (npm) | web apps | offline render + AudioWorklet playback, chain from the same text syntax, typed API |
 

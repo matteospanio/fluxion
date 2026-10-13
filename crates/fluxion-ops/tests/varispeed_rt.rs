@@ -9,7 +9,7 @@
 //! allocations made while a thread-local flag is set. Its own test binary, because a
 //! `#[global_allocator]` is per-binary.
 //!
-//! Run: `cargo test -p fluxion-ops --test varispeed_rt`
+//! Run: `cargo test -p fluxion-dsp-ops --test varispeed_rt`
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;

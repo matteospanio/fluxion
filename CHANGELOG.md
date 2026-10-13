@@ -1,14 +1,15 @@
 <!--
 Release checklist (maintainers), before tagging vX.Y.Z:
-  1. `cargo test --workspace` + `cargo test -p fluxion-autodiff --features burn` green.
+  1. `cargo test --workspace` + `cargo test -p fluxion-dsp-autodiff --features burn` green.
   2. `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo deny check`.
   3. `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --lib`.
   4. Python wheel builds + `pytest` passes (CPU and, on a CUDA host, the GPU wheel).
   5. Move the `[Unreleased]` entries below under a new `## [X.Y.Z] - DATE` heading; bump the workspace
      and `fluxion-py` versions; update the link references at the bottom.
-  6. Tag `vX.Y.Z`; publish crates.io in dependency order (needs `CARGO_REGISTRY_TOKEN`); PyPI publishes
-     automatically from the tag via the wheels workflow (Trusted Publishing — register the GitHub
-     `pypi` environment on PyPI once).
+  6. Tag `vX.Y.Z`: `.github/workflows/release.yml` publishes the wheels to PyPI (Trusted Publishing,
+     GitHub environment `pypi`), the crates to crates.io in dependency order (`CARGO_REGISTRY_TOKEN`)
+     and the browser package to GitHub Packages (the workflow's own `GITHUB_TOKEN`), then makes the
+     GitHub release.
 -->
 
 # Changelog
@@ -18,6 +19,22 @@ All notable changes to fluxion are documented here. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.3.0] - 2026-10-13
+
+### Changed
+
+- **Published as `fluxion-dsp` on PyPI and crates.io, and as `@matteospanio/fluxion-dsp` on GitHub
+  Packages** — `fluxion` was taken on PyPI, crates.io and npm (and `fluxion-core` on crates.io), so
+  the packages are now `pip install fluxion-dsp`, `cargo add fluxion-dsp`, `cargo install
+  fluxion-dsp-cli` and `npm install @matteospanio/fluxion-dsp`, and every crate of the workspace is
+  `fluxion-dsp-*`. GitHub's npm registry asks for a token with `read:packages` even to install a
+  public package: the README's Install section has the `.npmrc`. Only the package names changed: the Rust libraries keep
+  theirs (`use fluxion::…`, `use fluxion_core::…`), the Python module is still `import fluxion`, and
+  the CLI binary is still `fluxion`. One tag publishes all three, from `.github/workflows/release.yml`.
+- **`init()` finds its `.wasm` by itself in a browser** — the web glue was built with
+  `--omit-default-module-path`, so the documented `await init()` threw; it now defaults to the
+  `.wasm` beside the module. Node still hands it the bytes.
 
 ### Added
 
@@ -117,40 +134,6 @@ All notable changes to fluxion are documented here. The format is based on
   drawn in decibels is *geometric* in amplitude, not linear. Half way through a 60 dB fade the
   level is −30 dB; a straight line in amplitude is at −6 dB there, which is a different fade
   entirely. `Curve::db_ramp` is the constructor for the one people mean.
-
-### Fixed
-
-- **The modulated effects lost precision as a signal got longer** — found making them stream
-  (L5), because a live session is long. `tremolo`, `chorus`, `flanger` and `phaser` computed their
-  LFO phase as `w·n` and the chorus/flanger read position as `n − d`, both in `f32` on the absolute
-  frame number. Both decay with `n`. By 30 s at 48 kHz the fractional delay was rounded to eighths
-  of a frame; at 2^23 frames (175 s) there was no fraction left, and the swept delay moved in
-  whole-frame steps — a zipper. A 1 kHz tremolo's phase was good only to an eighth of a radian by
-  5.8 minutes. The phase now comes from the frame number in `f64` (`modulation::Lfo`, the same
-  raised cosine, with no accumulated phase and an exact rate), and the delay is read relative to a
-  write cursor, which does not depend on `n` at all.
-  This changes batch output. Over the first half second it moves a 5 Hz `tremolo` and the `phaser`
-  by at most 4.2e-7; a 1 kHz `tremolo` by 6.7e-5 and `chorus`/`flanger` by 4e-4, which is the old
-  error already showing. By 200 s the old and new chorus differ by 0.14, which is the zipper. One
-  more change, at the other end: the old read returned silence whenever the tap was less than a
-  frame before the start of the signal, instead of interpolating the first sample against the
-  silence before it, so each chorus/flanger output had one wrong frame where its delay first
-  reached the signal.
-
-- **Coefficient crossfades in the realtime engine were 3 dB loud (`fluxion-rt`)** — `SosStream`
-  blended the outgoing and incoming cascades with an **equal-power** law, `cos·old + sin·new`. But
-  the two branches are the *same input* through two similar filters, so their outputs are strongly
-  correlated, and correlated signals add in amplitude: `cos + sin = √2` is **+3.01 dB** in the
-  middle of every fade. The law is now linear, whose gains sum to 1.
-  This is the same arithmetic that D1 turned up in the roadmap's own crossfade check, applied to a
-  place it had been wrong since the streaming filter was written. The existing test could not see
-  it — it swaps a low-pass for a high-pass on DC, where one branch is 1 and the other 0, and both
-  laws slide cleanly between them. The new test crossfades a filter **to itself**, where the
-  branches are identical and any law but linear shows immediately; it measures 3.01 dB against the
-  old code and 0.0 against the new.
-- `SosStream::set_coeffs_now` replaces coefficients while keeping the filter state, for a parameter
-  that is moving smoothly rather than jumping. Crossfading two cascades cold-starts the incoming
-  one, which is the wrong trade 750 times a second.
 
 - **One curve, two engines (Epic S / S4, Epic D / D3)** — `core::automation::Curve`: breakpoint
   automation, an LFO and an ADSR are one type, because they are one thing seen three ways — a list
@@ -297,6 +280,39 @@ All notable changes to fluxion are documented here. The format is based on
   not have, and the test says so with a stated margin rather than hiding it. Duration is exact for
   every ratio — Rubber Band's is not, landing on 93566 frames where 96000 was asked for.
 
+### Fixed
+
+- **The modulated effects lost precision as a signal got longer** — found making them stream
+  (L5), because a live session is long. `tremolo`, `chorus`, `flanger` and `phaser` computed their
+  LFO phase as `w·n` and the chorus/flanger read position as `n − d`, both in `f32` on the absolute
+  frame number. Both decay with `n`. By 30 s at 48 kHz the fractional delay was rounded to eighths
+  of a frame; at 2^23 frames (175 s) there was no fraction left, and the swept delay moved in
+  whole-frame steps — a zipper. A 1 kHz tremolo's phase was good only to an eighth of a radian by
+  5.8 minutes. The phase now comes from the frame number in `f64` (`modulation::Lfo`, the same
+  raised cosine, with no accumulated phase and an exact rate), and the delay is read relative to a
+  write cursor, which does not depend on `n` at all.
+  This changes batch output. Over the first half second it moves a 5 Hz `tremolo` and the `phaser`
+  by at most 4.2e-7; a 1 kHz `tremolo` by 6.7e-5 and `chorus`/`flanger` by 4e-4, which is the old
+  error already showing. By 200 s the old and new chorus differ by 0.14, which is the zipper. One
+  more change, at the other end: the old read returned silence whenever the tap was less than a
+  frame before the start of the signal, instead of interpolating the first sample against the
+  silence before it, so each chorus/flanger output had one wrong frame where its delay first
+  reached the signal.
+
+- **Coefficient crossfades in the realtime engine were 3 dB loud (`fluxion-rt`)** — `SosStream`
+  blended the outgoing and incoming cascades with an **equal-power** law, `cos·old + sin·new`. But
+  the two branches are the *same input* through two similar filters, so their outputs are strongly
+  correlated, and correlated signals add in amplitude: `cos + sin = √2` is **+3.01 dB** in the
+  middle of every fade. The law is now linear, whose gains sum to 1.
+  This is the same arithmetic that D1 turned up in the roadmap's own crossfade check, applied to a
+  place it had been wrong since the streaming filter was written. The existing test could not see
+  it — it swaps a low-pass for a high-pass on DC, where one branch is 1 and the other 0, and both
+  laws slide cleanly between them. The new test crossfades a filter **to itself**, where the
+  branches are identical and any law but linear shows immediately; it measures 3.01 dB against the
+  old code and 0.0 against the new.
+- `SosStream::set_coeffs_now` replaces coefficients while keeping the filter state, for a parameter
+  that is moving smoothly rather than jumping. Crossfading two cascades cold-starts the incoming
+  one, which is the wrong trade 750 times a second.
 
 ## [0.2.0] - 2026-08-03
 
@@ -606,5 +622,6 @@ WebAssembly build and the browser chain API (roadmap W1–W2).
 
 - Pre-1.0: the public Rust/Python API and the `.fxg` on-disk format are not yet stable.
 
-[Unreleased]: https://github.com/matteospanio/fluxion/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/matteospanio/fluxion/releases/tag/v0.2.0
+[Unreleased]: https://github.com/matteospanio/fluxion/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/matteospanio/fluxion/compare/7e01854...v0.3.0
+[0.2.0]: https://github.com/matteospanio/fluxion/tree/7e01854

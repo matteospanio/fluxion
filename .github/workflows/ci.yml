@@ -66,7 +66,7 @@ jobs:
       # the workspace. scripts/set-version.sh is what sets them; this is what notices when one was
       # edited by hand.
       - run: ./scripts/set-version.sh --check
-      - run: cargo build -p fluxion-cli --locked
+      - run: cargo build -p fluxion-dsp-cli --locked
       - run: python3 scripts/gen_interfaces.py
       - name: generated files are up to date
         run: git diff --exit-code -- docs/ crates/fluxion-py/python/ crates/fluxion-wasm/js/
@@ -82,10 +82,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # The Burn integration is behind an optional feature, so the default `test`/`lint` jobs skip it.
       # Exercise its analytic-VJP custom ops (sos, sos_trainable, sos_design, fir_trainable) here.
-      - run: cargo clippy -p fluxion-autodiff --features burn --all-targets --locked -- -D warnings
-      - run: cargo test -p fluxion-autodiff --features burn --locked
+      - run: cargo clippy -p fluxion-dsp-autodiff --features burn --all-targets --locked -- -D warnings
+      - run: cargo test -p fluxion-dsp-autodiff --features burn --locked
       # The facade's whole-graph autodiff surface (diff_process) is behind its own feature.
-      - run: cargo test -p fluxion --features autodiff --locked
+      - run: cargo test -p fluxion-dsp --features autodiff --locked
 
   realtime:
     name: realtime CLI (CPAL)
@@ -98,8 +98,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       # play/record are behind the `realtime` feature (CPAL), so the default test/lint jobs skip them.
-      - run: cargo clippy -p fluxion-cli --features realtime --all-targets --locked -- -D warnings
-      - run: cargo test -p fluxion-cli --features realtime --locked
+      - run: cargo clippy -p fluxion-dsp-cli --features realtime --all-targets --locked -- -D warnings
+      - run: cargo test -p fluxion-dsp-cli --features realtime --locked
 
   parquet:
     name: batch IO + checkpoint import (Arrow/Parquet/safetensors)
@@ -111,8 +111,8 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       # Columnar dataset IO pulls arrow/parquet, off the default build — exercise it explicitly.
-      - run: cargo clippy -p fluxion-io --features parquet,checkpoint --all-targets --locked -- -D warnings
-      - run: cargo test -p fluxion-io --features parquet,checkpoint --locked
+      - run: cargo clippy -p fluxion-dsp-io --features parquet,checkpoint --all-targets --locked -- -D warnings
+      - run: cargo test -p fluxion-dsp-io --features parquet,checkpoint --locked
 
   deny:
     name: cargo-deny (licenses & advisories)
@@ -192,7 +192,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Compile the Criterion harnesses so they can't rot; --no-run means we never spend CI time
       # actually measuring (benches are a local tool, this is just a build tripwire).
-      - run: cargo bench --no-run -p fluxion-ops -p fluxion-backend --locked
+      - run: cargo bench --no-run -p fluxion-dsp-ops -p fluxion-dsp-backend --locked
 
   # ROADMAP I5: "CI compiles and runs the C example on the three systems". Passing the archive as a
   # plain file path rather than `-l:libfluxion_ffi.a` is what makes that possible — `-l:` is a
@@ -330,4 +330,4 @@ jobs:
       # cubecl/cudarc load CUDA at *runtime*, so the CUDA code paths compile with no nvcc or GPU
       # present. Check only (never run) — this just catches API drift in the otherwise-untested
       # `cuda`-feature code.
-      - run: cargo check -p fluxion-backend -p fluxion-autodiff --features cuda --locked
+      - run: cargo check -p fluxion-dsp-backend -p fluxion-dsp-autodiff --features cuda --locked

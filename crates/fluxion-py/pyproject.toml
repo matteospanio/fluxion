@@ -3,7 +3,7 @@ requires = ["maturin>=1.5,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "fluxion"
+name = "fluxion-dsp"
 # Version is single-sourced from Cargo.toml (maturin reads it); do not set it here.
 dynamic = ["version"]
 description = "GPU-accelerated, differentiable audio DSP — Python bindings"
