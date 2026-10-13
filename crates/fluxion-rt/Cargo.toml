@@ -1,5 +1,5 @@
 [package]
-name = "fluxion-rt"
+name = "fluxion-dsp-rt"
 description = "Fluxion: real-time engine — lock-free SPSC ring buffer and allocation-free executor."
 readme = "../../README.md"
 version.workspace = true
@@ -12,6 +12,12 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[lib]
+# Published as `fluxion-dsp-rt`, like every crate of the family: `fluxion` and
+# `fluxion-core` belong to other projects on crates.io. The library keeps its
+# name, so code still writes `use fluxion_rt::…`.
+name = "fluxion_rt"
+
 [lints]
 workspace = true
 
@@ -21,6 +27,6 @@ workspace = true
 cpal = ["dep:cpal"]
 
 [dependencies]
-fluxion-core = { path = "../fluxion-core", version = "0.2.0" }
-fluxion-ops = { path = "../fluxion-ops", version = "0.2.0" }
+fluxion-core = { package = "fluxion-dsp-core", path = "../fluxion-core", version = "0.3.0" }
+fluxion-ops = { package = "fluxion-dsp-ops", path = "../fluxion-ops", version = "0.3.0" }
 cpal = { version = "0.15", optional = true }

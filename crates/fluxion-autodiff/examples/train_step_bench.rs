@@ -3,8 +3,8 @@
 //! over a grid of (sections K, samples T, batch B); JSON per cell. The torch-side counterparts
 //! (torchfx.ddsp analytic; torchaudio lfilter unrolled) run from a Python script on the same box.
 //!
-//! Run (CPU): `cargo run -p fluxion-autodiff --release --features burn --example train_step_bench`
-//! Run (GPU): `cargo run -p fluxion-autodiff --release --features cuda --example train_step_bench -- cuda`
+//! Run (CPU): `cargo run -p fluxion-dsp-autodiff --release --features burn --example train_step_bench`
+//! Run (GPU): `cargo run -p fluxion-dsp-autodiff --release --features cuda --example train_step_bench -- cuda`
 //!   GPU cells cover what the resident kernels support today: the trainable single section
 //!   (`biquad_train_gpu`, K=1) and the fixed-cascade adjoint step (`sos_gpu`, gradients through a
 //!   frozen cascade to the input — the hybrid-model configuration) at any K.

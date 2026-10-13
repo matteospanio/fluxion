@@ -1,6 +1,6 @@
 //! Train a biquad's numerator coefficients to match a target, using the analytic gradient.
 //!
-//! Run with: `cargo run -p fluxion-ops --example fit_filter`
+//! Run with: `cargo run -p fluxion-dsp-ops --example fit_filter`
 //!
 //! This is the engine-independent core of DDSP: a forward op plus its hand-derived backward pass is
 //! enough to do gradient descent — no autograd framework involved. The Burn / torch integrations

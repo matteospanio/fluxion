@@ -145,4 +145,4 @@ if ! grep -q "^## \[$new\]" CHANGELOG.md 2>/dev/null; then
     echo "  - CHANGELOG.md: move [Unreleased] under '## [$new] - $(date +%F)' and add the link ref"
 fi
 echo "  - commit, then tag: git tag v$new"
-echo "  - the tag triggers .github/workflows/wheels.yml (PyPI); crates.io is still manual"
+echo "  - the tag triggers .github/workflows/release.yml: PyPI, crates.io, npm, GitHub release"

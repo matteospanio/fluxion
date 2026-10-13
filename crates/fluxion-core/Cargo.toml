@@ -1,5 +1,5 @@
 [package]
-name = "fluxion-core"
+name = "fluxion-dsp-core"
 description = "Fluxion: functional DSP graph algebra and intermediate representation."
 readme = "../../README.md"
 version.workspace = true
@@ -11,6 +11,12 @@ repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
+
+[lib]
+# Published as `fluxion-dsp-core`, like every crate of the family: `fluxion` and
+# `fluxion-core` belong to other projects on crates.io. The library keeps its
+# name, so code still writes `use fluxion_core::…`.
+name = "fluxion_core"
 
 [lints]
 workspace = true

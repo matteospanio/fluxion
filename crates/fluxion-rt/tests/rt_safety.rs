@@ -3,7 +3,7 @@
 //! The audio thread must never allocate. We install a global allocator that flags any allocation
 //! made while a thread-local "real-time section" is active, then assert the engine's hot path makes
 //! zero allocations across a long run with concurrent parameter automation — and that it keeps up
-//! with real time at 128 frames / 48 kHz (no xruns). Run: `cargo test -p fluxion-rt --test rt_safety`.
+//! with real time at 128 frames / 48 kHz (no xruns). Run: `cargo test -p fluxion-dsp-rt --test rt_safety`.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;

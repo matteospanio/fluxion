@@ -2625,80 +2625,70 @@ dependencies = [
 ]
 
 [[package]]
-name = "fluxion"
-version = "0.2.0"
+name = "fluxion-dsp"
+version = "0.3.0"
 dependencies = [
- "fluxion-autodiff",
- "fluxion-backend",
- "fluxion-core",
- "fluxion-ops",
- "fluxion-rt",
+ "fluxion-dsp-autodiff",
+ "fluxion-dsp-backend",
+ "fluxion-dsp-core",
+ "fluxion-dsp-ops",
+ "fluxion-dsp-rt",
 ]
 
 [[package]]
-name = "fluxion-autodiff"
-version = "0.2.0"
+name = "fluxion-dsp-autodiff"
+version = "0.3.0"
 dependencies = [
  "burn",
  "burn-cubecl",
  "cubecl",
- "fluxion-backend",
- "fluxion-core",
- "fluxion-ops",
+ "fluxion-dsp-backend",
+ "fluxion-dsp-core",
+ "fluxion-dsp-ops",
 ]
 
 [[package]]
-name = "fluxion-backend"
-version = "0.2.0"
+name = "fluxion-dsp-backend"
+version = "0.3.0"
 dependencies = [
  "criterion",
  "cubecl",
- "fluxion-core",
- "fluxion-io",
- "fluxion-ops",
- "fluxion-rt",
+ "fluxion-dsp-core",
+ "fluxion-dsp-io",
+ "fluxion-dsp-ops",
+ "fluxion-dsp-rt",
  "mimalloc",
  "rayon",
 ]
 
 [[package]]
-name = "fluxion-cli"
-version = "0.2.0"
+name = "fluxion-dsp-cli"
+version = "0.3.0"
 dependencies = [
  "clap",
- "fluxion",
- "fluxion-io",
- "fluxion-ops",
- "fluxion-rt",
+ "fluxion-dsp",
+ "fluxion-dsp-io",
+ "fluxion-dsp-ops",
+ "fluxion-dsp-rt",
  "glob",
  "hound",
  "serde_json",
 ]
 
 [[package]]
-name = "fluxion-core"
-version = "0.2.0"
+name = "fluxion-dsp-core"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "fluxion-ffi"
-version = "0.2.0"
-dependencies = [
- "fluxion-backend",
- "fluxion-core",
- "fluxion-ops",
- "fluxion-rt",
-]
-
-[[package]]
-name = "fluxion-io"
-version = "0.2.0"
+name = "fluxion-dsp-io"
+version = "0.3.0"
 dependencies = [
  "arrow",
- "fluxion-core",
+ "fluxion-dsp-core",
  "hound",
  "parquet",
  "safetensors 0.7.0",
@@ -2707,30 +2697,40 @@ dependencies = [
 ]
 
 [[package]]
-name = "fluxion-ops"
-version = "0.2.0"
+name = "fluxion-dsp-ops"
+version = "0.3.0"
 dependencies = [
  "criterion",
- "fluxion-core",
+ "fluxion-dsp-core",
  "rustfft",
 ]
 
 [[package]]
-name = "fluxion-rt"
-version = "0.2.0"
+name = "fluxion-dsp-rt"
+version = "0.3.0"
 dependencies = [
  "cpal",
- "fluxion-core",
- "fluxion-ops",
+ "fluxion-dsp-core",
+ "fluxion-dsp-ops",
+]
+
+[[package]]
+name = "fluxion-ffi"
+version = "0.3.0"
+dependencies = [
+ "fluxion-dsp-backend",
+ "fluxion-dsp-core",
+ "fluxion-dsp-ops",
+ "fluxion-dsp-rt",
 ]
 
 [[package]]
 name = "fluxion-wasm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "console_error_panic_hook",
- "fluxion",
- "fluxion-rt",
+ "fluxion-dsp",
+ "fluxion-dsp-rt",
  "js-sys",
  "serde_json",
  "wasm-bindgen",

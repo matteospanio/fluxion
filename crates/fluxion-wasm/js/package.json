@@ -1,7 +1,7 @@
 {
-  "name": "fluxion",
-  "version": "0.2.0",
-  "description": "Differentiable, cross-vendor audio DSP in the browser \u2014 the same engine as the Rust library, the CLI and the Python package.",
+  "name": "fluxion-dsp",
+  "version": "0.3.0",
+  "description": "Differentiable, cross-vendor audio DSP in the browser — the same engine as the Rust library, the CLI and the Python package.",
   "type": "module",
   "main": "./index.mjs",
   "types": "./index.d.ts",
@@ -17,7 +17,11 @@
     "./worklet": {
       "types": "./worklet-loader.d.ts",
       "default": "./worklet-loader.mjs"
-    }
+    },
+    "./pkg/*": "./pkg/*",
+    "./fluxion-worklet.js": "./fluxion-worklet.js",
+    "./worklet-textcodec.js": "./worklet-textcodec.js",
+    "./package.json": "./package.json"
   },
   "files": [
     "index.mjs",
@@ -33,7 +37,8 @@
     "worklet-loader.d.ts",
     "fluxion-worklet.js",
     "worklet-textcodec.js",
-    "pkg/no-modules/fluxion_wasm.js"
+    "pkg/no-modules/fluxion_wasm.js",
+    "LICENSE"
   ],
   "sideEffects": false,
   "license": "MIT",

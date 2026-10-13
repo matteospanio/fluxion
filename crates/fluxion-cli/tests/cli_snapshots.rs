@@ -7,7 +7,7 @@
 //! To accept a deliberate change:
 //!
 //! ```text
-//! UPDATE_EXPECT=1 cargo test -p fluxion-cli --test cli_snapshots
+//! UPDATE_EXPECT=1 cargo test -p fluxion-dsp-cli --test cli_snapshots
 //! ```
 //!
 //! No snapshot library: the whole mechanism is `expect()` below. `insta` would add a
@@ -62,7 +62,7 @@ fn expect(name: &str, actual: &str) {
         expected.trim_end(),
         "snapshot `{name}` changed.\n\
          If the new output is better, accept it with:\n  \
-         UPDATE_EXPECT=1 cargo test -p fluxion-cli --test cli_snapshots\n"
+         UPDATE_EXPECT=1 cargo test -p fluxion-dsp-cli --test cli_snapshots\n"
     );
 }
 

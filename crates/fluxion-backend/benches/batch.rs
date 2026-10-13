@@ -2,7 +2,7 @@
 //!
 //! [`sos_filter_batch`] interleaves rows into SIMD lanes and runs the cascade across the whole
 //! batch (rayon over row-groups); this measures it at a couple of (rows, frames) shapes. Short
-//! `sample_size` keeps it a quick tripwire, not a full study. Run: `cargo bench -p fluxion-backend`.
+//! `sample_size` keeps it a quick tripwire, not a full study. Run: `cargo bench -p fluxion-dsp-backend`.
 
 // `criterion_group!`/`criterion_main!` expand to public items with no docs; benches aren't API.
 #![allow(missing_docs)]

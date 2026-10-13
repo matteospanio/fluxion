@@ -6,11 +6,11 @@ to WebAssembly. Preview and export come from the same DSP, because it *is* the s
 output is checked against the native library sample for sample in CI.
 
 ```bash
-npm install fluxion
+npm install fluxion-dsp
 ```
 
 ```js
-import init, { Chain } from "fluxion";
+import init, { Chain } from "fluxion-dsp";
 
 await init();
 
@@ -22,7 +22,7 @@ const out = chain.process(samples, 48000);   // Float32Array in, Float32Array ou
 hand it the bytes:
 
 ```js
-await init({ module_or_path: await readFile("node_modules/fluxion/pkg/fluxion_wasm_bg.wasm") });
+await init({ module_or_path: await readFile("node_modules/fluxion-dsp/pkg/fluxion_wasm_bg.wasm") });
 ```
 
 ## The chain syntax

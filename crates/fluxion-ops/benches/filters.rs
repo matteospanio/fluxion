@@ -3,7 +3,7 @@
 //! Two hot inner loops the batch engine and CLI lean on: the mono SOS cascade ([`sos_filter`]) and
 //! the FIR direct-vs-FFT crossover ([`fir_filter`] `O(N·M)` vs [`fft_convolve`] `O(N log N)`). Sizes
 //! and `sample_size` are deliberately small — this is a quick regression tripwire, not a full
-//! performance study. Run: `cargo bench -p fluxion-ops`.
+//! performance study. Run: `cargo bench -p fluxion-dsp-ops`.
 
 // `criterion_group!`/`criterion_main!` expand to public items with no docs; benches aren't API.
 #![allow(missing_docs)]

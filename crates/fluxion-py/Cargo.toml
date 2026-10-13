@@ -4,7 +4,7 @@
 [package]
 name = "fluxion-py"
 description = "Fluxion: PyO3 Python bindings with DLPack and torch/jax autograd adapters."
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
@@ -29,15 +29,15 @@ crate-type = ["cdylib"]
 # abi3-py310: build a single stable-ABI wheel that works on CPython 3.10+ (one wheel, not per-version).
 pyo3 = { version = "0.22", features = ["extension-module", "abi3-py310"] }
 numpy = "0.22"
-fluxion-core = { path = "../fluxion-core" }
-fluxion-ops = { path = "../fluxion-ops" }
-fluxion-backend = { path = "../fluxion-backend" }
+fluxion-core = { package = "fluxion-dsp-core", path = "../fluxion-core", version = "0.3.0" }
+fluxion-ops = { package = "fluxion-dsp-ops", path = "../fluxion-ops", version = "0.3.0" }
+fluxion-backend = { package = "fluxion-dsp-backend", path = "../fluxion-backend", version = "0.3.0" }
 # Realtime executor for the streaming RtChain bindings (RtGraph / SosStream; no cpal — audio I/O
 # stays on the Python side, e.g. sounddevice).
-fluxion-rt = { path = "../fluxion-rt" }
+fluxion-rt = { package = "fluxion-dsp-rt", path = "../fluxion-rt", version = "0.3.0" }
 # Checkpoint import (plan goal #6 / J13): the same Rust converter the CLI uses, so the
 # Python lane replays identical math. Pulls fluxion-io's audio deps at compile time only.
-fluxion-io = { path = "../fluxion-io", features = ["checkpoint"] }
+fluxion-io = { package = "fluxion-dsp-io", path = "../fluxion-io", version = "0.3.0", features = ["checkpoint"] }
 
 [profile.release]
 lto = "thin"

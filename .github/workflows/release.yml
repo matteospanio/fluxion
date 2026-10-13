@@ -1,0 +1,261 @@
+name: release
+
+# Everything a version tag ships, from one workflow: the Python wheels and sdist (PyPI), the Rust
+# crates (crates.io) and the browser package (npm), then the GitHub release with the files on it.
+#
+# The packages are `fluxion-dsp` on all three registries — `fluxion` is taken on each of them.
+#
+# On a pull request that touches the packaging, the same jobs build and dry-run, so a broken
+# release is found before the tag rather than after it. Nothing publishes outside a `v*` tag.
+#
+# One-time setup, already done once per registry:
+#   PyPI       a trusted publisher for `fluxion-dsp`: this repository, workflow `release.yml`,
+#              environment `pypi`. No token.
+#   crates.io  the repository secret CARGO_REGISTRY_TOKEN (scopes publish-new, publish-update).
+#   npm        the repository secret NPM_TOKEN (publish rights on `fluxion-dsp`).
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "Cargo.toml"
+      - "crates/*/Cargo.toml"
+      - "crates/fluxion-py/pyproject.toml"
+      - "crates/fluxion-wasm/js/package.json"
+      - "scripts/build-wasm.sh"
+  workflow_dispatch:
+
+jobs:
+  cpu-wheels:
+    name: CPU wheel (${{ matrix.os }} ${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest      # Linux x86_64 (manylinux)
+            target: x86_64
+          - os: ubuntu-latest      # Linux aarch64, cross-built in the manylinux_2_28 container
+            target: aarch64
+            manylinux: "2_28"
+          - os: macos-14           # macOS Apple Silicon (arm64)
+            target: aarch64
+          # macOS Intel, cross-built on Apple Silicon. It had its own `macos-13` runner, which
+          # GitHub retired: the job waited 24 h for a machine that no longer exists, and the
+          # v0.1.0 tag never published because of it. An abi3 wheel needs no x86_64 interpreter.
+          - os: macos-14
+            target: x86_64
+          - os: windows-latest     # Windows x64
+            target: x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # One abi3 wheel (cp310-abi3) covers CPython 3.10+; pin the build interpreter to 3.12 since
+      # PyO3 0.22 doesn't support 3.14 (the runners' default).
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          target: ${{ matrix.target }}
+          args: --release -m crates/fluxion-py/Cargo.toml --out dist --interpreter 3.12
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-cpu-${{ matrix.os }}-${{ matrix.target }}
+          path: dist
+
+  sdist:
+    name: sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: -m crates/fluxion-py/Cargo.toml --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist
+
+  # GPU wheel — built with the CUDA toolkit + the `cuda` feature on a self-hosted CUDA runner
+  # (label `cuda`); GitHub-hosted runners have no CUDA toolkit. maturin-action's manylinux container
+  # also lacks CUDA, so we build directly on the runner. The wheel carries a `+cu12` local version so
+  # it's distinguishable from the CPU wheel (`pip install fluxion-dsp==X.Y.Z+cu12` for the GPU build).
+  # PEP 440 local versions can't be uploaded to PyPI, so it is a GitHub artifact only.
+  # Manual dispatch only: on a tag it waited for a runner that was not there, and with it the release.
+  gpu-wheel:
+    name: GPU wheel (CUDA)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, cuda]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build CUDA wheel
+        run: |
+          source "$HOME/.cargo/env"
+          export CUDA_PATH=/usr/local/cuda PATH=/usr/local/cuda/bin:$PATH
+          # Version is single-sourced from Cargo.toml (pyproject uses dynamic version); tag the +cu12
+          # local version there so maturin stamps the GPU wheel with it. Matching the version
+          # rather than a literal matters: a hard-coded one silently stops matching after a bump,
+          # and the GPU wheel would then be indistinguishable from the CPU one.
+          sed -i -E '0,/^version = "([0-9]+\.[0-9]+\.[0-9]+)"/s//version = "\1+cu12"/' crates/fluxion-py/Cargo.toml
+          grep -q '+cu12' crates/fluxion-py/Cargo.toml  # fail loudly if the pattern ever stops matching
+          python3 -m venv /tmp/gpuwheel-venv
+          /tmp/gpuwheel-venv/bin/pip install -q --upgrade pip "maturin>=1.5,<2"
+          /tmp/gpuwheel-venv/bin/maturin build --release --features cuda \
+            -m crates/fluxion-py/Cargo.toml --interpreter python3 --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-gpu
+          path: dist
+
+  # The Rust crates. On a pull request: package every publishable crate and build it from its
+  # tarball, against the others' tarballs — what crates.io would see, without publishing.
+  crates-check:
+    name: crates (dry run)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo publish --workspace --dry-run --locked
+
+  crates:
+    name: Publish to crates.io
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # One crate at a time, in dependency order, so a failure halfway can be re-run: a crate
+      # already at this version is skipped instead of refused. crates.io rate-limits *new* crate
+      # names (a burst, then one every few minutes), and the first release creates eight of them,
+      # so a 429 waits and tries again rather than failing the release.
+      - name: cargo publish, in dependency order
+        shell: bash
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          version=${GITHUB_REF_NAME#v}
+          for crate in fluxion-dsp-core fluxion-dsp-ops fluxion-dsp-io fluxion-dsp-rt \
+                       fluxion-dsp-backend fluxion-dsp-autodiff fluxion-dsp fluxion-dsp-cli; do
+            if curl -fsS -o /dev/null -A "fluxion-release (github.com/matteospanio/fluxion)" \
+                "https://crates.io/api/v1/crates/$crate/$version"; then
+              echo "$crate $version is already on crates.io"
+              continue
+            fi
+            for attempt in 1 2 3 4 5 6; do
+              if cargo publish -p "$crate" --locked >publish.log 2>&1; then
+                cat publish.log
+                break
+              fi
+              cat publish.log
+              if grep -qiE '429|too many' publish.log && [ "$attempt" -lt 6 ]; then
+                echo "rate limited on $crate: waiting 10 minutes (attempt $attempt)"
+                sleep 600
+              else
+                exit 1
+              fi
+            done
+          done
+
+  # The browser package: the wasm, its glue and the AudioWorklet files.
+  npm:
+    name: npm package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write          # npm provenance: the package says which workflow built it
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      # wasm-bindgen-cli and the wasm-bindgen crate are a matched pair; take the version from the
+      # lockfile rather than guessing.
+      - name: install wasm-bindgen-cli at the locked version
+        run: cargo install --locked "wasm-bindgen-cli@$(./scripts/build-wasm.sh --print-version)"
+      - run: ./scripts/build-wasm.sh
+      - name: Node loads the module
+        working-directory: crates/fluxion-wasm/js
+        run: node smoke.mjs
+      - name: the tarball
+        working-directory: crates/fluxion-wasm/js
+        run: |
+          npm pack
+          tar -tzf fluxion-dsp-*.tgz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm
+          path: crates/fluxion-wasm/js/fluxion-dsp-*.tgz
+      - name: npm publish
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: crates/fluxion-wasm/js
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
+
+  # CPU wheels + sdist to PyPI, via Trusted Publishing (OIDC — no API token). It depends only on
+  # the CPU wheels and the sdist: the `+cu12` GPU wheel is never uploaded (PyPI rejects PEP 440
+  # local versions).
+  pypi:
+    name: Publish to PyPI
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [cpu-wheels, sdist]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write          # OIDC token for PyPI Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-cpu-*   # every CPU wheel; NOT wheels-gpu
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+
+  # The release page: the CHANGELOG section for this version, and every file the registries got.
+  github-release:
+    name: GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [pypi, crates, npm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+          pattern: "{wheels-cpu-*,sdist,npm}"
+      - name: create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          # The section between this version's heading and the next one.
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { keep = 1; next }
+            keep && /^## \[/ { exit }
+            keep { print }
+          ' CHANGELOG.md >notes.md
+          test -s notes.md
+          gh release create "$GITHUB_REF_NAME" assets/* --title "fluxion $version" --notes-file notes.md

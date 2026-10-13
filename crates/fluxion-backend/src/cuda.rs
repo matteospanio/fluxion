@@ -136,7 +136,7 @@ mod tests {
         assert!(maxdiff < 1e-4, "GPU/CPU max diff {maxdiff}");
     }
 
-    // Run with: cargo test -p fluxion-backend --features cuda -- --ignored --nocapture
+    // Run with: cargo test -p fluxion-dsp-backend --features cuda -- --ignored --nocapture
     #[test]
     #[ignore = "GPU benchmark"]
     fn bench_repeated_calls() {

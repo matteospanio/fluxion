@@ -15,11 +15,11 @@ from one registry. The chain can also be written as text and passed between them
 ## Install
 
 ```bash
-pip install fluxion               # CPU wheel (numpy only)
-pip install 'fluxion[torch]'      # + the torch.autograd adapter
-pip install 'fluxion[jax]'        # + the jax.custom_vjp adapter
-pip install 'fluxion[interop]'    # + safetensors, for load_flamo_sos
-pip install 'fluxion[dataset]'    # + pyarrow, for the Parquet dataset IO
+pip install fluxion-dsp               # CPU wheel (numpy only); the module is `import fluxion`
+pip install 'fluxion-dsp[torch]'      # + the torch.autograd adapter
+pip install 'fluxion-dsp[jax]'        # + the jax.custom_vjp adapter
+pip install 'fluxion-dsp[interop]'    # + safetensors, for load_flamo_sos
+pip install 'fluxion-dsp[dataset]'    # + pyarrow, for the Parquet dataset IO
 ```
 
 The default wheel is CPU-only. A CUDA build (the "GPU wheel", extra batch kernels behind

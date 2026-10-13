@@ -330,7 +330,7 @@ pub fn biquad_train_gpu(
 
 #[cfg(test)]
 mod tests {
-    // Requires a GPU: cargo test -p fluxion-autodiff --features cuda
+    // Requires a GPU: cargo test -p fluxion-dsp-autodiff --features cuda
     use super::{Gpu, biquad_train_gpu, sos_gpu};
     use burn::backend::Autodiff;
     use burn::tensor::Tensor;

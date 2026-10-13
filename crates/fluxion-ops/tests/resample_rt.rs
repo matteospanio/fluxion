@@ -8,7 +8,7 @@
 //! while a thread-local flag is set. It lives in its own test binary because a `#[global_allocator]`
 //! is per-binary and the oracle test wants an ordinary one.
 //!
-//! Run: `cargo test -p fluxion-ops --test resample_rt`
+//! Run: `cargo test -p fluxion-dsp-ops --test resample_rt`
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;

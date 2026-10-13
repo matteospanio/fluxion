@@ -1133,61 +1133,61 @@ dependencies = [
 ]
 
 [[package]]
-name = "fluxion-backend"
-version = "0.2.0"
+name = "fluxion-dsp-backend"
+version = "0.3.0"
 dependencies = [
  "cubecl",
- "fluxion-core",
- "fluxion-ops",
- "fluxion-rt",
+ "fluxion-dsp-core",
+ "fluxion-dsp-ops",
+ "fluxion-dsp-rt",
  "rayon",
 ]
 
 [[package]]
-name = "fluxion-core"
-version = "0.2.0"
+name = "fluxion-dsp-core"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "fluxion-io"
-version = "0.2.0"
+name = "fluxion-dsp-io"
+version = "0.3.0"
 dependencies = [
- "fluxion-core",
+ "fluxion-dsp-core",
  "hound",
  "safetensors",
  "symphonia",
 ]
 
 [[package]]
-name = "fluxion-ops"
-version = "0.2.0"
+name = "fluxion-dsp-ops"
+version = "0.3.0"
 dependencies = [
- "fluxion-core",
+ "fluxion-dsp-core",
  "rustfft",
 ]
 
 [[package]]
-name = "fluxion-py"
-version = "0.2.0"
+name = "fluxion-dsp-rt"
+version = "0.3.0"
 dependencies = [
- "fluxion-backend",
- "fluxion-core",
- "fluxion-io",
- "fluxion-ops",
- "fluxion-rt",
- "numpy",
- "pyo3",
+ "fluxion-dsp-core",
+ "fluxion-dsp-ops",
 ]
 
 [[package]]
-name = "fluxion-rt"
-version = "0.2.0"
+name = "fluxion-py"
+version = "0.3.0"
 dependencies = [
- "fluxion-core",
- "fluxion-ops",
+ "fluxion-dsp-backend",
+ "fluxion-dsp-core",
+ "fluxion-dsp-io",
+ "fluxion-dsp-ops",
+ "fluxion-dsp-rt",
+ "numpy",
+ "pyo3",
 ]
 
 [[package]]

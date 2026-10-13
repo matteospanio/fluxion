@@ -99,7 +99,7 @@ def check_quickstarts() -> int:
 def registry() -> dict:
     """The op catalog, straight from the binary that owns it."""
     out = subprocess.run(
-        ["cargo", "run", "-q", "-p", "fluxion-cli", "--", "effects", "--json"],
+        ["cargo", "run", "-q", "-p", "fluxion-dsp-cli", "--", "effects", "--json"],
         cwd=ROOT,
         capture_output=True,
         text=True,

@@ -1,7 +1,7 @@
 // The JavaScript quickstart. CI runs it with Node; in a browser drop the two node: imports and
 // call `await init()` with no argument (it fetches the .wasm itself).
 //
-// After `npm install fluxion` the import is `from "fluxion"`; in-repo it is the relative path.
+// After `npm install fluxion-dsp` the import is `from "fluxion-dsp"`; in-repo it is the relative path.
 // Ten code lines is the budget (docs/interfaces.md); comments and blanks do not count.
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
